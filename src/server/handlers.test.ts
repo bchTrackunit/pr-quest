@@ -44,6 +44,8 @@ const REQUESTS: Array<ReviewRequestData> = [
 
 const DIRECT_ID = 'Trackunit/state-of-code#24';
 const DIRECT_PATH = encodeURIComponent(DIRECT_ID);
+const DIRECT_HEAD = '0123456789abcdef0123456789abcdef01234567';
+const NEWER_HEAD = 'fedcba9876543210fedcba9876543210fedcba98';
 
 const REVIEW_TEXT = `\`\`\`json\n${JSON.stringify({
   summary: 'Two issues.',
@@ -62,6 +64,7 @@ let github: {
   fetchReviewRequests: ReturnType<typeof vi.fn<GitHubClient['fetchReviewRequests']>>;
   fetchRateLimitReset: ReturnType<typeof vi.fn<GitHubClient['fetchRateLimitReset']>>;
   approve: ReturnType<typeof vi.fn<GitHubClient['approve']>>;
+  fetchHeadSha: ReturnType<typeof vi.fn<GitHubClient['fetchHeadSha']>>;
   submitReview: ReturnType<typeof vi.fn<GitHubClient['submitReview']>>;
 };
 
@@ -116,6 +119,7 @@ beforeEach(async () => {
     fetchReviewRequests: vi.fn(async () => REQUESTS),
     fetchRateLimitReset: vi.fn(async () => undefined),
     approve: vi.fn(async () => undefined),
+    fetchHeadSha: vi.fn(async () => DIRECT_HEAD),
     submitReview: vi.fn(async () => ({
       url: 'https://github.com/r#pullrequestreview-9',
       inlineCommentsDropped: false,
@@ -215,15 +219,33 @@ describe('GET /api/quests', () => {
 
 describe('POST /api/quests/:id/approve', () => {
   test('requires explicit confirmation', async () => {
-    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, { confirm: false });
+    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
+      confirm: false,
+      headSha: DIRECT_HEAD,
+    });
 
     expect(response.status).toBe(400);
+    expect(github.approve).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['missing', undefined],
+    ['not a commit SHA', 'main'],
+  ])('rejects a head commit that is %s', async (_label, headSha) => {
+    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
+      confirm: true,
+      headSha,
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: { message: expect.stringContaining('headSha') } });
     expect(github.approve).not.toHaveBeenCalled();
   });
 
   test('rejects malformed quest ids', async () => {
     const response = await send('POST', `/api/quests/${encodeURIComponent('-R/x#1')}/approve`, {
       confirm: true,
+      headSha: DIRECT_HEAD,
     });
 
     expect(response.status).toBe(400);
@@ -232,21 +254,46 @@ describe('POST /api/quests/:id/approve', () => {
   test('responds 404 for a PR that is not in the queue', async () => {
     const response = await send('POST', `/api/quests/${encodeURIComponent('o/r#5')}/approve`, {
       confirm: true,
+      headSha: DIRECT_HEAD,
     });
 
     expect(response.status).toBe(404);
   });
 
-  test('approves through gh, awards XP and drops the quest from the board', async () => {
+  test('refuses with headChanged when new commits were pushed, and updates the quest', async () => {
+    await send('GET', '/api/quests');
+    github.fetchHeadSha.mockResolvedValue(NEWER_HEAD);
+
     const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
       confirm: true,
+      headSha: DIRECT_HEAD,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: { code: 'headChanged', message: expect.stringContaining('fedcba9') },
+    });
+    expect(github.approve).not.toHaveBeenCalled();
+    expect(services.game.player().xp).toBe(0);
+    expect(services.quests.find(DIRECT_ID)?.headSha).toBe(NEWER_HEAD);
+    expect(github.fetchReviewRequests).toHaveBeenCalledTimes(1);
+  });
+
+  test('approves the commit the player saw, awards XP and drops the quest from the board', async () => {
+    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
+      confirm: true,
+      headSha: DIRECT_HEAD.toUpperCase(),
       body: 'LGTM',
     });
 
     expect(response.status).toBe(200);
+    expect(github.fetchHeadSha).toHaveBeenCalledWith({
+      repo: { owner: 'Trackunit', name: 'state-of-code' },
+      number: 24,
+    });
     expect(github.approve).toHaveBeenCalledWith(
       { repo: { owner: 'Trackunit', name: 'state-of-code' }, number: 24 },
-      'LGTM',
+      { commitId: DIRECT_HEAD, body: 'LGTM' },
     );
     expect(response.body).toMatchObject({
       questId: DIRECT_ID,
@@ -260,7 +307,10 @@ describe('POST /api/quests/:id/approve', () => {
   test('awards nothing when gh fails', async () => {
     github.approve.mockRejectedValue(new GhError('gh: Forbidden (HTTP 403)', 403));
 
-    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, { confirm: true });
+    const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
+      confirm: true,
+      headSha: DIRECT_HEAD,
+    });
 
     expect(response.status).toBe(502);
     expect(services.game.player().xp).toBe(0);
@@ -318,6 +368,41 @@ describe('runs', () => {
       reviewUrl: 'https://github.com/r#pullrequestreview-9',
       run: { disposition: 'posted', postedReviewUrl: 'https://github.com/r#pullrequestreview-9' },
       outcome: { xpGained: 30 + 10 },
+    });
+  });
+
+  test('an agent verdict of approve still posts a comment, never an approval', async () => {
+    mockAgentFinishing(
+      `\`\`\`json\n${JSON.stringify({ summary: 'Fine.', verdict: 'approve', findings: [] })}\n\`\`\``,
+    );
+    const started = await send('POST', `/api/quests/${DIRECT_PATH}/review`, {});
+    await services.runs.whenIdle();
+    const { run } = started.body as { run: ReviewRun };
+
+    expect((await send('POST', `/api/runs/${run.id}/post`, { event: 'approve' })).status).toBe(400);
+    expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);
+
+    expect(github.submitReview).toHaveBeenCalledTimes(1);
+    expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
+      event: 'comment',
+      verdict: 'approve',
+    });
+    expect(github.approve).not.toHaveBeenCalled();
+  });
+
+  test('posts to the PR named by the run quest id, not a repo read back from state', async () => {
+    const run = await finishedRun();
+    const stored = services.runs.get(run.id);
+    if (!stored) {
+      throw new Error('run missing');
+    }
+    stored.quest.repo = { owner: 'someone-else', name: 'other-repo' };
+
+    await send('POST', `/api/runs/${run.id}/post`, {});
+
+    expect(github.submitReview.mock.calls[0]?.[0]).toEqual({
+      repo: { owner: 'Trackunit', name: 'state-of-code' },
+      number: 24,
     });
   });
 

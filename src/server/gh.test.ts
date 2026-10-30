@@ -45,6 +45,23 @@ describe('runGh', () => {
     );
   });
 
+  test("keeps PR Quest's own API keys out of gh's environment", async () => {
+    vi.stubEnv('CURSOR_API_KEY', 'cursor-secret');
+    vi.stubEnv('LINEAR_API_KEY', 'linear-secret');
+    respondWith(null, '{}');
+
+    try {
+      await runGh(['api', 'user']);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const env = (execFileMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+    expect(env).toMatchObject({ PATH: process.env.PATH, GH_PROMPT_DISABLED: '1' });
+    expect(env).not.toHaveProperty('CURSOR_API_KEY');
+    expect(env).not.toHaveProperty('LINEAR_API_KEY');
+  });
+
   test('writes input to stdin', async () => {
     respondWith(null, '{}');
 

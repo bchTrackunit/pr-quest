@@ -189,6 +189,9 @@ function withUnlocks(
   };
   const owned = new Set(state.achievements.map((entry) => entry.id));
   const newlyMet = ACHIEVEMENT_RULES.filter((rule) => !owned.has(rule.def.id) && rule.isMet(facts));
+  if (newlyMet.length === 0 && grants.length === 0) {
+    return { state, grants: [], unlocked: [], xpGained: 0 };
+  }
   const unlocked = newlyMet.map((rule) => ({ id: rule.def.id, unlockedAt: at.toISOString() }));
   const allGrants = [
     ...grants,

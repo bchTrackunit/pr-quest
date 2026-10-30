@@ -9,7 +9,11 @@ export interface RunStatusProps {
   onClickRetry: MouseEventHandler<HTMLButtonElement>;
 }
 
-/** The quest card's view of a review agent run, from queued through loot or defeat. */
+/**
+ * The quest card's view of a review agent run, from queued through loot or defeat. Failures are
+ * static text: the error toast already announces the change, and an alert per failed card would
+ * fire for every one of them on page load.
+ */
 export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusProps) => {
   switch (run.status) {
     case 'queued':
@@ -23,11 +27,11 @@ export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusPro
       );
     case 'running':
       return (
-        <div className="run run--running" role="status">
+        <div className="run run--running">
           <span aria-hidden="true" className="run__icon run__icon--walk">
             🧙
           </span>
-          <span>Agent on quest</span>
+          <span role="status">Agent on quest</span>
           <span aria-hidden="true" className="run__dots">
             <span />
             <span />
@@ -52,7 +56,7 @@ export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusPro
       }
       if (!run.result) {
         return (
-          <div className="run run--error" role="alert">
+          <div className="run run--error">
             <span>The agent came back without a readable report.</span>
             <button className="button button--small" onClick={onClickRetry} type="button">
               Retry
@@ -73,7 +77,7 @@ export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusPro
     case 'error':
     case 'startupFailed':
       return (
-        <div className="run run--error" role="alert">
+        <div className="run run--error">
           <span aria-hidden="true">💀</span>
           <span>
             {run.status === 'startupFailed'

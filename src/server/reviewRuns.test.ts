@@ -20,6 +20,8 @@ vi.mock('@cursor/sdk', () => {
   return { Agent: { create: vi.fn(), getRun: vi.fn() }, CursorAgentError: MockCursorAgentError };
 });
 
+const HEAD_SHA = 'abcdef0123456789abcdef0123456789abcdef01';
+
 const createMock = vi.mocked(Agent.create);
 const getRunMock = vi.mocked(Agent.getRun);
 
@@ -75,7 +77,7 @@ const quest: Quest = {
   author: { name: 'a' },
   sourceBranch: 'feature/cache',
   targetBranch: 'master',
-  headSha: 'abc',
+  headSha: HEAD_SHA,
   status: 'open',
   isDraft: false,
   approvedByOthers: false,
@@ -151,14 +153,14 @@ describe('ReviewRunService.start', () => {
     });
     expect(store.state.runs[0]?.quest).toMatchObject({
       id: quest.id,
-      headSha: 'abc',
+      headSha: HEAD_SHA,
       difficulty: 'Normal',
     });
     await runs.whenIdle();
   });
 
-  test('creates a cloud agent on the PR branch that cannot open a PR', async () => {
-    fakeAgent();
+  test('creates a cloud agent on the PR head commit that cannot open a PR', async () => {
+    const agent = fakeAgent();
     const runs = service();
 
     await runs.start(quest);
@@ -168,13 +170,58 @@ describe('ReviewRunService.start', () => {
       expect.objectContaining({
         apiKey: 'cursor-key',
         cloud: {
-          repos: [{ url: 'https://github.com/Trackunit/manager', startingRef: 'feature/cache' }],
+          repos: [{ url: 'https://github.com/Trackunit/manager', startingRef: HEAD_SHA }],
+          workOnCurrentBranch: false,
           autoCreatePR: false,
           skipReviewerRequest: true,
         },
       }),
     );
     expect(createMock.mock.calls[0]?.[0]).not.toHaveProperty('model');
+    expect(agent.send).toHaveBeenCalledWith(expect.stringContaining(HEAD_SHA));
+  });
+
+  test('refuses to start without a known head commit', async () => {
+    fakeAgent();
+
+    await expect(service().start({ ...quest, headSha: undefined })).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(store.state.runs).toEqual([]);
+  });
+
+  test('fails the run when the agent reports reviewing a different commit', async () => {
+    const result = { summary: 'Fine.', verdict: 'comment', findings: [], reviewedSha: 'deadbeef' };
+    fakeAgent(fakeRun({ result: `\`\`\`json\n${JSON.stringify(result)}\n\`\`\`` }));
+    const runs = service();
+
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(runs.get(id)?.run).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringContaining('deadbeef') },
+    });
+    expect(runs.get(id)?.run.result).toBeUndefined();
+    expect(recordAgentReviewFinished).not.toHaveBeenCalled();
+  });
+
+  test('accepts a reported commit that abbreviates the head commit', async () => {
+    const result = {
+      summary: 'Fine.',
+      verdict: 'comment',
+      findings: [],
+      reviewedSha: HEAD_SHA.slice(0, 12).toUpperCase(),
+    };
+    fakeAgent(fakeRun({ result: `\`\`\`json\n${JSON.stringify(result)}\n\`\`\`` }));
+    const runs = service();
+
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(runs.get(id)?.run.status).toBe('finished');
   });
 
   test('passes the requested model', async () => {
@@ -305,7 +352,7 @@ describe('ReviewRunService.resumeInterrupted', () => {
       startedAt: '2026-10-30T09:00:00.000Z',
       ...run,
     },
-    quest: { ...quest, headSha: 'abc' },
+    quest: { ...quest, headSha: HEAD_SHA },
   });
 
   test('reattaches to a run that was still running', async () => {
@@ -337,6 +384,22 @@ describe('ReviewRunService.resumeInterrupted', () => {
     expect(runs.get('review-old')?.run).toMatchObject({
       status: 'error',
       error: { message: expect.stringMatching(/restarted/) },
+    });
+    expect(getRunMock).not.toHaveBeenCalled();
+  });
+
+  test('says the key is missing when a started run cannot be followed without one', async () => {
+    await store.update((state) => ({
+      ...state,
+      runs: [stored({ agentId: 'bc-9', runId: 'run-9' })],
+    }));
+    const runs = service({ apiKey: undefined });
+
+    await runs.resumeInterrupted();
+
+    expect(runs.get('review-old')?.run).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringContaining('CURSOR_API_KEY') },
     });
     expect(getRunMock).not.toHaveBeenCalled();
   });

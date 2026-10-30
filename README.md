@@ -5,8 +5,10 @@ quests. Each open review request becomes a card with a difficulty tier based on 
 From a card you can send a Cursor cloud agent to review the PR, read its findings, post them to
 GitHub, or approve the PR. Real review actions earn XP, levels, a daily streak and achievements.
 
-It runs entirely on your machine. The server binds to `127.0.0.1` only, because it acts as you
-through your `gh` login.
+The board and server run on your machine; only the review agent runs in Cursor's cloud. The
+server binds to `127.0.0.1` only, because it acts as you through your `gh` login. It also accepts
+browser requests only from its own UI and API origins, as described in
+[Local server protections](#local-server-protections).
 
 ![The PR Quest board: player HUD, quest filters and direct-request quest cards with tiers](docs/screenshot.png)
 
@@ -26,7 +28,9 @@ through your `gh` login.
   ```
 
   Without `CURSOR_API_KEY` the board, approvals and XP still work, and "Send review agent" shows
-  a message that the key is missing. Environment variables take precedence over the file.
+  a message that the key is missing. Environment variables take precedence over the file. Make
+  the file readable only by you with `chmod 600 apps/pr-quest/.env.local`. PR Quest doesn't pass
+  either key on to `gh`.
 
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
 `4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`).
@@ -60,7 +64,10 @@ remove it from the file; blanking the variable in your shell doesn't override it
   second search with `user-review-requested:@me` tells direct requests apart. Branches, diff
   stats, draft state, latest reviews and requested teams for every PR come from batched
   `gh api graphql` queries (25 PRs per query). If a batch fails, PR Quest falls back to one
-  `gh pr view` per PR, except when the failure is a rate limit.
+  `gh pr view` per PR, except when the failure is a rate limit. A PR whose details still can't be
+  read is left off the board. If that happens to more than half of the PRs the search found, the
+  refresh counts as failed: the server logs a warning and keeps serving the previous list, so a
+  network problem can't empty the board.
 - **Approvals by others** come from each PR's latest reviews. A PR counts as approved by others
   when someone other than you has an `APPROVED` latest review.
 - **Linear** is optional. With `LINEAR_API_KEY`, the server calls Linear's MCP `list_diffs` tool
@@ -139,25 +146,60 @@ API returns a `503` with the code `rateLimited` and the board shows that as an e
 
 ### The review agent and its safety limits
 
-"Send review agent" starts a Cursor cloud agent on the PR's source branch through
-`@cursor/sdk`. The agent:
+"Send review agent" starts a Cursor cloud agent through `@cursor/sdk`, pinned to the PR's head
+commit: the quest's `headSha` is the agent's starting ref, so pushes made after you send it don't
+change what it reviews. The repo is always the base repo. The prompt names the exact commit and
+tells the agent to check it out from `pull/<number>/head` if it didn't start there, which also
+works for PRs from forks. The agent:
 
-- reviews only `git diff origin/<target>...HEAD`, reading other code just for context;
+- reviews only `git diff origin/<target>...HEAD` at that commit, reading other code just for
+  context;
 - is told never to commit, push, create branches, open or update a PR, approve or comment;
-- returns a JSON report (`summary`, advisory `verdict`, and `findings` with file, line,
-  severity and body), which the server validates.
+- returns a JSON report (`summary`, advisory `verdict`, `findings` with file, line, severity and
+  body, and `reviewedSha`, the commit it reviewed), which the server validates. If `reviewedSha`
+  isn't the commit it was sent to, the run fails instead of offering findings whose line numbers
+  may be wrong.
 
-Cloud agents don't accept a system prompt or tool restrictions, so the no-commit rule exists
-only in the prompt. The one hard guard is `autoCreatePR: false`. The agent works through your
-Cursor GitHub integration, which needs access to the repo.
+**What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
+GitHub integration, on PR content that the PR's author controls: the code, the title and the
+description. Cloud agents don't accept a system prompt or tool restrictions, so the rules above,
+including "never commit" and "never approve", exist only in the prompt. A PR that contains a
+prompt injection could talk the agent out of them. The only hard guard is `autoCreatePR: false`,
+which stops the SDK from opening a PR for the agent's work. PR Quest also sets
+`workOnCurrentBranch: false`, but the SDK doesn't document what that prevents, so don't rely on
+it.
 
-The agent never approves. Its verdict is advice only. Findings appear on a result screen first,
-and nothing reaches GitHub until you choose **Post to PR** and confirm. That posts one GitHub
-review (comment or request changes) with inline comments. If GitHub rejects the inline line
-numbers, it posts them in the review body instead. **Approve** is a separate action with its own
-confirmation dialog, and it uses `gh pr review --approve`.
+**What PR Quest itself does.** PR Quest never turns agent output into an approval. The verdict is
+shown as advice only, the post endpoint accepts only `comment` and `requestChanges`, and the only
+approve path is the **Approve** dialog. Findings appear on a result screen first, and nothing
+reaches GitHub until you choose **Post to PR** and confirm. That posts one GitHub review (comment
+or request changes) anchored to the same commit the agent reviewed, with inline comments for
+findings that have a line. If GitHub rejects the inline line numbers, it posts them in the review
+body instead.
+
+**Approve** is a separate action with its own confirmation dialog, which names the PR and the
+short head commit you're approving. The approval is pinned to that commit: the server reads the
+PR's current head with `gh pr view` first, and if new commits were pushed, it approves nothing
+and answers `409 headChanged`. The dialog then says "New commits were pushed to this PR. Re-check
+them before approving." and shows the new commit. Otherwise it approves through
+`gh api -X POST repos/<owner>/<repo>/pulls/<number>/reviews` with `event: APPROVE` and
+`commit_id` set to that commit, sending your comment as JSON on stdin. Draft PRs can't be
+approved.
 
 Runs are saved, so a server restart reattaches to a run that was still going.
+
+### Local server protections
+
+The API acts as you, so it only accepts requests that come from PR Quest:
+
+- **Host** must be `127.0.0.1` or `localhost`, which stops DNS rebinding.
+- **Origin**, when the browser sends one, must be exactly the UI or API origin:
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_UI_PORT` and
+  `PR_QUEST_PORT`. Pages on other localhost ports, such as another dev server, get `403`.
+- **`Sec-Fetch-Site`** on a POST must be `same-origin` or `none`. Browsers send `same-site` for
+  other localhost ports, so this is checked as well as the origin.
+- **Every POST must be `Content-Type: application/json`**, or the server answers `415`. A browser
+  can't send JSON to another origin without a CORS preflight, which the server never grants.
 
 ## XP and achievements
 
@@ -173,15 +215,18 @@ Base XP is multiplied by tier: Trivial ×1, Normal ×1.5, Hard ×2, Boss ×3. Ap
 twice earns XP once. The XP needed for the next level is `100 × level^1.5`. The streak counts
 consecutive local calendar days with at least one rewarded action.
 
-| Achievement     | How to unlock                                    | Bonus XP |
-| --------------- | ------------------------------------------------ | -------- |
-| First Blood     | Your first post, request for changes or approval | 10       |
-| Quick Draw      | Approve within an hour of the review request     | 25       |
-| Boss Slayer     | Review or approve a Boss-tier PR                 | 50       |
-| Team Player     | 10 review actions on team-requested PRs          | 40       |
-| Inbox Zero      | Empty queue on a day you reviewed something      | 30       |
-| On Fire         | A 5-day streak                                   | 75       |
-| Agent Commander | 10 finished agent reviews                        | 40       |
+Inbox Zero counts only what GitHub's search returns. Hiding a quest you just approved doesn't
+count as an empty queue, and neither does a refresh where most PR details couldn't be read.
+
+| Achievement     | How to unlock                                                   | Bonus XP |
+| --------------- | --------------------------------------------------------------- | -------- |
+| First Blood     | Your first post, request for changes or approval                | 10       |
+| Quick Draw      | Approve within an hour of the review request                    | 25       |
+| Boss Slayer     | Review or approve a Boss-tier PR                                | 50       |
+| Team Player     | 10 review actions on team-requested PRs                         | 40       |
+| Inbox Zero      | GitHub finds no review requests on a day you reviewed something | 30       |
+| On Fire         | A 5-day streak                                                  | 75       |
+| Agent Commander | 10 finished agent reviews                                       | 40       |
 
 Achievements are defined in [`src/server/achievements.ts`](src/server/achievements.ts); the UI
 renders whatever that file lists.
@@ -216,4 +261,9 @@ browser, as described in [Presets](#presets).
 - **"Approved by others" reads at most 100 latest reviews** per PR.
 - **Posted agent runs match no Agent filter.** Once findings are posted, the agent state no
   longer applies, so selecting any Agent state hides that PR.
-- **The no-commit rule is prompt-only**, as described above.
+- **The agent's limits are prompt-only**, as described in
+  [The review agent and its safety limits](#the-review-agent-and-its-safety-limits).
+- **Starting the agent on a commit SHA is untested against the live Cursor API.** The SDK types
+  allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
+  elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
+- **Approving costs one extra `gh pr view` call** to re-check the head commit.

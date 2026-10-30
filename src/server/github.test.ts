@@ -6,6 +6,7 @@ import {
   buildPullRequestBatchQuery,
   DETAILS_BATCH_SIZE,
   GitHubClient,
+  IncompleteQuestListError,
   parsePullRequestBatch,
   parsePullRequestDetails,
   parseSearchResults,
@@ -352,6 +353,52 @@ describe('GitHubClient.fetchReviewRequests', () => {
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Trackunit/state-of-code#24'));
   });
 
+  test('fails instead of returning an empty queue when every PR lookup fails', async () => {
+    const gh = vi.fn<GhRunner>(async (args) => {
+      if (args[0] === 'search') {
+        return args.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL;
+      }
+      throw new GhError('dial tcp: network is unreachable');
+    });
+
+    const result = new GitHubClient(gh, { onWarning: vi.fn() }).fetchReviewRequests();
+
+    await expect(result).rejects.toBeInstanceOf(IncompleteQuestListError);
+    await expect(result).rejects.toThrow('Could not read 2 of 2 review requests');
+  });
+
+  test('fails when most PR lookups fail', async () => {
+    const search = [1, 2, 3].map((number) => ({
+      number,
+      title: `PR ${number}`,
+      url: `https://github.com/o/r/pull/${number}`,
+      repository: { nameWithOwner: 'o/r' },
+      author: { login: 'a' },
+      createdAt: '2026-10-30T10:00:00Z',
+      updatedAt: '2026-10-30T10:00:00Z',
+      isDraft: false,
+    }));
+    const [, onePullRequest] = Object.values(
+      (JSON.parse(BATCH) as { data: Record<string, unknown> }).data,
+    );
+    const gh = vi.fn<GhRunner>(async (args) => {
+      if (args[0] === 'search') {
+        return args.includes('user-review-requested:@me') ? '[]' : JSON.stringify(search);
+      }
+      return JSON.stringify({ data: { viewer: { login: 'me' }, pr0: onePullRequest } });
+    });
+
+    await expect(
+      new GitHubClient(gh, { onWarning: vi.fn() }).fetchReviewRequests(),
+    ).rejects.toThrow('Could not read 2 of 3 review requests');
+  });
+
+  test('returns an empty queue when the search finds nothing', async () => {
+    const gh = vi.fn<GhRunner>(async () => '[]');
+
+    await expect(new GitHubClient(gh).fetchReviewRequests()).resolves.toEqual([]);
+  });
+
   test(`splits the queue into queries of ${DETAILS_BATCH_SIZE} PRs`, async () => {
     const count = DETAILS_BATCH_SIZE + 5;
     const search = Array.from({ length: count }, (_, index) => ({
@@ -452,25 +499,57 @@ describe('GitHubClient.fetchRateLimitReset', () => {
 });
 
 describe('GitHubClient.approve', () => {
-  test('approves through gh pr review with the body on stdin', async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue('');
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  const created = '{"html_url":"https://github.com/o/r/pull/5#pullrequestreview-3"}';
 
-    await new GitHubClient(gh).approve({ repo: { owner: 'o', name: 'r' }, number: 5 }, 'LGTM');
+  test('approves the given commit through the reviews API with the body on stdin', async () => {
+    const gh = vi.fn<GhRunner>().mockResolvedValue(created);
+
+    await new GitHubClient(gh).approve(ref, { commitId: sha, body: 'LGTM "ship it"' });
 
     expect(gh).toHaveBeenCalledWith(
-      ['pr', 'review', '5', '-R', 'o/r', '--approve', '--body-file', '-'],
-      {
-        input: 'LGTM',
-      },
+      ['api', '-X', 'POST', 'repos/o/r/pulls/5/reviews', '--input', '-'],
+      { input: expect.any(String) },
     );
+    expect(JSON.parse(gh.mock.calls[0]?.[1]?.input ?? 'null')).toEqual({
+      event: 'APPROVE',
+      commit_id: sha,
+      body: 'LGTM "ship it"',
+    });
   });
 
   test('approves without a body', async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue('');
+    const gh = vi.fn<GhRunner>().mockResolvedValue(created);
 
-    await new GitHubClient(gh).approve({ repo: { owner: 'o', name: 'r' }, number: 5 });
+    await new GitHubClient(gh).approve(ref, { commitId: sha });
 
-    expect(gh).toHaveBeenCalledWith(['pr', 'review', '5', '-R', 'o/r', '--approve']);
+    expect(JSON.parse(gh.mock.calls[0]?.[1]?.input ?? 'null')).toEqual({
+      event: 'APPROVE',
+      commit_id: sha,
+    });
+  });
+});
+
+describe('GitHubClient.fetchHeadSha', () => {
+  test("reads the PR's current head commit", async () => {
+    const gh = vi.fn<GhRunner>().mockResolvedValue('{"headRefOid":"ABCDEF0123"}\n');
+
+    const head = await new GitHubClient(gh).fetchHeadSha({
+      repo: { owner: 'o', name: 'r' },
+      number: 5,
+    });
+
+    expect(head).toBe('abcdef0123');
+    expect(gh).toHaveBeenCalledWith(['pr', 'view', '5', '-R', 'o/r', '--json', 'headRefOid']);
+  });
+
+  test('rejects output without a head commit', async () => {
+    const gh = vi.fn<GhRunner>().mockResolvedValue('{}');
+
+    await expect(
+      new GitHubClient(gh).fetchHeadSha({ repo: { owner: 'o', name: 'r' }, number: 5 }),
+    ).rejects.toThrow(GhError);
   });
 });
 

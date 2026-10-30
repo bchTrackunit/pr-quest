@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Quest, ServerEvent } from '../shared/api.ts';
 import { GhError } from './gh.ts';
 import {
+  IncompleteQuestListError,
   parsePullRequestDetails,
   parseSearchResults,
   toQuest,
@@ -162,6 +163,41 @@ describe('QuestService.refresh', () => {
 
     expect(fetchReviewRequests).toHaveBeenCalledTimes(1);
   });
+
+  test('keeps the previous quests and warns when GitHub returns an incomplete list', async () => {
+    const cache = memoryCache();
+    const quests = service({ cache });
+    await quests.refresh();
+    nowMs += 120_000;
+    fetchReviewRequests.mockRejectedValue(new IncompleteQuestListError(2, 2));
+
+    const response = await quests.refresh();
+
+    expect(response.quests).toHaveLength(2);
+    expect(response.fetchedAt).toBe('2026-10-30T14:00:00.000Z');
+    expect(response.stale).toBe(true);
+    expect(cache.save).toHaveBeenCalledTimes(1);
+    expect(cache.stored.snapshot?.quests).toHaveLength(2);
+    expect(recordQueueChecked).toHaveBeenCalledTimes(1);
+    expect(logs).toEqual([expect.stringContaining('Could not read 2 of 2 review requests')]);
+  });
+
+  test('fails an incomplete list when there are no previous quests', async () => {
+    fetchReviewRequests.mockRejectedValue(new IncompleteQuestListError(1, 1));
+    const quests = service();
+
+    await expect(quests.refresh()).rejects.toBeInstanceOf(IncompleteQuestListError);
+    expect(recordQueueChecked).not.toHaveBeenCalled();
+    expect(quests.snapshotEvent()).toBeUndefined();
+  });
+
+  test('checks Inbox Zero when the search itself returns nothing', async () => {
+    fetchReviewRequests.mockResolvedValue([]);
+
+    await service().refresh();
+
+    expect(recordQueueChecked).toHaveBeenCalledWith(0);
+  });
 });
 
 describe('QuestService.list', () => {
@@ -208,15 +244,54 @@ describe('QuestService.markActedOn', () => {
     expect(events).toEqual([expect.objectContaining({ type: 'questsUpdated' })]);
     expect((await quests.list()).quests.map((quest) => quest.number)).toEqual([930]);
     expect((await quests.refresh()).quests.map((quest) => quest.number)).toEqual([930]);
-    expect(recordQueueChecked).toHaveBeenLastCalledWith(1);
 
     nowMs += 60_000;
     expect((await quests.refresh()).quests.map((quest) => quest.number)).toEqual([24, 930]);
   });
+
+  test('never counts hidden quests as an empty queue; only GitHub search results count', async () => {
+    fetchReviewRequests.mockResolvedValue(REQUESTS.slice(1));
+    const quests = service();
+    await quests.refresh();
+
+    await quests.markActedOn('Trackunit/state-of-code#24');
+    expect((await quests.refresh()).quests).toEqual([]);
+
+    expect(recordQueueChecked.mock.calls).toEqual([[1], [1]]);
+  });
+});
+
+describe('QuestService.updateHeadSha', () => {
+  test('patches the cached quest, saves and announces it without calling GitHub', async () => {
+    const cache = memoryCache();
+    const quests = service({ cache });
+    await quests.refresh();
+    events = [];
+
+    await quests.updateHeadSha('Trackunit/state-of-code#24', 'f'.repeat(40));
+
+    expect(quests.find('Trackunit/state-of-code#24')?.headSha).toBe('f'.repeat(40));
+    expect(cache.stored.snapshot?.quests.find((quest) => quest.number === 24)?.headSha).toBe(
+      'f'.repeat(40),
+    );
+    expect(events).toEqual([expect.objectContaining({ type: 'questsUpdated' })]);
+    expect(fetchReviewRequests).toHaveBeenCalledTimes(1);
+    expect(recordQueueChecked).toHaveBeenCalledTimes(1);
+  });
+
+  test('ignores quests that are not cached', async () => {
+    const quests = service();
+    await quests.refresh();
+    events = [];
+
+    await quests.updateHeadSha('Trackunit/manager#1', 'f'.repeat(40));
+
+    expect(events).toEqual([]);
+  });
 });
 
 describe('QuestService.findOrRefresh', () => {
-  test('uses the cache, then refreshes once for unknown ids', async () => {
+  test('uses the cache, and refreshes for unknown ids only once the cache has expired', async () => {
     const quests = service();
     await quests.refresh();
 
@@ -225,6 +300,10 @@ describe('QuestService.findOrRefresh', () => {
     });
     expect(fetchReviewRequests).toHaveBeenCalledTimes(1);
 
+    await expect(quests.findOrRefresh('Trackunit/manager#1')).resolves.toBeUndefined();
+    expect(fetchReviewRequests).toHaveBeenCalledTimes(1);
+
+    nowMs += 60_000;
     await expect(quests.findOrRefresh('Trackunit/manager#1')).resolves.toBeUndefined();
     expect(fetchReviewRequests).toHaveBeenCalledTimes(2);
   });

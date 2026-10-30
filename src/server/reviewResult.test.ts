@@ -105,20 +105,45 @@ describe('parseReviewResult', () => {
   test('rejects empty output', () => {
     expect(parseReviewResult(undefined).ok).toBe(false);
   });
+
+  test('returns the commit the agent says it reviewed next to the result', () => {
+    expect(parseReviewResult(fence({ ...valid, reviewedSha: ' ABC1234 ' }))).toEqual({
+      ok: true,
+      result: valid,
+      reviewedSha: 'abc1234',
+    });
+  });
 });
 
 describe('buildReviewPrompt', () => {
-  const prompt = buildReviewPrompt({
-    id: 'Trackunit/manager#7',
-    title: 'Add cache',
-    githubUrl: 'https://github.com/Trackunit/manager/pull/7',
-    sourceBranch: 'feature/cache',
-    targetBranch: 'master',
-  });
+  const head = 'abcdef0123456789abcdef0123456789abcdef01';
+  const prompt = buildReviewPrompt(
+    {
+      id: 'Trackunit/manager#7',
+      title: 'Add cache',
+      number: 7,
+      githubUrl: 'https://github.com/Trackunit/manager/pull/7',
+      sourceBranch: 'feature/cache',
+      targetBranch: 'master',
+    },
+    head,
+  );
 
   test('scopes the review to the PR diff', () => {
     expect(prompt).toContain('git diff origin/master...HEAD');
     expect(prompt).toContain('https://github.com/Trackunit/manager/pull/7');
+  });
+
+  test('pins the review to the head commit, fetching it from the PR ref for forks', () => {
+    expect(prompt).toContain(`You are reviewing commit ${head}`);
+    expect(prompt).toContain('git rev-parse HEAD');
+    expect(prompt).toContain('git fetch origin pull/7/head');
+    expect(prompt).toContain(`git checkout --detach ${head}`);
+    expect(prompt).toContain('"reviewedSha"');
+  });
+
+  test('marks the title as untrusted author text', () => {
+    expect(prompt).toMatch(/title .*written by the PR author.*not instructions/i);
   });
 
   test('forbids commits, pushes, PRs and approvals', () => {

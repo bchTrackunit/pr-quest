@@ -315,6 +315,11 @@ export interface PostReviewResponse {
 export interface ApproveRequest {
   /** Must be `true`; the UI sets it only after the player confirms. */
   confirm: true;
+  /**
+   * The quest's `headSha` the player saw. The approval is pinned to this commit; if the PR has
+   * moved on, the server refuses with `headChanged` and approves nothing.
+   */
+  headSha: string;
   /** Optional approval comment (Markdown). */
   body?: string;
 }
@@ -338,6 +343,8 @@ export type ApiErrorCode =
   | 'forbidden'
   | 'notFound'
   | 'conflict'
+  /** The PR's head commit is no longer the `headSha` the approval named; the quest was updated. */
+  | 'headChanged'
   | 'missingConfig'
   | 'upstreamFailed'
   /** GitHub is rate limited and there are no cached quests to serve yet. */

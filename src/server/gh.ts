@@ -27,6 +27,17 @@ export interface RunGhOptions {
 /** Runs `gh` and resolves with stdout. Uses `gh` as the player's GitHub identity. */
 export type GhRunner = (args: Array<string>, options?: RunGhOptions) => Promise<string>;
 
+/** PR Quest's own secrets, which `gh` has no use for. */
+const PRIVATE_ENV_KEYS = ['CURSOR_API_KEY', 'LINEAR_API_KEY'];
+
+function ghEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' };
+  for (const key of PRIVATE_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
+}
+
 /** Runs `gh` without a shell, so arguments are never interpreted. */
 export const runGh: GhRunner = (args, options = {}) =>
   new Promise((resolve, reject) => {
@@ -36,7 +47,7 @@ export const runGh: GhRunner = (args, options = {}) =>
       {
         timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxBuffer: MAX_BUFFER_BYTES,
-        env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
+        env: ghEnv(),
       },
       (error, stdout, stderr) => {
         if (error) {

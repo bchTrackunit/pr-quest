@@ -171,7 +171,11 @@ describe('App', () => {
     const dialog = screen.getByRole('dialog', { name: 'Approve this PR?' });
 
     await user.click(within(dialog).getByRole('button', { name: 'Approve Trackunit/manager#101' }));
-    expect(api.approveQuest).toHaveBeenCalledWith('Trackunit/manager#101', undefined);
+    expect(api.approveQuest).toHaveBeenCalledWith(
+      'Trackunit/manager#101',
+      '0123456789abcdef0123456789abcdef01234567',
+      undefined,
+    );
     expect(await screen.findByText('Inbox Zero!')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('190');
@@ -179,6 +183,30 @@ describe('App', () => {
 
     emit({ type: 'xpGained', ...gain, player });
     expect(screen.getAllByText('+40 XP')).toHaveLength(1);
+  });
+
+  test('a headChanged approval reloads the quest and shows its new commit', async () => {
+    const user = userEvent.setup();
+    const newHead = 'fedcba9876543210fedcba9876543210fedcba98';
+    api.approveQuest.mockRejectedValue(
+      new ApiRequestError(409, 'headChanged', 'New commits were pushed'),
+    );
+    await renderApp();
+    api.fetchQuests.mockResolvedValue({
+      quests: [makeQuest({ headSha: newHead })],
+      fetchedAt: new Date().toISOString(),
+      source: 'linear',
+      stale: false,
+    });
+
+    await user.click(screen.getByRole('button', { name: /^Approve/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this PR?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Approve Trackunit/manager#101' }));
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('Re-check');
+    expect(await within(dialog).findByText('fedcba9')).toBeTruthy();
+    expect(api.fetchQuests).toHaveBeenCalledTimes(2);
+    expect(api.fetchQuests).toHaveBeenLastCalledWith(undefined, {});
   });
 
   test('Refresh bypasses the server cache', async () => {

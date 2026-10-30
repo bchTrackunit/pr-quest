@@ -49,7 +49,14 @@ export type RouteHandlers = { [TName in JsonRouteName]?: RouteHandler<TName> } &
 export type RequestListener = (req: IncomingMessage, res: ServerResponse) => void;
 
 export interface RouterOptions {
+  /** Exact origins (`http://127.0.0.1:4318`) a browser may call from; any other Origin gets 403. */
+  allowedOrigins?: ReadonlyArray<string>;
   onUnexpectedError?: (error: unknown) => void;
+}
+
+/** The `127.0.0.1` and `localhost` origins of each port, e.g. the API and the UI. */
+export function loopbackOrigins(ports: ReadonlyArray<number>): Array<string> {
+  return ports.flatMap((port) => [`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 }
 
 interface CompiledRoute {
@@ -82,8 +89,9 @@ export function createRouter(
   handlers: RouteHandlers,
   options: RouterOptions = {},
 ): RequestListener {
+  const allowedOrigins = new Set(options.allowedOrigins);
   return (req, res) => {
-    handle(handlers, req, res).catch((error: unknown) => {
+    handle(handlers, allowedOrigins, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
         sendError(res, error.status, error.code, error.message);
         return;
@@ -96,10 +104,11 @@ export function createRouter(
 
 async function handle(
   handlers: RouteHandlers,
+  allowedOrigins: ReadonlySet<string>,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  assertLoopbackRequest(req);
+  assertTrustedRequest(req, allowedOrigins);
 
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const match = matchRoute(req.method ?? 'GET', url.pathname);
@@ -107,9 +116,14 @@ async function handle(
     throw new ApiError(404, 'notFound', `No route for ${req.method} ${url.pathname}`);
   }
 
+  const isPost = req.method === 'POST';
+  if (isPost && !isJsonContentType(req.headers['content-type'])) {
+    throw new ApiError(415, 'badRequest', 'POST bodies must be application/json');
+  }
+
   const context: JsonHandlerContext = {
     params: match.params,
-    body: req.method === 'POST' ? await readJsonBody(req) : undefined,
+    body: isPost ? await readJsonBody(req) : undefined,
     req,
     res,
   };
@@ -162,17 +176,27 @@ function decodeParam(value: string): string {
 }
 
 /**
- * Rejects requests whose Host or Origin is not loopback. Binding to 127.0.0.1 alone does not stop
- * a malicious web page from reaching the server through DNS rebinding or a cross-site POST.
+ * Binding to 127.0.0.1 alone does not stop a web page from reaching the server. The Host check
+ * stops DNS rebinding. The exact-origin and `Sec-Fetch-Site` checks stop pages on other origins,
+ * including other localhost ports, which browsers count as same-site.
  */
-function assertLoopbackRequest(req: IncomingMessage): void {
+function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<string>): void {
   if (!isLoopbackHost(req.headers.host)) {
     throw new ApiError(403, 'forbidden', 'Host must be 127.0.0.1 or localhost');
   }
   const origin = req.headers.origin;
-  if (origin !== undefined && !isLoopbackOrigin(origin)) {
+  if (origin !== undefined && !allowedOrigins.has(origin)) {
     throw new ApiError(403, 'forbidden', 'Cross-origin requests are not allowed');
   }
+  const site = req.headers['sec-fetch-site'];
+  if (req.method === 'POST' && site !== undefined && site !== 'same-origin' && site !== 'none') {
+    throw new ApiError(403, 'forbidden', 'Cross-site requests are not allowed');
+  }
+}
+
+/** Browsers can only send JSON cross-origin after a CORS preflight, which this server never grants. */
+function isJsonContentType(header: string | undefined): boolean {
+  return header?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
 }
 
 function isLoopbackHost(host: string | undefined): boolean {
@@ -181,14 +205,6 @@ function isLoopbackHost(host: string | undefined): boolean {
   }
   try {
     return LOOPBACK_HOSTNAMES.has(new URL(`http://${host}`).hostname);
-  } catch {
-    return false;
-  }
-}
-
-function isLoopbackOrigin(origin: string): boolean {
-  try {
-    return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
   } catch {
     return false;
   }

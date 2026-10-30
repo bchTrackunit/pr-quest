@@ -18,7 +18,7 @@ export interface AppServices {
   quests: QuestService;
   runs: ReviewRunService;
   game: GameService;
-  github: Pick<GitHubClient, 'approve' | 'submitReview'>;
+  github: Pick<GitHubClient, 'approve' | 'fetchHeadSha' | 'submitReview'>;
   events: EventHub;
 }
 
@@ -34,6 +34,10 @@ const StartReviewSchema = z.object({
 
 const ApproveSchema = z.object({
   confirm: z.literal(true, { error: 'Set confirm: true after the player confirms the approval' }),
+  headSha: z
+    .string({ error: 'Send the head commit the player saw' })
+    .regex(/^[0-9a-f]{40}$/i, 'Must be a 40-character commit SHA')
+    .transform((sha) => sha.toLowerCase()),
   body: z.string().max(MAX_COMMENT_LENGTH).optional(),
 });
 
@@ -116,7 +120,22 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       const ref = requireQuestRef(params.id);
       const request = parseBody(ApproveSchema, body);
       const quest = await findQuest(params.id);
-      await upstream(() => github.approve(ref, request.body?.trim() || undefined));
+      const currentHead = await upstream(() => github.fetchHeadSha(ref));
+      if (currentHead !== request.headSha) {
+        await quests.updateHeadSha(quest.id, currentHead);
+        throw new ApiError(
+          409,
+          'headChanged',
+          `New commits were pushed to ${quest.id} (now at ${currentHead.slice(0, 7)}). Re-check them before approving.`,
+        );
+      }
+      const comment = request.body?.trim();
+      await upstream(() =>
+        github.approve(
+          ref,
+          comment ? { commitId: currentHead, body: comment } : { commitId: currentHead },
+        ),
+      );
       const outcome = await game.recordReviewAction({
         kind: 'approved',
         questId: quest.id,
@@ -143,7 +162,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       const { stored, release } = runs.claimForPosting(params.id);
       try {
         const draft = buildDraft(stored.run.result, stored.quest.headSha, request);
-        const ref = { repo: stored.quest.repo, number: stored.quest.number };
+        const ref = requireQuestRef(stored.quest.id);
         const submitted = await upstream(() => github.submitReview(ref, draft));
         const run = await runs.markPosted(stored.run.id, submitted.url);
         const outcome = await game.recordReviewAction({

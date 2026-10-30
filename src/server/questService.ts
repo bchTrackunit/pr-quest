@@ -1,6 +1,6 @@
 import type { ListQuestsResponse, Quest, ServerEvent } from '../shared/api.ts';
 import type { EventSink, GameService } from './game.ts';
-import { toQuest, type GitHubClient } from './github.ts';
+import { IncompleteQuestListError, toQuest, type GitHubClient } from './github.ts';
 import type { LinearReviewClient } from './linear.ts';
 import type { QuestCache, QuestSnapshot } from './questCache.ts';
 import { sortQuests } from './quests.ts';
@@ -101,20 +101,38 @@ export class QuestService {
     return this.snapshot ? this.response().quests.find((quest) => quest.id === id) : undefined;
   }
 
+  /** An unknown id refetches only once the cache has expired, so it can't force GitHub calls. */
   public async findOrRefresh(id: string): Promise<Quest | undefined> {
     const cached = this.find(id);
     if (cached) {
       return cached;
     }
-    await this.refresh();
+    await this.list();
     return this.find(id);
+  }
+
+  /**
+   * Records a newer head commit for one cached quest, for example after an approval found the PR
+   * had moved on. Costs no GitHub search, so it works during a rate-limit backoff too.
+   */
+  public async updateHeadSha(id: string, headSha: string): Promise<void> {
+    const snapshot = this.snapshot;
+    if (!snapshot?.quests.some((quest) => quest.id === id)) {
+      return;
+    }
+    this.snapshot = {
+      ...snapshot,
+      quests: snapshot.quests.map((quest) => (quest.id === id ? { ...quest, headSha } : quest)),
+    };
+    await this.persist();
+    this.publish();
   }
 
   /** Hides a quest the player just approved or reviewed, and re-announces the queue. */
   public async markActedOn(id: string): Promise<void> {
     this.actedOn.set(id, this.now().getTime() + this.actedOnHoldMs);
     if (this.snapshot) {
-      await this.publish({ checkQueue: true });
+      this.publish();
     }
   }
 
@@ -156,6 +174,12 @@ export class QuestService {
         linear.getReviewInfo(),
       ]);
     } catch (error) {
+      if (error instanceof IncompleteQuestListError && this.snapshot) {
+        this.options.log(
+          `${error.message}; keeping the quests from ${this.snapshot.fetchedAt.toISOString()}`,
+        );
+        return this.response();
+      }
       const kind = detectRateLimit(error);
       if (!kind) {
         throw error;
@@ -173,7 +197,12 @@ export class QuestService {
     this.backoff = undefined;
     clearTimeout(this.retryTimer);
     await this.persist();
-    return this.publish({ checkQueue: true });
+    const response = this.publish();
+    // Only what GitHub's search returned counts toward Inbox Zero, not quests the board hides.
+    await this.options.game.recordQueueChecked(quests.length).catch((error: unknown) => {
+      this.options.log(`inbox check failed: ${errorMessage(error)}`);
+    });
+    return response;
   }
 
   private async enterBackoff(kind: Backoff['kind']): Promise<ListQuestsResponse> {
@@ -189,7 +218,7 @@ export class QuestService {
     if (!this.snapshot) {
       throw new RateLimitedError(backoff);
     }
-    return this.publish({ checkQueue: false });
+    return this.publish();
   }
 
   private cachedDuring(backoff: Backoff): ListQuestsResponse {
@@ -227,14 +256,9 @@ export class QuestService {
       });
   }
 
-  private async publish({ checkQueue }: { checkQueue: boolean }): Promise<ListQuestsResponse> {
+  private publish(): ListQuestsResponse {
     const response = this.response();
     this.options.events.broadcast({ type: 'questsUpdated', ...response });
-    if (checkQueue) {
-      await this.options.game.recordQueueChecked(response.quests.length).catch((error: unknown) => {
-        this.options.log(`inbox check failed: ${errorMessage(error)}`);
-      });
-    }
     return response;
   }
 

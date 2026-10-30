@@ -90,6 +90,14 @@ const BatchResponseSchema = z.object({
 
 const CreatedReviewSchema = z.object({ html_url: z.string() });
 
+const HeadShaSchema = z.object({ headRefOid: z.string().min(1) });
+
+export interface ApproveOptions {
+  /** The commit the player reviewed; GitHub attaches the approval to it, not to the branch tip. */
+  commitId: string;
+  body?: string;
+}
+
 export interface SearchItem {
   number: number;
   title: string;
@@ -137,6 +145,17 @@ export interface SubmittedReview {
 
 export interface GitHubClientOptions {
   onWarning?: (message: string) => void;
+}
+
+/**
+ * The search found PRs but most of their details could not be read, so the list would understate
+ * the queue (and could look empty). Callers should keep their previous list.
+ */
+export class IncompleteQuestListError extends GhError {
+  public constructor(skipped: number, total: number) {
+    super(`Could not read ${skipped} of ${total} review requests from GitHub`);
+    this.name = 'IncompleteQuestListError';
+  }
 }
 
 function parseJson<TValue>(text: string, schema: z.ZodType<TValue>, what: string): TValue {
@@ -328,7 +347,9 @@ export class GitHubClient {
 
   /**
    * Open PRs requesting the player's review, directly or through a team, with their details.
-   * A rate-limited call rejects right away instead of falling back to more calls.
+   * A rate-limited call rejects right away instead of falling back to more calls. PRs whose details
+   * can't be read are skipped, unless that is most of them: then it rejects with
+   * `IncompleteQuestListError`.
    */
   public async fetchReviewRequests(): Promise<Array<ReviewRequestData>> {
     const [allText, directText] = await Promise.all([
@@ -364,6 +385,10 @@ export class GitHubClient {
       (batch) => this.detailsFor(batch),
     );
     const details = batches.flat();
+    const skipped = details.filter((entry) => entry === undefined).length;
+    if (skipped * 2 > items.length) {
+      throw new IncompleteQuestListError(skipped, items.length);
+    }
     const viewerLogin = items.length > 0 ? await this.viewer() : undefined;
     return items.flatMap((item, index): Array<ReviewRequestData> => {
       const found = details[index];
@@ -424,13 +449,26 @@ export class GitHubClient {
     return parsePullRequestDetails(text);
   }
 
-  public async approve(ref: QuestRef, body?: string): Promise<void> {
-    const args = ['pr', 'review', String(ref.number), '-R', repoArg(ref), '--approve'];
+  /** The PR's current head commit, lower-cased. */
+  public async fetchHeadSha(ref: QuestRef): Promise<string> {
+    const text = await this.gh([
+      'pr',
+      'view',
+      String(ref.number),
+      '-R',
+      repoArg(ref),
+      '--json',
+      'headRefOid',
+    ]);
+    return parseJson(text, HeadShaSchema, 'gh pr view').headRefOid.toLowerCase();
+  }
+
+  public async approve(ref: QuestRef, { commitId, body }: ApproveOptions): Promise<void> {
+    const payload: Record<string, string> = { event: 'APPROVE', commit_id: commitId };
     if (body) {
-      await this.gh([...args, '--body-file', '-'], { input: body });
-      return;
+      payload.body = body;
     }
-    await this.gh(args);
+    await this.postReview(ref, payload);
   }
 
   /** Posts one review; retries with everything in the body if GitHub rejects the inline lines. */

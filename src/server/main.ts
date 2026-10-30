@@ -11,7 +11,7 @@ import { LinearReviewClient } from './linear.ts';
 import { QuestCache } from './questCache.ts';
 import { QuestService } from './questService.ts';
 import { ReviewRunService } from './reviewRuns.ts';
-import { createRouter } from './router.ts';
+import { createRouter, loopbackOrigins } from './router.ts';
 import { StateStore } from './store.ts';
 
 const info = (message: string): void => {
@@ -50,6 +50,7 @@ async function main(): Promise<void> {
 
   const server = createServer(
     createRouter(createHandlers(config, { quests, runs, game, github, events }), {
+      allowedOrigins: loopbackOrigins([config.port, config.uiPort]),
       onUnexpectedError: (error) => {
         warn(`unexpected error ${inspect(error)}`);
       },

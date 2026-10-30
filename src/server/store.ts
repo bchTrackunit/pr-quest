@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -151,6 +151,8 @@ export class StateStore {
 
   public static async open(stateDir: string, options: StateStoreOptions = {}): Promise<StateStore> {
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
+    // `mkdir` leaves an existing directory's mode alone; the state holds review history.
+    await chmod(stateDir, 0o700);
     const file = join(stateDir, STATE_FILE);
     return new StateStore(file, await readState(file, options.onWarning ?? (() => undefined)));
   }

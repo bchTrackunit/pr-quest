@@ -57,6 +57,25 @@ describe('ReviewResult', () => {
     expect(handlers.onPost).toHaveBeenCalledWith('requestChanges');
   });
 
+  test('the post confirmation counts only findings with a line as inline comments', async () => {
+    const user = userEvent.setup();
+    renderResult();
+
+    await user.click(screen.getByRole('button', { name: 'Post to PR' }));
+
+    expect(screen.getByRole('group').textContent).toContain(
+      'This submits one GitHub review with 3 findings: 2 as inline comments and 1 in the review body.',
+    );
+  });
+
+  test("says the verdict is advice and PR Quest never approves on the agent's word", () => {
+    renderResult(makeRun({ status: 'finished', result: makeResult({ verdict: 'approve' }) }));
+
+    expect(screen.getByRole('dialog').textContent).toContain(
+      'The verdict is advice only. PR Quest never turns it into an approval; only you can approve.',
+    );
+  });
+
   test('cancelling the post confirmation returns to the actions', async () => {
     const user = userEvent.setup();
     const handlers = renderResult();

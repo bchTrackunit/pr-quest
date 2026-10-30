@@ -16,6 +16,7 @@ export function makeQuest(overrides: Partial<Quest> = {}): Quest {
     author: { name: 'Ada Lovelace', githubLogin: 'ada' },
     sourceBranch: 'feature/fleet-health',
     targetBranch: 'main',
+    headSha: '0123456789abcdef0123456789abcdef01234567',
     status: 'open',
     isDraft: false,
     approvedByOthers: false,

@@ -215,6 +215,12 @@ describe('achievements', () => {
     );
   });
 
+  test('returns the same state when a queue check unlocks nothing, so nothing is rewritten', () => {
+    const state = applyAll([{ at: day(10, 9) }]);
+
+    expect(applyQueueChecked(state, { questCount: 3, at: day(10, 18) }).state).toBe(state);
+  });
+
   test('Agent Commander unlocks after 10 finished agent reviews, which earn no XP themselves', () => {
     let state = initialGameState();
     for (let index = 0; index < 9; index++) {

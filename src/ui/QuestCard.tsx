@@ -36,6 +36,7 @@ export const QuestCard = ({
   onClickApprove,
 }: QuestCardProps) => {
   const titleId = useId();
+  const draftNoteId = useId();
   const isBoss = quest.difficulty === 'Boss';
   const isStarting = pendingAction === 'review';
   const canSendAgent = !run || run.disposition === 'posted';
@@ -144,13 +145,20 @@ export const QuestCard = ({
           <span className="visually-hidden"> (opens in a new tab)</span>
         </a>
         <button
+          aria-describedby={quest.isDraft ? draftNoteId : undefined}
           className="button button--success"
+          disabled={quest.isDraft}
           onClick={() => onClickApprove(quest.id)}
           type="button"
         >
           Approve<span className="visually-hidden"> {label}</span>
         </button>
       </div>
+      {quest.isDraft ? (
+        <p className="muted" id={draftNoteId}>
+          Drafts can't be approved yet.
+        </p>
+      ) : null}
     </article>
   );
 };

@@ -10,6 +10,7 @@ import type {
   XpGain,
 } from '../shared/api.ts';
 import {
+  ApiRequestError,
   approveQuest,
   describeError,
   discardRun,
@@ -52,8 +53,11 @@ export interface GameActions {
   closeResult: () => void;
   requestApprove: (questId: string) => void;
   cancelApprove: () => void;
-  /** Rejects with the server error so the dialog can show it and stay open. */
-  confirmApprove: (questId: string, comment: string) => Promise<void>;
+  /**
+   * Approves `headSha`, the commit the dialog showed. Rejects with the server error so the dialog
+   * can show it and stay open; on `headChanged` it also reloads the quests to show the new commit.
+   */
+  confirmApprove: (questId: string, headSha: string, comment: string) => Promise<void>;
   postFindings: (runId: string, event: PostReviewEvent) => Promise<void>;
   discardFindings: (runId: string) => Promise<void>;
   dismissToast: (toastId: string) => void;
@@ -295,9 +299,17 @@ export function useGameController(): GameController {
       requestApprove: (questId) =>
         store.setState((state) => ({ ...state, approveQuestId: questId })),
       cancelApprove: () => store.setState((state) => ({ ...state, approveQuestId: undefined })),
-      confirmApprove: async (questId, comment) => {
+      confirmApprove: async (questId, headSha, comment) => {
         const quest = findQuest(store.getState(), questId);
-        const response = await approveQuest(questId, comment.trim() || undefined);
+        const response = await approveQuest(questId, headSha, comment.trim() || undefined).catch(
+          (reason: unknown) => {
+            if (reason instanceof ApiRequestError && reason.code === 'headChanged') {
+              // The server already recorded the new head; this reads it from its cache.
+              loadQuests();
+            }
+            throw reason;
+          },
+        );
         store.setState((state) => {
           const openRun = state.openRunId ? state.runs[state.openRunId] : undefined;
           return {

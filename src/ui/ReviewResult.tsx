@@ -35,6 +35,25 @@ const SEVERITY_META: Record<FindingSeverity, { label: string; icon: string }> = 
 
 type Pending = 'post' | 'discard' | undefined;
 
+const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/** Findings without a line can only go in the review body, so they are not inline comments. */
+function describePost(findingCount: number, inlineCount: number): string {
+  const prefix = 'This submits one GitHub review with';
+  if (findingCount === 0) {
+    return `${prefix} the summary and no findings.`;
+  }
+  const findings = plural(findingCount, 'finding');
+  const bodyCount = findingCount - inlineCount;
+  if (bodyCount === 0) {
+    return `${prefix} ${findings} as inline comments.`;
+  }
+  if (inlineCount === 0) {
+    return `${prefix} ${findings} in the review body.`;
+  }
+  return `${prefix} ${findings}: ${inlineCount} as inline ${inlineCount === 1 ? 'comment' : 'comments'} and ${bodyCount} in the review body.`;
+}
+
 /** The loot screen for a finished run: the agent's summary, verdict and findings, and what to do with them. */
 export const ReviewResult = ({
   run,
@@ -55,6 +74,7 @@ export const ReviewResult = ({
   const label = questLabel(summary);
   const groups = result ? groupFindings(result.findings) : [];
   const findingCount = result?.findings.length ?? 0;
+  const inlineCount = result?.findings.filter((finding) => finding.line !== undefined).length ?? 0;
   const isAwaitingDecision = run.disposition === 'pending';
 
   const runAction = (action: Pending, request: () => Promise<void>): void => {
@@ -89,7 +109,8 @@ export const ReviewResult = ({
             </div>
             <p className="prewrap">{result.summary}</p>
             <p className="muted">
-              The verdict is advice only. The agent never approves on your behalf.
+              The verdict is advice only. PR Quest never turns it into an approval; only you can
+              approve.
             </p>
           </section>
 
@@ -158,8 +179,8 @@ export const ReviewResult = ({
         <fieldset className="confirm-post" disabled={pending !== undefined}>
           <legend className="pixel">Post to {label}?</legend>
           <p>
-            This submits a GitHub review with {findingCount} inline{' '}
-            {findingCount === 1 ? 'comment' : 'comments'}. It also shows up in Linear.
+            {describePost(findingCount, inlineCount)} If GitHub rejects a line, every finding goes
+            in the body instead. It also shows up in Linear.
           </p>
           <label className="radio">
             <input

@@ -74,6 +74,20 @@ describe('QuestCard', () => {
     expect(screen.queryByRole('button', { name: 'Send review agent' })).toBeNull();
   });
 
+  test('keeps the ticking stopwatch out of the announced status', () => {
+    renderCard(
+      makeQuest(),
+      makeRun({ status: 'running', startedAt: new Date(Date.now() - 65_000).toISOString() }),
+    );
+    expect(screen.getByRole('status').textContent).not.toMatch(/\d\d:\d\d/);
+  });
+
+  test('does not offer to approve a draft PR', () => {
+    renderCard(makeQuest({ isDraft: true, status: 'draft' }));
+    expect(screen.getByRole('button', { name: /Approve/ })).toHaveProperty('disabled', true);
+    expect(screen.getByText("Drafts can't be approved yet.")).toBeTruthy();
+  });
+
   test('offers the loot when the run finished', async () => {
     const user = userEvent.setup();
     const handlers = renderCard(makeQuest(), makeRun({ status: 'finished', result: makeResult() }));
@@ -81,13 +95,14 @@ describe('QuestCard', () => {
     expect(handlers.onClickOpenResult).toHaveBeenCalledWith('run-1');
   });
 
-  test('shows the error and retries a failed run', async () => {
+  test('shows the error as static text, not an alert, and retries a failed run', async () => {
     const user = userEvent.setup();
     const handlers = renderCard(
       makeQuest(),
       makeRun({ status: 'startupFailed', error: { message: 'CURSOR_API_KEY is missing' } }),
     );
-    expect(screen.getByRole('alert').textContent).toContain('CURSOR_API_KEY is missing');
+    expect(screen.getByText(/CURSOR_API_KEY is missing/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(handlers.onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
   });

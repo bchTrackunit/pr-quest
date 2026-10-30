@@ -75,7 +75,9 @@ export const App = () => {
         <ApproveDialog
           key={approveQuest.id}
           onClickClose={actions.cancelApprove}
-          onConfirm={(comment) => actions.confirmApprove(approveQuest.id, comment)}
+          onConfirm={(comment, headSha) =>
+            actions.confirmApprove(approveQuest.id, headSha, comment)
+          }
           quest={approveQuest}
         />
       ) : null}

@@ -2,12 +2,23 @@ import { createServer, request, type Server } from 'node:http';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { createHandlers } from './handlers.ts';
-import { createRouter, matchRoute, type RouteHandlers } from './router.ts';
+import {
+  createRouter,
+  loopbackOrigins,
+  matchRoute,
+  type RouteHandlers,
+  type RouterOptions,
+} from './router.ts';
 
 interface TestResponse {
   status: number;
   body: unknown;
 }
+
+const API_PORT = 4317;
+const UI_PORT = 4318;
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const START_REVIEW = '/api/quests/Trackunit%2Fmanager%231/review';
 
 let server: Server | undefined;
 
@@ -22,8 +33,11 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function startServer(handlers: RouteHandlers): Promise<number> {
-  server = createServer(createRouter(handlers));
+async function startServer(
+  handlers: RouteHandlers,
+  options: RouterOptions = { allowedOrigins: loopbackOrigins([API_PORT, UI_PORT]) },
+): Promise<number> {
+  server = createServer(createRouter(handlers, options));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (typeof address !== 'object' || !address) {
@@ -37,6 +51,7 @@ function send(
   method: string,
   path: string,
   headers: Record<string, string> = {},
+  body?: string,
 ): Promise<TestResponse> {
   return new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port, method, path, headers }, (res) => {
@@ -46,7 +61,7 @@ function send(
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
 }
 
@@ -74,7 +89,7 @@ describe('router', () => {
   test('contract routes without a handler respond 501', async () => {
     const port = await startServer({});
 
-    const response = await send(port, 'POST', '/api/quests/Trackunit%2Fmanager%231/review');
+    const response = await send(port, 'POST', START_REVIEW, JSON_HEADERS);
 
     expect(response.status).toBe(501);
     expect(response.body).toEqual({
@@ -106,6 +121,109 @@ describe('router', () => {
     const response = await send(port, 'GET', '/api/health', { Host: 'rebind.example' });
 
     expect(response.status).toBe(403);
+  });
+
+  test.each(['http://127.0.0.1:9999', 'http://localhost:6006', 'http://127.0.0.1', 'null'])(
+    'rejects a POST from the other origin %s',
+    async (origin) => {
+      const port = await startServer({});
+
+      const response = await send(port, 'POST', START_REVIEW, { ...JSON_HEADERS, Origin: origin });
+
+      expect(response).toEqual({
+        status: 403,
+        body: { error: { code: 'forbidden', message: 'Cross-origin requests are not allowed' } },
+      });
+    },
+  );
+
+  test.each([
+    `http://127.0.0.1:${UI_PORT}`,
+    `http://localhost:${UI_PORT}`,
+    `http://127.0.0.1:${API_PORT}`,
+    `http://localhost:${API_PORT}`,
+  ])('accepts a POST from the configured origin %s', async (origin) => {
+    const port = await startServer({});
+
+    const response = await send(port, 'POST', START_REVIEW, { ...JSON_HEADERS, Origin: origin });
+
+    expect(response.status).toBe(501);
+  });
+
+  test('rejects any Origin when no origins are configured', async () => {
+    const port = await startServer({}, {});
+
+    const response = await send(port, 'POST', START_REVIEW, {
+      ...JSON_HEADERS,
+      Origin: `http://127.0.0.1:${UI_PORT}`,
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test.each(['same-site', 'cross-site'])('rejects a POST with Sec-Fetch-Site: %s', async (site) => {
+    const port = await startServer({});
+
+    const response = await send(port, 'POST', START_REVIEW, {
+      ...JSON_HEADERS,
+      'Sec-Fetch-Site': site,
+    });
+
+    expect(response).toEqual({
+      status: 403,
+      body: { error: { code: 'forbidden', message: 'Cross-site requests are not allowed' } },
+    });
+  });
+
+  test.each(['same-origin', 'none'])('accepts a POST with Sec-Fetch-Site: %s', async (site) => {
+    const port = await startServer({});
+
+    const response = await send(port, 'POST', START_REVIEW, {
+      ...JSON_HEADERS,
+      'Sec-Fetch-Site': site,
+    });
+
+    expect(response.status).toBe(501);
+  });
+
+  test.each([
+    ['text/plain', { 'Content-Type': 'text/plain' }],
+    ['form data', { 'Content-Type': 'application/x-www-form-urlencoded' }],
+    ['no content type', {}],
+  ])('rejects a POST sent as %s with 415', async (_label, headers) => {
+    const port = await startServer({});
+
+    const response = await send(port, 'POST', START_REVIEW, headers, '{"confirm":true}');
+
+    expect(response).toEqual({
+      status: 415,
+      body: { error: { code: 'badRequest', message: 'POST bodies must be application/json' } },
+    });
+  });
+
+  test('accepts application/json with a charset', async () => {
+    const port = await startServer({});
+
+    const response = await send(
+      port,
+      'POST',
+      START_REVIEW,
+      { 'Content-Type': 'Application/JSON; charset=utf-8' },
+      '{}',
+    );
+
+    expect(response.status).toBe(501);
+  });
+});
+
+describe('loopbackOrigins', () => {
+  test('lists the 127.0.0.1 and localhost origin of every port', () => {
+    expect(loopbackOrigins([4317, 4318])).toEqual([
+      'http://127.0.0.1:4317',
+      'http://localhost:4317',
+      'http://127.0.0.1:4318',
+      'http://localhost:4318',
+    ]);
   });
 });
 

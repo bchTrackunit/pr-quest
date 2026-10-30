@@ -40,17 +40,21 @@ export interface ApiRequestOptions<TName extends JsonRouteName> {
   signal?: AbortSignal;
 }
 
-/** Calls a JSON route from the contract. Rejects with `ApiRequestError` on non-2xx responses. */
+/**
+ * Calls a JSON route from the contract. Rejects with `ApiRequestError` on non-2xx responses.
+ * Every POST is JSON, even without a body: the server rejects other content types.
+ */
 export async function apiRequest<TName extends JsonRouteName>(
   name: TName,
   options: ApiRequestOptions<TName>,
 ): Promise<ResponseBody<TName>> {
   const { method } = API_ROUTES[name];
+  const isPost = method === 'POST';
   const search = options.query ? `?${new URLSearchParams(options.query).toString()}` : '';
   const response = await fetch(`${buildApiPath(name, options.params)}${search}`, {
     method,
-    headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    headers: isPost ? { 'Content-Type': 'application/json' } : undefined,
+    body: isPost ? JSON.stringify(options.body ?? {}) : undefined,
     signal: options.signal,
   });
   const payload: unknown = await response.json().catch(() => undefined);
@@ -68,6 +72,9 @@ export async function apiRequest<TName extends JsonRouteName>(
 export function describeError(reason: unknown): string {
   if (reason instanceof ApiRequestError && reason.code === 'notImplemented') {
     return 'The server does not support this yet.';
+  }
+  if (reason instanceof ApiRequestError && reason.code === 'headChanged') {
+    return 'New commits were pushed to this PR. Re-check them before approving.';
   }
   return reason instanceof Error ? reason.message : String(reason);
 }
@@ -110,9 +117,18 @@ export function startReview(questId: string, body: StartReviewRequest = {}): Pro
   return apiRequest('startReview', { params: { id: questId }, body });
 }
 
-/** Only call after the player confirmed; the `confirm: true` flag is part of the contract. */
-export function approveQuest(questId: string, comment?: string): Promise<ApproveResponse> {
-  const body: ApproveRequest = comment ? { confirm: true, body: comment } : { confirm: true };
+/**
+ * Only call after the player confirmed; the `confirm: true` flag is part of the contract.
+ * `headSha` is the commit the player saw; the server refuses with `headChanged` if it moved on.
+ */
+export function approveQuest(
+  questId: string,
+  headSha: string,
+  comment?: string,
+): Promise<ApproveResponse> {
+  const body: ApproveRequest = comment
+    ? { confirm: true, headSha, body: comment }
+    : { confirm: true, headSha };
   return apiRequest('approveQuest', { params: { id: questId }, body });
 }
 

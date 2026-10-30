@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -54,6 +54,14 @@ const storedRun: StoredRun = {
 };
 
 describe('StateStore', () => {
+  test('tightens an existing state directory to owner-only access', async () => {
+    await chmod(dir, 0o755);
+
+    await StateStore.open(dir);
+
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+  });
+
   test('starts from an empty game when there is no state file', async () => {
     const store = await StateStore.open(join(dir, 'nested'));
 

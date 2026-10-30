@@ -76,6 +76,14 @@ export class ReviewRunService {
         'Agent reviews need CURSOR_API_KEY. Add it to apps/pr-quest/.env.local and restart PR Quest.',
       );
     }
+    const { headSha } = quest;
+    if (!headSha) {
+      throw new ApiError(
+        409,
+        'conflict',
+        `The head commit of ${quest.id} is unknown. Refresh the board, then send the agent again.`,
+      );
+    }
     const snapshot = snapshotOf(quest);
     const stored: StoredRun = {
       run: {
@@ -95,7 +103,7 @@ export class ReviewRunService {
       return { ...state, runs: [...state.runs, stored].slice(-MAX_STORED_RUNS) };
     });
     this.events.broadcast({ type: 'runUpdated', run: stored.run });
-    this.track(this.execute(stored, apiKey, options.model));
+    this.track(this.execute(stored, headSha, apiKey, options.model));
     return stored.run;
   }
 
@@ -103,8 +111,16 @@ export class ReviewRunService {
   public async resumeInterrupted(): Promise<void> {
     const interrupted = this.store.state.runs.filter((entry) => isActive(entry.run));
     for (const { run } of interrupted) {
-      if (run.agentId && run.runId && this.apiKey) {
-        this.track(this.reattach(run.id, run.runId, run.agentId, this.apiKey));
+      if (run.agentId && run.runId) {
+        if (this.apiKey) {
+          this.track(this.reattach(run.id, run.runId, run.agentId, this.apiKey));
+        } else {
+          await this.fail(
+            run.id,
+            'error',
+            'The server restarted without CURSOR_API_KEY, so it cannot follow this agent run',
+          );
+        }
         continue;
       }
       await this.fail(run.id, 'error', 'The server restarted before the agent run started');
@@ -173,8 +189,14 @@ export class ReviewRunService {
     void tracked.finally(() => this.tasks.delete(tracked));
   }
 
+  /**
+   * Starts the agent on the head commit rather than the branch, so new pushes can't change what it
+   * reviews, and its line numbers match the `commit_id` the findings are posted with. The base
+   * repo URL plus the PR's `pull/<n>/head` ref (see the prompt) also covers PRs from forks.
+   */
   private async execute(
     stored: StoredRun,
+    headSha: string,
     apiKey: string,
     model: string | undefined,
   ): Promise<void> {
@@ -191,17 +213,18 @@ export class ReviewRunService {
           repos: [
             {
               url: `https://github.com/${quest.repo.owner}/${quest.repo.name}`,
-              startingRef: quest.sourceBranch,
+              startingRef: headSha,
             },
           ],
+          workOnCurrentBranch: false,
           autoCreatePR: false,
           skipReviewerRequest: true,
         },
       });
-      this.log(`review ${id}: created agent ${agent.agentId} for ${quest.id}`);
+      this.log(`review ${id}: created agent ${agent.agentId} for ${quest.id} at ${headSha}`);
       await this.patch(id, { agentId: agent.agentId });
 
-      const run = await agent.send(buildReviewPrompt(quest));
+      const run = await agent.send(buildReviewPrompt(quest, headSha));
       started = true;
       this.log(`review ${id}: started run ${run.id} on agent ${agent.agentId}`);
       await this.patch(id, { runId: run.id, status: 'running' });
@@ -272,6 +295,16 @@ export class ReviewRunService {
     const parsed = parseReviewResult(result.result ?? fallbackText);
     if (!parsed.ok) {
       await this.fail(id, 'error', parsed.error);
+      return;
+    }
+    const headSha = this.get(id)?.quest.headSha;
+    const reported = parsed.reviewedSha;
+    if (reported && headSha && !(reported.length >= 7 && headSha.startsWith(reported))) {
+      await this.fail(
+        id,
+        'error',
+        `The agent reviewed commit ${reported} instead of ${headSha}, so its line numbers may not match the PR. Send it again.`,
+      );
       return;
     }
     await this.patch(id, { status: 'finished', finishedAt, result: parsed.result });
