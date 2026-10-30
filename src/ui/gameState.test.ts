@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  activeRateLimit,
   applyServerEvent,
   createInitialGameState,
   groupFindings,
@@ -69,10 +70,32 @@ describe('applyServerEvent', () => {
       quests: [makeQuest()],
       fetchedAt: '2026-10-30T10:00:00.000Z',
       source: 'github',
+      stale: false,
     });
     expect(state.quests).toHaveLength(1);
     expect(state.questSource).toBe('github');
     expect(state.questsLoad).toBe('ready');
+  });
+
+  test('questsUpdated carries the rate limit and clears it again', () => {
+    const rateLimit = { kind: 'primary' as const, limitedUntil: '2026-10-30T10:05:00.000Z' };
+    const base = {
+      type: 'questsUpdated' as const,
+      quests: [makeQuest()],
+      fetchedAt: '2026-10-30T10:00:00.000Z',
+      source: 'github' as const,
+    };
+
+    const limited = applyServerEvent(createInitialGameState('default'), {
+      ...base,
+      stale: true,
+      rateLimit,
+    });
+    const cleared = applyServerEvent(limited, { ...base, stale: false });
+
+    expect(limited).toMatchObject({ questsStale: true, questsRateLimit: rateLimit });
+    expect(cleared.questsStale).toBe(false);
+    expect(cleared.questsRateLimit).toBeUndefined();
   });
 
   test('achievementUnlocked marks the achievement and adds it to the player', () => {
@@ -106,5 +129,16 @@ describe('applyServerEvent', () => {
       player,
     });
     expect(state.player).toBe(player);
+  });
+});
+
+describe('activeRateLimit', () => {
+  test('returns the limit until it has passed', () => {
+    const rateLimit = { kind: 'secondary' as const, limitedUntil: '2026-10-30T10:05:00.000Z' };
+    const until = Date.parse(rateLimit.limitedUntil);
+
+    expect(activeRateLimit(rateLimit, until - 1)).toBe(rateLimit);
+    expect(activeRateLimit(rateLimit, until)).toBeUndefined();
+    expect(activeRateLimit(undefined, until)).toBeUndefined();
   });
 });

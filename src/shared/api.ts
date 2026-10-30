@@ -52,6 +52,11 @@ export interface Quest {
   /** Head commit of the source branch, when known. */
   headSha?: string;
   status: PullRequestStatus;
+  isDraft: boolean;
+  /** Someone other than the player has a latest review of `APPROVED` on the PR. */
+  approvedByOthers: boolean;
+  /** How many people other than the player have a latest review of `APPROVED`. */
+  approvalCount: number;
   diffStats: DiffStats;
   difficulty: DifficultyTier;
   requestKind: RequestKind;
@@ -236,7 +241,7 @@ export interface GameOutcome {
  * `event:` field is not used, so clients read everything through `EventSource.onmessage`.
  */
 export type ServerEvent =
-  | { type: 'questsUpdated'; quests: Array<Quest>; fetchedAt: string; source: QuestSource }
+  | ({ type: 'questsUpdated' } & ListQuestsResponse)
   | { type: 'runUpdated'; run: ReviewRun }
   | { type: 'achievementUnlocked'; achievement: AchievementDef; unlockedAt: string }
   | ({ type: 'xpGained'; player: PlayerState } & XpGain);
@@ -256,10 +261,27 @@ export interface HealthResponse {
   };
 }
 
+/**
+ * `primary`: the hourly or per-minute quota ran out (search allows 30 a minute).
+ * `secondary`: GitHub throttled bursts of requests.
+ */
+export type RateLimitKind = 'primary' | 'secondary';
+
+export interface RateLimitStatus {
+  kind: RateLimitKind;
+  /** The server makes no GitHub calls for the quest list before this time. */
+  limitedUntil: string;
+}
+
 export interface ListQuestsResponse {
   quests: Array<Quest>;
+  /** When these quests were read from GitHub. */
   fetchedAt: string;
   source: QuestSource;
+  /** The quests are older than the cache lifetime, for example because GitHub is rate limited. */
+  stale: boolean;
+  /** Set while GitHub rate limits the quest list. */
+  rateLimit?: RateLimitStatus;
 }
 
 export interface StartReviewRequest {
@@ -318,6 +340,8 @@ export type ApiErrorCode =
   | 'conflict'
   | 'missingConfig'
   | 'upstreamFailed'
+  /** GitHub is rate limited and there are no cached quests to serve yet. */
+  | 'rateLimited'
   | 'notImplemented'
   | 'internal';
 
@@ -337,7 +361,10 @@ export type HttpMethod = 'GET' | 'POST';
 
 export const API_ROUTES = {
   health: { method: 'GET', path: '/api/health' },
-  /** Serves a cache younger than 15 seconds; `?refresh=1` always fetches. */
+  /**
+   * Serves a cache younger than 60 seconds; `?refresh=1` fetches unless GitHub is rate limited,
+   * in which case the cached quests come back with `rateLimit` set.
+   */
   listQuests: { method: 'GET', path: '/api/quests' },
   startReview: { method: 'POST', path: '/api/quests/:id/review' },
   approveQuest: { method: 'POST', path: '/api/quests/:id/approve' },

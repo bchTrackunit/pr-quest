@@ -52,8 +52,10 @@ export const App = () => {
           questActionErrors={state.questActionErrors}
           questActions={state.questActions}
           quests={state.quests}
+          rateLimit={state.questsRateLimit}
           runs={state.runs}
           source={state.questSource}
+          stale={state.questsStale}
         />
       </main>
 

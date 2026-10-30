@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+/* eslint-disable no-restricted-globals -- tests reset the jsdom storage the board persists to */
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -72,6 +73,7 @@ describe('App', () => {
       quests: [makeQuest()],
       fetchedAt: new Date().toISOString(),
       source: 'linear',
+      stale: false,
     });
     api.fetchRuns.mockRejectedValue(new ApiRequestError(501, 'notImplemented', 'Not implemented'));
     api.fetchPlayer.mockResolvedValue({ player: makePlayer() });
@@ -82,6 +84,7 @@ describe('App', () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   test('loads the board and the player, and shows the live connection', async () => {
@@ -246,8 +249,53 @@ describe('App', () => {
       act(() => MockEventSource.latest().open());
       expect(screen.getByText('Live')).toBeTruthy();
       expect(api.fetchQuests).toHaveBeenCalledTimes(2);
+      expect(api.fetchQuests).toHaveBeenLastCalledWith(undefined, {});
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test('never forces a GitHub refresh on page load or stream reconnects', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderApp();
+      for (let drop = 0; drop < 3; drop += 1) {
+        act(() => MockEventSource.latest().fail());
+        act(() => {
+          vi.advanceTimersByTime(30_000);
+        });
+        act(() => MockEventSource.latest().open());
+      }
+
+      expect(api.fetchQuests).toHaveBeenCalledTimes(4);
+      for (const [, options] of api.fetchQuests.mock.calls) {
+        expect(options?.refresh).not.toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps the last quests during a rate limit and holds Refresh until it ends', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    emit({
+      type: 'questsUpdated',
+      quests: [makeQuest()],
+      fetchedAt: new Date(Date.now() - 120_000).toISOString(),
+      source: 'github',
+      stale: true,
+      rateLimit: { kind: 'primary', limitedUntil: new Date(Date.now() + 90_000).toISOString() },
+    });
+
+    expect(screen.getByText(/GitHub rate limit reached, showing results from/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Add the fleet health widget' })).toBeTruthy();
+    const refresh = screen.getByRole('button', { name: /Retry in/ });
+    expect(refresh).toHaveProperty('disabled', true);
+
+    await user.click(refresh);
+    expect(api.fetchQuests).toHaveBeenCalledTimes(1);
   });
 });

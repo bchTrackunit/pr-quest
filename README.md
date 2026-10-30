@@ -43,7 +43,9 @@ This starts the API on <http://127.0.0.1:4317> and the UI on <http://127.0.0.1:4
 in a browser or in Cursor's browser tab. The UI proxies `/api` to the server and receives live
 updates over server-sent events; the indicator in the HUD shows "Live" when it is connected.
 
-The quest list refreshes every 2 minutes and when you press **Refresh**. Other checks:
+The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
+reconnecting the live stream never forces a GitHub call; both use the server's cached list.
+Other checks:
 
 ```sh
 yarn nx run-many -t tsc-validate lint test build -p pr-quest
@@ -56,14 +58,84 @@ remove it from the file; blanking the variable in your shell doesn't override it
 
 - **Quests** come from `gh search prs --review-requested=@me`, which includes team requests. A
   second search with `user-review-requested:@me` tells direct requests apart. Branches, diff
-  stats and requested teams for every PR come from batched `gh api graphql` queries (25 PRs per
-  query). If a batch fails, PR Quest falls back to one `gh pr view` per PR.
+  stats, draft state, latest reviews and requested teams for every PR come from batched
+  `gh api graphql` queries (25 PRs per query). If a batch fails, PR Quest falls back to one
+  `gh pr view` per PR, except when the failure is a rate limit.
+- **Approvals by others** come from each PR's latest reviews. A PR counts as approved by others
+  when someone other than you has an `APPROVED` latest review.
 - **Linear** is optional. With `LINEAR_API_KEY`, the server calls Linear's MCP `list_diffs` tool
   to add each PR's Linear review link and `needsAttention` flag. Any Linear failure falls back to
   GitHub data only.
 - **Tiers** use additions plus deletions: Trivial under 50 lines, Normal under 400, Hard under
   2,000 lines and 50 files, and Boss above that.
-- **Sorting**: direct requests first, then PRs that need attention, then the longest-waiting.
+- **Sorting** is described in [Filtering and sorting](#filtering-and-sorting).
+
+## Filtering and sorting
+
+The panel above the quest cards narrows and orders the board. Everything runs in the browser on
+the list the server already has, so filtering never calls GitHub.
+
+- **Search** matches the title, author, source branch and PR number. `#123` matches PR 123 in
+  any repo, and `repo#123` or `owner/repo#123` matches one repo's PR. Several words must all
+  match. Press `/` to jump to the search box, `Escape` to clear it and `Enter` to apply it
+  without waiting for the short typing delay.
+- **Requests** (All, Direct, Team) are the buttons in the board header. With All, the board is
+  grouped into direct and team requests; the other filters and the sort apply inside each group.
+- **Difficulty** and **Agent** are multi-select. Agent states are Not started, Running (queued or
+  running), Loot ready (findings you haven't posted or discarded yet) and Failed. Selecting
+  nothing in a group means "any".
+- **Hide drafts** and **Hide PRs others approved** are on/off switches.
+- **Sort**: _Smart_ (the default) puts direct requests first, then PRs that need attention, then
+  the longest-waiting. _Size_ orders by additions plus deletions, using changed files as the
+  tie-breaker, smallest or largest first.
+
+Active filters show as chips you can remove one at a time, or all at once with **Clear all**.
+The count line says how many quests are shown out of the total. If the filters hide every
+quest, the board says so and offers to clear them; this is different from Inbox Zero, which
+means GitHub returned no review requests.
+
+The buttons in each group support the arrow keys, `Home` and `End`, and every toggle reports its
+state to screen readers with `aria-pressed`.
+
+### Presets
+
+**Presets** save the current filters and sort under a name. Two built-in presets, marked ★,
+can't be deleted:
+
+| Preset     | Difficulty      | Other settings                                        |
+| ---------- | --------------- | ----------------------------------------------------- |
+| Quick wins | Trivial, Normal | Hide drafts, hide PRs others approved, smallest first |
+| Boss rush  | Hard, Boss      | Largest first                                         |
+
+Choose **Save current…** to add your own (up to 20, names up to 40 characters). Saving under an
+existing name replaces that preset. The board remembers your last filters and sort in the
+browser's `localStorage` (`pr-quest:board-view:v1`, presets in `pr-quest:presets:v1`). Saved data
+that can't be read is ignored and the defaults are used instead.
+
+## GitHub rate limits
+
+GitHub's search API allows 30 searches a minute, and each refresh uses 2. PR Quest avoids
+spending them and copes when it runs out anyway:
+
+- **Cache on disk.** The last successful list is saved to `quests.json` in the state directory.
+  On startup the server serves it straight away and only asks GitHub again when it is more than
+  60 seconds old. The 2-minute poll also skips GitHub while the list is fresh.
+- **Detection.** A `gh` error mentioning "API rate limit exceeded" is a primary limit. "Secondary
+  rate limit", abuse detection and HTTP 429 are secondary limits. A plain HTTP 403 is not treated
+  as a rate limit, because GitHub also uses it for missing permissions and SAML.
+- **Backoff.** For a primary limit, PR Quest reads the reset time from `gh api rate_limit` (which
+  doesn't count against the limit) and waits until then. Without a reset time, and for secondary
+  limits, it waits 60 seconds, doubling on each repeat up to 10 minutes. The backoff is saved
+  with the cache, so restarting the server doesn't retry early.
+- **During the backoff** the poll, the **Refresh** button and `?refresh=1` don't call GitHub. The
+  API returns the cached quests with `stale: true` and `rateLimit: { kind, limitedUntil }`, and
+  the server retries once on its own when the backoff ends.
+- **In the UI** a calm banner says, for example, "GitHub rate limit reached, showing results
+  from 14:02, retrying at 14:03." Refresh is disabled and counts down to the retry. A list older
+  than 60 seconds shows "cached" next to the fetch time.
+
+If GitHub limits PR Quest before it has ever fetched a list, there is nothing to show, so the
+API returns a `503` with the code `rateLimited` and the board shows that as an error.
 
 ### The review agent and its safety limits
 
@@ -121,6 +193,11 @@ achievements and the last 200 review runs with their findings. The file is writt
 with mode `0600`. A file that can't be read is moved aside as `state.json.corrupt-<time>`, and
 PR Quest starts fresh. Delete the directory to reset your progress.
 
+The same directory holds `quests.json`: the last quest list, when it was fetched and any active
+rate-limit backoff. It is also written atomically with mode `0600`, and an unreadable file is
+ignored and replaced on the next successful fetch. Board filters and presets live in the
+browser, as described in [Presets](#presets).
+
 ## Known limitations
 
 - **`requestedAt` is the PR's open time.** GitHub search doesn't return when you were asked to
@@ -132,7 +209,11 @@ PR Quest starts fresh. Delete the directory to reset your progress.
   GraphQL API has no review list or approve mutation (see [the spike](docs/spike.md)), so
   approving always goes through `gh`.
 - **Refreshing takes about 5 seconds** for around 50 PRs: about 2 seconds of GitHub search and
-  2–3 seconds of batched GraphQL. Pressing Refresh many times in a row can hit GitHub's search
-  rate limit (30 searches a minute, and each refresh uses 2). The board then shows the last
-  known quests with an error until the limit resets.
+  2–3 seconds of batched GraphQL.
+- **Rate-limit reset times come from `gh api rate_limit`, not response headers**, because `gh`
+  doesn't expose the headers of a failed call. Secondary limits have no reset time, so they
+  always use the exponential backoff.
+- **"Approved by others" reads at most 100 latest reviews** per PR.
+- **Posted agent runs match no Agent filter.** Once findings are posted, the agent state no
+  longer applies, so selecting any Agent state hides that PR.
 - **The no-commit rule is prompt-only**, as described above.

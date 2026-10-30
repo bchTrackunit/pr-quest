@@ -2,9 +2,11 @@ import type {
   AchievementDef,
   AchievementStatus,
   FindingSeverity,
+  ListQuestsResponse,
   PlayerState,
   Quest,
   QuestSource,
+  RateLimitStatus,
   ReviewFinding,
   ReviewRun,
   ServerEvent,
@@ -44,6 +46,10 @@ export interface GameState {
   questsError?: string;
   questsFetchedAt?: string;
   questSource?: QuestSource;
+  /** The server is serving quests older than its cache lifetime. */
+  questsStale: boolean;
+  /** Set while GitHub rate limits the server's quest list. */
+  questsRateLimit?: RateLimitStatus;
   runs: Record<string, ReviewRun>;
   player?: PlayerState;
   playerError?: string;
@@ -65,6 +71,7 @@ export function createInitialGameState(notificationAccess: NotificationAccess): 
   return {
     quests: [],
     questsLoad: 'loading',
+    questsStale: false,
     runs: {},
     achievements: [],
     toasts: [],
@@ -129,18 +136,33 @@ export function markAchievementUnlocked(
   return { ...state, achievements, player };
 }
 
+/** Takes a quest list from `GET /api/quests` or a `questsUpdated` event. */
+export function applyQuestList(state: GameState, list: ListQuestsResponse): GameState {
+  return {
+    ...state,
+    quests: list.quests,
+    questsFetchedAt: list.fetchedAt,
+    questSource: list.source,
+    questsStale: list.stale,
+    questsRateLimit: list.rateLimit,
+    questsLoad: 'ready',
+    questsError: undefined,
+  };
+}
+
+/** The rate limit while it still applies at `now`; `undefined` once it has passed. */
+export function activeRateLimit(
+  rateLimit: RateLimitStatus | undefined,
+  now: number,
+): RateLimitStatus | undefined {
+  return rateLimit && Date.parse(rateLimit.limitedUntil) > now ? rateLimit : undefined;
+}
+
 /** Applies the data part of a server event. Side effects (toasts, sounds) live in the controller. */
 export function applyServerEvent(state: GameState, event: ServerEvent): GameState {
   switch (event.type) {
     case 'questsUpdated':
-      return {
-        ...state,
-        quests: event.quests,
-        questsFetchedAt: event.fetchedAt,
-        questSource: event.source,
-        questsLoad: 'ready',
-        questsError: undefined,
-      };
+      return applyQuestList(state, event);
     case 'runUpdated':
       return upsertRun(state, event.run);
     case 'achievementUnlocked':

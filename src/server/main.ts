@@ -8,6 +8,7 @@ import { runGh } from './gh.ts';
 import { GitHubClient } from './github.ts';
 import { createHandlers } from './handlers.ts';
 import { LinearReviewClient } from './linear.ts';
+import { QuestCache } from './questCache.ts';
 import { QuestService } from './questService.ts';
 import { ReviewRunService } from './reviewRuns.ts';
 import { createRouter } from './router.ts';
@@ -41,8 +42,10 @@ async function main(): Promise<void> {
     game,
     activeRunIdFor: (questId) => runs.activeRunIdFor(questId),
     log: warn,
+    cache: new QuestCache(config.stateDir, { onWarning: warn }),
   });
 
+  await quests.restore();
   await runs.resumeInterrupted();
 
   const server = createServer(

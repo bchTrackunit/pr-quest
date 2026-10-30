@@ -4,11 +4,12 @@ import type { Quest, RepoRef } from '../shared/api.ts';
 import { GhError, type GhRunner } from './gh.ts';
 import type { LinearReviewInfo } from './linear.ts';
 import { difficultyFor, formatQuestId, type QuestRef } from './quests.ts';
+import { isRateLimitError, parseRateLimitReset } from './rateLimit.ts';
 import { renderReview, type ReviewDraft } from './reviewPayload.ts';
 
 const SEARCH_FIELDS = 'number,title,url,repository,author,createdAt,updatedAt,isDraft';
 const VIEW_FIELDS =
-  'headRefName,baseRefName,headRefOid,additions,deletions,changedFiles,reviewRequests,createdAt,url,title,author,isDraft';
+  'headRefName,baseRefName,headRefOid,additions,deletions,changedFiles,reviewRequests,latestReviews,createdAt,url,title,author,isDraft';
 const SEARCH_LIMIT = '100';
 const VIEW_CONCURRENCY = 4;
 /** PRs per GraphQL query; GitHub's cost limits leave plenty of room at this size. */
@@ -19,11 +20,15 @@ const BATCH_FIELDS = `
   headRefName
   baseRefName
   headRefOid
+  isDraft
   additions
   deletions
   changedFiles
   author { login ... on User { name } }
-  reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on Team { slug } } } }`;
+  reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on Team { slug } } } }
+  latestReviews(first: 100) { nodes { state author { login } } }`;
+
+const APPROVED = 'APPROVED';
 
 const SearchItemSchema = z.object({
   number: z.number().int().positive(),
@@ -40,10 +45,16 @@ const DirectSearchSchema = z.array(z.object({ url: z.string() }));
 
 const ReviewerSchema = z.object({ __typename: z.string(), slug: z.string().nullish() });
 
+const LatestReviewSchema = z.object({
+  state: z.string(),
+  author: z.object({ login: z.string() }).nullish(),
+});
+
 const PullRequestCoreSchema = z.object({
   headRefName: z.string(),
   baseRefName: z.string(),
   headRefOid: z.string(),
+  isDraft: z.boolean(),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
   changedFiles: z.number().int().nonnegative(),
@@ -52,17 +63,20 @@ const PullRequestCoreSchema = z.object({
 
 const PullRequestDetailsSchema = PullRequestCoreSchema.extend({
   reviewRequests: z.array(ReviewerSchema),
+  latestReviews: z.array(LatestReviewSchema),
 });
 
 const BatchPullRequestSchema = PullRequestCoreSchema.extend({
   reviewRequests: z.object({
     nodes: z.array(z.object({ requestedReviewer: ReviewerSchema.nullish() }).nullish()),
   }),
+  latestReviews: z.object({ nodes: z.array(LatestReviewSchema.nullish()) }),
 });
 
 const BatchResponseSchema = z.object({
   data: z
-    .record(z.string(), z.object({ pullRequest: BatchPullRequestSchema.nullish() }).nullish())
+    .object({ viewer: z.object({ login: z.string() }).nullish() })
+    .catchall(z.object({ pullRequest: BatchPullRequestSchema.nullish() }).nullish())
     .nullish(),
   errors: z
     .array(
@@ -91,12 +105,15 @@ export interface PullRequestDetails {
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
+  isDraft: boolean;
   additions: number;
   deletions: number;
   changedFiles: number;
   authorName?: string;
   /** Team slugs without the org prefix, e.g. `team-gluon`. */
   requestedTeams: Array<string>;
+  /** Logins whose latest review is `APPROVED`, the player included. */
+  approvedBy: Array<string>;
 }
 
 export interface ReviewRequestData {
@@ -104,6 +121,8 @@ export interface ReviewRequestData {
   details: PullRequestDetails;
   /** The player was requested by name, not only through a team. */
   direct: boolean;
+  /** The player's GitHub login, so their own approval doesn't count as someone else's. */
+  viewerLogin?: string;
 }
 
 export interface QuestInput extends ReviewRequestData {
@@ -160,11 +179,13 @@ export function parseSearchResults(text: string): Array<SearchItem> {
 function toDetails(
   raw: z.infer<typeof PullRequestCoreSchema>,
   reviewers: ReadonlyArray<z.infer<typeof ReviewerSchema>>,
+  latestReviews: ReadonlyArray<z.infer<typeof LatestReviewSchema>>,
 ): PullRequestDetails {
   return {
     headRefName: raw.headRefName,
     baseRefName: raw.baseRefName,
     headRefOid: raw.headRefOid,
+    isDraft: raw.isDraft,
     additions: raw.additions,
     deletions: raw.deletions,
     changedFiles: raw.changedFiles,
@@ -174,12 +195,15 @@ function toDetails(
         ? [reviewer.slug.split('/').at(-1) ?? reviewer.slug]
         : [],
     ),
+    approvedBy: latestReviews.flatMap((review) =>
+      review.state === APPROVED && review.author ? [review.author.login] : [],
+    ),
   };
 }
 
 export function parsePullRequestDetails(text: string): PullRequestDetails {
   const raw = parseJson(text, PullRequestDetailsSchema, 'gh pr view');
-  return toDetails(raw, raw.reviewRequests);
+  return toDetails(raw, raw.reviewRequests, raw.latestReviews);
 }
 
 export interface PullRequestBatchQuery {
@@ -187,7 +211,10 @@ export interface PullRequestBatchQuery {
   variables: Record<string, string | number>;
 }
 
-/** One aliased `repository { pullRequest }` lookup per ref (`pr0`, `pr1`, ...), as variables. */
+/**
+ * One aliased `repository { pullRequest }` lookup per ref (`pr0`, `pr1`, ...), as variables, plus
+ * the player's login.
+ */
 export function buildPullRequestBatchQuery(refs: ReadonlyArray<QuestRef>): PullRequestBatchQuery {
   const variables: Record<string, string | number> = {};
   const params: Array<string> = [];
@@ -204,6 +231,7 @@ export function buildPullRequestBatchQuery(refs: ReadonlyArray<QuestRef>): PullR
   return {
     query: [
       `query(${params.join(', ')}) {`,
+      '  viewer { login }',
       ...lookups,
       '}',
       `fragment Details on PullRequest {${BATCH_FIELDS}\n}`,
@@ -215,35 +243,45 @@ export function buildPullRequestBatchQuery(refs: ReadonlyArray<QuestRef>): PullR
 /** Details for one ref of a batch, or GitHub's reason for returning none. */
 export type BatchEntry = { details: PullRequestDetails } | { error: string };
 
+export interface PullRequestBatch {
+  entries: Array<BatchEntry>;
+  viewerLogin?: string;
+}
+
 /**
  * Splits a batch response into one entry per ref, in request order. Throws when the response has
  * no data at all (bad query, auth, rate limit), so the caller can fall back.
  */
-export function parsePullRequestBatch(text: string, count: number): Array<BatchEntry> {
+export function parsePullRequestBatch(text: string, count: number): PullRequestBatch {
   const { data, errors } = parseJson(text, BatchResponseSchema, 'gh api graphql');
   if (!data) {
     throw new GhError(`gh api graphql returned no data: ${errors?.at(0)?.message ?? 'no reason'}`);
   }
-  return Array.from({ length: count }, (_, index): BatchEntry => {
+  const entries = Array.from({ length: count }, (_, index): BatchEntry => {
     const alias = `pr${index}`;
     const pullRequest = data[alias]?.pullRequest;
     if (pullRequest) {
       const reviewers = pullRequest.reviewRequests.nodes.flatMap(
         (node) => node?.requestedReviewer ?? [],
       );
-      return { details: toDetails(pullRequest, reviewers) };
+      const latestReviews = pullRequest.latestReviews.nodes.flatMap((node) => node ?? []);
+      return { details: toDetails(pullRequest, reviewers, latestReviews) };
     }
     const reason = errors?.find((error) => error.path?.[0] === alias)?.message;
     return { error: reason ?? 'GitHub returned no pull request' };
   });
+  const viewerLogin = data.viewer?.login;
+  return viewerLogin ? { entries, viewerLogin } : { entries };
 }
 
-export function toQuest({ item, details, direct, linear }: QuestInput): Quest {
+export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInput): Quest {
   const diffStats = {
     fileCount: details.changedFiles,
     additions: details.additions,
     deletions: details.deletions,
   };
+  const viewer = viewerLogin?.toLowerCase();
+  const approvalCount = details.approvedBy.filter((login) => login.toLowerCase() !== viewer).length;
   const quest: Quest = {
     id: formatQuestId(item.repo, item.number),
     title: item.title,
@@ -256,7 +294,10 @@ export function toQuest({ item, details, direct, linear }: QuestInput): Quest {
     sourceBranch: details.headRefName,
     targetBranch: details.baseRefName,
     headSha: details.headRefOid,
-    status: item.isDraft ? 'draft' : 'open',
+    status: details.isDraft ? 'draft' : 'open',
+    isDraft: details.isDraft,
+    approvedByOthers: approvalCount > 0,
+    approvalCount,
     diffStats,
     difficulty: difficultyFor(diffStats),
     requestKind: direct ? 'direct' : 'team',
@@ -278,13 +319,17 @@ export function toQuest({ item, details, direct, linear }: QuestInput): Quest {
 export class GitHubClient {
   private readonly gh: GhRunner;
   private readonly onWarning: (message: string) => void;
+  private viewerLogin?: string;
 
   public constructor(gh: GhRunner, options: GitHubClientOptions = {}) {
     this.gh = gh;
     this.onWarning = options.onWarning ?? (() => undefined);
   }
 
-  /** Open PRs requesting the player's review, directly or through a team, with their details. */
+  /**
+   * Open PRs requesting the player's review, directly or through a team, with their details.
+   * A rate-limited call rejects right away instead of falling back to more calls.
+   */
   public async fetchReviewRequests(): Promise<Array<ReviewRequestData>> {
     const [allText, directText] = await Promise.all([
       this.gh([
@@ -319,9 +364,17 @@ export class GitHubClient {
       (batch) => this.detailsFor(batch),
     );
     const details = batches.flat();
+    const viewerLogin = items.length > 0 ? await this.viewer() : undefined;
     return items.flatMap((item, index): Array<ReviewRequestData> => {
       const found = details[index];
-      return found ? [{ item, details: found, direct: directUrls.has(item.url) }] : [];
+      if (!found) {
+        return [];
+      }
+      const entry: ReviewRequestData = { item, details: found, direct: directUrls.has(item.url) };
+      if (viewerLogin) {
+        entry.viewerLogin = viewerLogin;
+      }
+      return [entry];
     });
   }
 
@@ -335,12 +388,27 @@ export class GitHubClient {
     try {
       text = await this.gh(['api', 'graphql', '--input', '-'], { input });
     } catch (error) {
-      if (!(error instanceof GhError) || !error.stdout) {
+      if (!(error instanceof GhError) || !error.stdout || isRateLimitError(error)) {
         throw error;
       }
       text = error.stdout;
     }
-    return parsePullRequestBatch(text, refs.length);
+    const batch = parsePullRequestBatch(text, refs.length);
+    this.viewerLogin ??= batch.viewerLogin;
+    return batch.entries;
+  }
+
+  /**
+   * When the exhausted quota resets, from `gh api rate_limit` (which doesn't count against any
+   * quota). `undefined` when no quota is at zero or the call fails.
+   */
+  public async fetchRateLimitReset(): Promise<Date | undefined> {
+    try {
+      return parseRateLimitReset(await this.gh(['api', 'rate_limit']));
+    } catch (error) {
+      this.onWarning(`Could not read the GitHub rate limit: ${errorMessage(error)}`);
+      return undefined;
+    }
   }
 
   public async viewPullRequest(ref: QuestRef): Promise<PullRequestDetails> {
@@ -396,6 +464,9 @@ export class GitHubClient {
     try {
       entries = await this.viewPullRequests(items);
     } catch (error) {
+      if (isRateLimitError(error)) {
+        throw error;
+      }
       this.onWarning(
         `Batched PR lookup failed, falling back to one gh pr view per PR: ${errorMessage(error)}`,
       );
@@ -403,6 +474,9 @@ export class GitHubClient {
         try {
           return await this.viewPullRequest(item);
         } catch (viewError) {
+          if (isRateLimitError(viewError)) {
+            throw viewError;
+          }
           this.skip(item, errorMessage(viewError));
           return undefined;
         }
@@ -418,6 +492,22 @@ export class GitHubClient {
       }
       return undefined;
     });
+  }
+
+  /** The player's login: from the batch query, or one `gh api user` call when every batch failed. */
+  private async viewer(): Promise<string | undefined> {
+    if (this.viewerLogin) {
+      return this.viewerLogin;
+    }
+    try {
+      this.viewerLogin = (await this.gh(['api', 'user', '--jq', '.login'])).trim() || undefined;
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        throw error;
+      }
+      this.onWarning(`Could not read your GitHub login: ${errorMessage(error)}`);
+    }
+    return this.viewerLogin;
   }
 
   private skip(item: SearchItem, reason: string): void {
@@ -453,9 +543,18 @@ async function mapWithConcurrency<TItem, TResult>(
 ): Promise<Array<TResult>> {
   const results: Array<TResult> = new Array<TResult>(items.length);
   const pending = items.entries();
+  let failed = false;
   const worker = async (): Promise<void> => {
     for (const [index, item] of pending) {
-      results[index] = await fn(item);
+      if (failed) {
+        return;
+      }
+      try {
+        results[index] = await fn(item);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));

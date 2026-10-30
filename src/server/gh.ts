@@ -5,7 +5,7 @@ const MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 500;
 
 export class GhError extends Error {
-  /** HTTP status from a `gh api` failure, parsed from `gh: ... (HTTP 422)`. */
+  /** HTTP status, parsed from `gh: ... (HTTP 422)` (`gh api`) or `HTTP 403: ...` (`gh search`). */
   public readonly httpStatus?: number;
   /** What `gh` printed before failing; `gh api graphql` prints partial data here. */
   public readonly stdout?: string;
@@ -49,15 +49,20 @@ export const runGh: GhRunner = (args, options = {}) =>
     child.stdin?.end(options.input ?? '');
   });
 
+export function parseHttpStatus(message: string): number | undefined {
+  const match = /\(HTTP (\d{3})\)|\bHTTP (\d{3}):/.exec(message);
+  const status = match?.[1] ?? match?.[2];
+  return status ? Number(status) : undefined;
+}
+
 function toGhError(error: Error & { code?: unknown }, stderr: string, stdout: string): GhError {
   if (error.code === 'ENOENT') {
     return new GhError('gh CLI not found on PATH; install it and run `gh auth login`');
   }
   const message = stderr.trim() || error.message;
-  const status = /\(HTTP (\d{3})\)/.exec(message)?.[1];
   return new GhError(
     message.slice(0, MAX_MESSAGE_LENGTH),
-    status ? Number(status) : undefined,
+    parseHttpStatus(message),
     stdout || undefined,
   );
 }

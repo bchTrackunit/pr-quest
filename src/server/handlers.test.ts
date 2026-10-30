@@ -60,6 +60,7 @@ let port: number;
 let services: AppServices;
 let github: {
   fetchReviewRequests: ReturnType<typeof vi.fn<GitHubClient['fetchReviewRequests']>>;
+  fetchRateLimitReset: ReturnType<typeof vi.fn<GitHubClient['fetchRateLimitReset']>>;
   approve: ReturnType<typeof vi.fn<GitHubClient['approve']>>;
   submitReview: ReturnType<typeof vi.fn<GitHubClient['submitReview']>>;
 };
@@ -113,6 +114,7 @@ beforeEach(async () => {
   const game = new GameService(store, events);
   github = {
     fetchReviewRequests: vi.fn(async () => REQUESTS),
+    fetchRateLimitReset: vi.fn(async () => undefined),
     approve: vi.fn(async () => undefined),
     submitReview: vi.fn(async () => ({
       url: 'https://github.com/r#pullrequestreview-9',
@@ -179,6 +181,35 @@ describe('GET /api/quests', () => {
     await send('GET', '/api/quests?refresh=1');
 
     expect(github.fetchReviewRequests).toHaveBeenCalledTimes(2);
+  });
+
+  test('answers a rate-limited refresh with the cached quests and the limit', async () => {
+    await send('GET', '/api/quests');
+    github.fetchReviewRequests.mockRejectedValue(
+      new GhError('gh: You have exceeded a secondary rate limit (HTTP 403)', 403),
+    );
+
+    const response = await send('GET', '/api/quests?refresh=1');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      stale: true,
+      rateLimit: { kind: 'secondary', limitedUntil: expect.any(String) },
+      quests: [{ id: DIRECT_ID }, { requestKind: 'team' }],
+    });
+  });
+
+  test('reports a rate limit with nothing cached as rateLimited', async () => {
+    github.fetchReviewRequests.mockRejectedValue(
+      new GhError('HTTP 403: API rate limit exceeded for user ID 1.', 403),
+    );
+
+    const response = await send('GET', '/api/quests');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toMatchObject({
+      error: { code: 'rateLimited', message: expect.stringContaining('rate limit') },
+    });
   });
 });
 

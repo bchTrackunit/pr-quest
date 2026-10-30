@@ -22,16 +22,33 @@ const VIEW_930 = fixture('pr-view-930.json');
 const VIEW_24 = fixture('pr-view-24.json');
 const BATCH = fixture('graphql-batch.json');
 const BATCH_PARTIAL = fixture('graphql-batch-partial.json');
+const RATE_LIMIT = fixture('rate-limit.json');
 
 const isBatch = (args: Array<string>): boolean => args[0] === 'api' && args[1] === 'graphql';
+const isView = (args: Array<string>): boolean => args[0] === 'pr' && args[1] === 'view';
+
+const searchLimited = (): GhError =>
+  new GhError(
+    'HTTP 403: API rate limit exceeded for user ID 1. (https://api.github.com/search)',
+    403,
+  );
 
 /** Answers each gh invocation from the fixtures, keyed by what the arguments ask for. */
 function fixtureGh(
-  overrides: { batch?: string | Error; view24?: string | Error } = {},
+  overrides: { search?: Error; batch?: string | Error; view24?: string | Error } = {},
 ): ReturnType<typeof vi.fn<GhRunner>> {
   return vi.fn<GhRunner>(async (args) => {
     if (args[0] === 'search') {
+      if (overrides.search) {
+        throw overrides.search;
+      }
       return args.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL;
+    }
+    if (args[0] === 'api' && args[1] === 'user') {
+      return 'player-login\n';
+    }
+    if (args[0] === 'api' && args[1] === 'rate_limit') {
+      return RATE_LIMIT;
     }
     if (isBatch(args)) {
       const batch = overrides.batch ?? BATCH;
@@ -83,11 +100,13 @@ describe('parsePullRequestDetails', () => {
       headRefName: 'kpr/quarterly-report',
       baseRefName: 'main',
       headRefOid: '0123456789abcdef0123456789abcdef01234567',
+      isDraft: true,
       additions: 1800,
       deletions: 150,
       changedFiles: 12,
       authorName: 'Kieran Example',
       requestedTeams: ['team-gluon'],
+      approvedBy: ['someone-else', 'player-login'],
     });
   });
 
@@ -115,6 +134,9 @@ describe('toQuest', () => {
       targetBranch: 'master',
       headSha: 'd77c66a89e0707ccc917203251d3a3a1efce4182',
       status: 'open',
+      isDraft: false,
+      approvedByOthers: false,
+      approvalCount: 0,
       diffStats: { fileCount: 1, additions: 1, deletions: 0 },
       difficulty: 'Trivial',
       requestKind: 'team',
@@ -138,6 +160,7 @@ describe('toQuest', () => {
       item,
       details: parsePullRequestDetails(VIEW_24),
       direct: true,
+      viewerLogin: 'player-login',
       linear: { appUrl: 'https://linear.app/trackunit/review/x-1', needsAttention: true },
     });
 
@@ -145,11 +168,27 @@ describe('toQuest', () => {
       requestKind: 'direct',
       requestedTeams: [],
       status: 'draft',
+      isDraft: true,
+      approvedByOthers: true,
+      approvalCount: 1,
       difficulty: 'Hard',
       needsAttention: true,
       linearUrl: 'https://linear.app/trackunit/review/x-1',
       source: 'linear',
       author: { name: 'Kieran Example', githubLogin: 'kpr-example' },
+    });
+  });
+
+  test("ignores the player's own approval whatever its letter case", () => {
+    const item = parseSearchResults(SEARCH_ALL).at(1);
+    if (!item) {
+      throw new Error('fixture is missing the second item');
+    }
+    const details = { ...parsePullRequestDetails(VIEW_24), approvedBy: ['Player-Login'] };
+
+    expect(toQuest({ item, details, direct: true, viewerLogin: 'player-login' })).toMatchObject({
+      approvedByOthers: false,
+      approvalCount: 0,
     });
   });
 });
@@ -200,6 +239,64 @@ describe('GitHubClient.fetchReviewRequests', () => {
       parsePullRequestDetails(VIEW_930),
       parsePullRequestDetails(VIEW_24),
     ]);
+  });
+
+  test("asks the batch for drafts, latest reviews and the player's login", async () => {
+    const gh = fixtureGh();
+
+    const data = await new GitHubClient(gh).fetchReviewRequests();
+
+    const query: string = JSON.parse(
+      gh.mock.calls.find(([args]) => isBatch(args))?.[1]?.input ?? '{}',
+    ).query;
+    expect(query).toContain('viewer { login }');
+    expect(query).toContain('isDraft');
+    expect(query).toContain('latestReviews(first: 100) { nodes { state author { login } } }');
+    expect(data.map((entry) => entry.viewerLogin)).toEqual(['player-login', 'player-login']);
+    expect(gh.mock.calls.some(([args]) => args[0] === 'api' && args[1] === 'user')).toBe(false);
+  });
+
+  test('rejects a rate-limited search without any further calls', async () => {
+    const gh = fixtureGh({ search: searchLimited() });
+
+    await expect(new GitHubClient(gh).fetchReviewRequests()).rejects.toThrow(
+      'API rate limit exceeded',
+    );
+    expect(gh.mock.calls.some(([args]) => isBatch(args) || isView(args))).toBe(false);
+  });
+
+  test('does not fall back to gh pr view when the batch is rate limited', async () => {
+    const onWarning = vi.fn();
+    const limited = new GhError(
+      'gh: exit status 1',
+      undefined,
+      '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}',
+    );
+    const gh = fixtureGh({ batch: limited });
+
+    await expect(new GitHubClient(gh, { onWarning }).fetchReviewRequests()).rejects.toBe(limited);
+    expect(gh.mock.calls.some(([args]) => isView(args))).toBe(false);
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  test('stops the per-PR fallback at the first rate-limited view', async () => {
+    const gh = fixtureGh({
+      batch: new GhError('gh: Bad Gateway (HTTP 502)', 502),
+      view24: new GhError('gh: You have exceeded a secondary rate limit (HTTP 403)', 403),
+    });
+
+    await expect(new GitHubClient(gh).fetchReviewRequests()).rejects.toThrow(
+      'secondary rate limit',
+    );
+  });
+
+  test('reads the login with gh api user when every batch fell back', async () => {
+    const gh = fixtureGh({ batch: new GhError('gh: Bad Gateway (HTTP 502)', 502) });
+
+    const data = await new GitHubClient(gh).fetchReviewRequests();
+
+    expect(gh).toHaveBeenCalledWith(['api', 'user', '--jq', '.login']);
+    expect(data.at(1)?.viewerLogin).toBe('player-login');
   });
 
   test('keeps the rest of a batch when GitHub cannot resolve one PR', async () => {
@@ -323,9 +420,34 @@ describe('parsePullRequestBatch', () => {
   });
 
   test('reports a missing alias without a matching error as not found', () => {
-    expect(parsePullRequestBatch('{"data":{}}', 1)).toEqual([
-      { error: 'GitHub returned no pull request' },
-    ]);
+    expect(parsePullRequestBatch('{"data":{}}', 1)).toEqual({
+      entries: [{ error: 'GitHub returned no pull request' }],
+    });
+  });
+
+  test("returns the player's login next to the entries", () => {
+    expect(parsePullRequestBatch(BATCH, 2).viewerLogin).toBe('player-login');
+  });
+});
+
+describe('GitHubClient.fetchRateLimitReset', () => {
+  test('reads the exhausted quota reset from gh api rate_limit', async () => {
+    const gh = fixtureGh();
+
+    await expect(new GitHubClient(gh).fetchRateLimitReset()).resolves.toEqual(
+      new Date('2026-10-30T14:01:00.000Z'),
+    );
+    expect(gh).toHaveBeenCalledWith(['api', 'rate_limit']);
+  });
+
+  test('returns undefined and warns when the call fails', async () => {
+    const onWarning = vi.fn();
+    const gh = vi.fn<GhRunner>().mockRejectedValue(new GhError('gh: timeout'));
+
+    await expect(
+      new GitHubClient(gh, { onWarning }).fetchRateLimitReset(),
+    ).resolves.toBeUndefined();
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('gh: timeout'));
   });
 });
 

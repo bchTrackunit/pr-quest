@@ -33,6 +33,14 @@ export function formatElapsed(milliseconds: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
 }
 
+const clockFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+
+/** Local wall-clock time such as `14:05`, in the browser's locale. */
+export function formatClock(iso: string): string {
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? '--:--' : clockFormat.format(time);
+}
+
 const numberFormat = new Intl.NumberFormat('en-US');
 
 export function formatNumber(value: number): string {

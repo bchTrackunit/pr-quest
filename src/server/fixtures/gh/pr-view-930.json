@@ -8,6 +8,7 @@
   "headRefName": "kfr-example/ins-2967-register-ci",
   "headRefOid": "d77c66a89e0707ccc917203251d3a3a1efce4182",
   "isDraft": false,
+  "latestReviews": [],
   "reviewRequests": [
     { "__typename": "Team", "name": "team-gluon", "slug": "Trackunit/team-gluon" }
   ],

@@ -13,6 +13,32 @@
   "headRefName": "kpr/quarterly-report",
   "headRefOid": "0123456789abcdef0123456789abcdef01234567",
   "isDraft": true,
+  "latestReviews": [
+    {
+      "id": "PRR_kwDOA1",
+      "author": { "login": "someone-else" },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-29T09:00:00Z",
+      "state": "APPROVED"
+    },
+    {
+      "id": "PRR_kwDOA2",
+      "author": { "login": "player-login" },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-29T09:30:00Z",
+      "state": "APPROVED"
+    },
+    {
+      "id": "PRR_kwDOA3",
+      "author": { "login": "third-reviewer" },
+      "authorAssociation": "MEMBER",
+      "body": "Please split this.",
+      "submittedAt": "2026-10-29T10:00:00Z",
+      "state": "CHANGES_REQUESTED"
+    }
+  ],
   "reviewRequests": [
     { "__typename": "Team", "name": "team-gluon", "slug": "Trackunit/team-gluon" },
     { "__typename": "User", "login": "player-login" },

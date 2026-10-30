@@ -6,7 +6,7 @@ import type { EventHub } from './events.ts';
 import type { GameService } from './game.ts';
 import { GhError } from './gh.ts';
 import type { GitHubClient } from './github.ts';
-import type { QuestService } from './questService.ts';
+import { RateLimitedError, type QuestService } from './questService.ts';
 import { parseQuestId, type QuestRef } from './quests.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
 import type { ReviewRunService } from './reviewRuns.ts';
@@ -60,11 +60,14 @@ function requireQuestRef(id: string): QuestRef {
   return ref;
 }
 
-/** Turns `gh` failures into 502s so the UI can tell GitHub problems from server bugs. */
+/** Turns `gh` failures into 502s (503 when rate limited) so the UI can tell them from server bugs. */
 async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResult> {
   try {
     return await action();
   } catch (error) {
+    if (error instanceof RateLimitedError) {
+      throw new ApiError(503, 'rateLimited', error.message);
+    }
     if (error instanceof GhError) {
       throw new ApiError(502, 'upstreamFailed', error.message);
     }

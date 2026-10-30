@@ -23,6 +23,8 @@ import {
 } from './apiClient.ts';
 import { connectEventStream } from './eventStream.ts';
 import {
+  activeRateLimit,
+  applyQuestList,
   applyServerEvent,
   createInitialGameState,
   createLocalId,
@@ -43,6 +45,7 @@ import { playLootSound, unlockAudio } from './sound.ts';
 import { createStore, type Store } from './store.ts';
 
 export interface GameActions {
+  /** The only path that forces a GitHub refetch; does nothing while GitHub rate limits us. */
   refreshQuests: () => void;
   sendReviewAgent: (questId: string) => void;
   openResult: (runId: string) => void;
@@ -220,13 +223,7 @@ export function useGameController(): GameController {
       store.setState((state) => ({ ...state, questsLoad: 'loading', questsError: undefined }));
       fetchQuests(signal, options)
         .then((response) => {
-          store.setState((state) => ({
-            ...state,
-            quests: response.quests,
-            questsFetchedAt: response.fetchedAt,
-            questSource: response.source,
-            questsLoad: 'ready',
-          }));
+          store.setState((state) => applyQuestList(state, response));
         })
         .catch((reason: unknown) => {
           if (!signal?.aborted) {
@@ -277,7 +274,12 @@ export function useGameController(): GameController {
     };
 
     const actions: GameActions = {
-      refreshQuests: () => loadQuests(undefined, { refresh: true }),
+      refreshQuests: () => {
+        if (activeRateLimit(store.getState().questsRateLimit, Date.now())) {
+          return;
+        }
+        loadQuests(undefined, { refresh: true });
+      },
       sendReviewAgent: (questId) => {
         unlockAudio();
         setQuestAction(questId, 'review');
@@ -384,6 +386,7 @@ export function useGameController(): GameController {
             state.connection === connection ? state : { ...state, connection },
           );
           if (reconnected) {
+            // Never `refresh: true`: a flapping connection must not turn into GitHub calls.
             controller.loadQuests();
             controller.loadSideData();
           }
