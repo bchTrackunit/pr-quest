@@ -10,15 +10,18 @@ server binds to `127.0.0.1` only, because it acts as you through your `gh` login
 browser requests only from its own UI and API origins, as described in
 [Local server protections](#local-server-protections).
 
-![The PR Quest board: player HUD, quest filters and direct-request quest cards with tiers](docs/screenshot.png)
-
 ## Prerequisites
 
 - **GitHub CLI**, logged in: `gh auth login`. PR Quest lists, approves and posts reviews as the
   `gh` user. Check it with `gh auth status`.
-- **Node and Yarn through [Volta](https://volta.sh)**. The versions are pinned in the root
-  `package.json`; run `yarn install` from the engineering repo root.
-- **Optional keys** in `apps/pr-quest/.env.local` (git-ignored):
+- **Node and Yarn through [Volta](https://volta.sh)**. Node 24.22.1 and Yarn 4.13.0 are pinned in
+  `package.json`, so Volta switches to them inside the repo.
+- **Optional keys** in `.env.local` at the repo root (git-ignored). Start from the example:
+
+  ```sh
+  cp .env.example .env.local
+  chmod 600 .env.local
+  ```
 
   ```sh
   # Enables "Send review agent". Create one at https://cursor.com/dashboard/integrations
@@ -28,35 +31,42 @@ browser requests only from its own UI and API origins, as described in
   ```
 
   Without `CURSOR_API_KEY` the board, approvals and XP still work, and "Send review agent" shows
-  a message that the key is missing. Environment variables take precedence over the file. Make
-  the file readable only by you with `chmod 600 apps/pr-quest/.env.local`. PR Quest doesn't pass
-  either key on to `gh`.
+  a message that the key is missing. PR Quest doesn't pass either key on to `gh`.
 
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
-`4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`).
+`4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). They can go in `.env.local` or the
+environment. Environment variables take precedence over the file, and setting one to an empty
+value turns it off, so `CURSOR_API_KEY= yarn start` runs without the key.
 
 ## Run it
 
-From the engineering repo root:
-
 ```sh
-yarn nx serve pr-quest
+gh repo clone bchTrackunit/pr-quest
+cd pr-quest
+yarn install
+yarn dev
 ```
 
-This starts the API on <http://127.0.0.1:4317> and the UI on <http://127.0.0.1:4318>. Open the UI
-in a browser or in Cursor's browser tab. The UI proxies `/api` to the server and receives live
-updates over server-sent events; the indicator in the HUD shows "Live" when it is connected.
+`yarn dev` starts the API on <http://127.0.0.1:4317>, restarting it when the server code changes,
+and the UI on <http://127.0.0.1:4318>. `yarn start` does the same without restarting the API on
+changes. Open the UI in a browser or in Cursor's browser tab. The UI proxies `/api` to the server
+and receives live updates over server-sent events; the indicator in the HUD shows "Live" when it
+is connected.
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
-Other checks:
 
-```sh
-yarn nx run-many -t tsc-validate lint test build -p pr-quest
-```
+## Checks
 
-Nx loads `apps/pr-quest/.env.local` into the `serve` task's environment. To run without a key,
-remove it from the file; blanking the variable in your shell doesn't override it under Nx.
+| Command          | What it does                                                 |
+| ---------------- | ------------------------------------------------------------ |
+| `yarn typecheck` | Type-checks the UI, server and test projects                 |
+| `yarn lint`      | ESLint with typescript-eslint and the React hooks rules      |
+| `yarn test`      | Runs the Vitest suite once (`yarn test:watch` keeps it open) |
+| `yarn build`     | Type-checks, then builds the UI into `dist/`                 |
+
+With [just](https://just.systems) installed, `just check` runs all four, as CI does on every pull
+request and every push to `main`.
 
 ## How it works
 
