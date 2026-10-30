@@ -240,6 +240,29 @@ export interface GameOutcome {
 export type GitHubTokenSource = 'oauth' | 'gh';
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/** Who reviews a quest: a Cursor cloud agent, or Claude reading the diff through Anthropic's API. */
+export type ReviewProvider = 'cursor' | 'claude';
+
+/** The API keys the settings popup manages. `anthropic` is the Claude provider's key. */
+export type ApiKeyName = 'cursor' | 'anthropic' | 'linear';
+
+export const API_KEY_NAMES: ReadonlyArray<ApiKeyName> = ['cursor', 'anthropic', 'linear'];
+
+/** `settings`: saved from the settings popup. `env`: from the environment or `.env.local`, read-only. */
+export type ApiKeySource = 'settings' | 'env';
+
+/** What the UI may know about a key. The value itself never leaves the server. */
+export interface ApiKeyStatus {
+  set: boolean;
+  source?: ApiKeySource;
+  /** The key's last four characters, only for keys long enough that this reveals little. */
+  last4?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Server-sent events (GET /api/events)
 // ---------------------------------------------------------------------------
 
