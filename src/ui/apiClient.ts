@@ -2,10 +2,21 @@ import {
   API_ROUTES,
   buildApiPath,
   isApiErrorResponse,
+  type ApproveRequest,
+  type ApproveResponse,
+  type HealthResponse,
+  type ListAchievementsResponse,
+  type ListQuestsResponse,
+  type ListRunsResponse,
+  type PlayerResponse,
+  type PostReviewRequest,
+  type PostReviewResponse,
   type RequestBody,
   type ResponseBody,
   type RouteName,
   type RouteParams,
+  type RunResponse,
+  type StartReviewRequest,
 } from '../shared/api.ts';
 
 type JsonRouteName = Exclude<RouteName, 'events'>;
@@ -49,4 +60,56 @@ export async function apiRequest<TName extends JsonRouteName>(
   }
   // The server is the other half of this contract; responses are not re-validated here.
   return payload as ResponseBody<TName>;
+}
+
+/** Turns any rejection into a message fit for the UI. */
+export function describeError(reason: unknown): string {
+  if (reason instanceof ApiRequestError && reason.code === 'notImplemented') {
+    return 'The server does not support this yet.';
+  }
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+export const eventsUrl = API_ROUTES.events.path;
+
+export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return apiRequest('health', { params: {}, signal });
+}
+
+export function fetchQuests(signal?: AbortSignal): Promise<ListQuestsResponse> {
+  return apiRequest('listQuests', { params: {}, signal });
+}
+
+export function fetchRuns(signal?: AbortSignal): Promise<ListRunsResponse> {
+  return apiRequest('listRuns', { params: {}, signal });
+}
+
+export function fetchRun(runId: string, signal?: AbortSignal): Promise<RunResponse> {
+  return apiRequest('getRun', { params: { id: runId }, signal });
+}
+
+export function fetchPlayer(signal?: AbortSignal): Promise<PlayerResponse> {
+  return apiRequest('getPlayer', { params: {}, signal });
+}
+
+export function fetchAchievements(signal?: AbortSignal): Promise<ListAchievementsResponse> {
+  return apiRequest('listAchievements', { params: {}, signal });
+}
+
+export function startReview(questId: string, body: StartReviewRequest = {}): Promise<RunResponse> {
+  return apiRequest('startReview', { params: { id: questId }, body });
+}
+
+/** Only call after the player confirmed; the `confirm: true` flag is part of the contract. */
+export function approveQuest(questId: string, comment?: string): Promise<ApproveResponse> {
+  const body: ApproveRequest = comment ? { confirm: true, body: comment } : { confirm: true };
+  return apiRequest('approveQuest', { params: { id: questId }, body });
+}
+
+export function postRun(runId: string, body: PostReviewRequest = {}): Promise<PostReviewResponse> {
+  return apiRequest('postRun', { params: { id: runId }, body });
+}
+
+export function discardRun(runId: string): Promise<RunResponse> {
+  return apiRequest('discardRun', { params: { id: runId } });
 }

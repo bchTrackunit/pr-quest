@@ -1,35 +1,88 @@
-import { useEffect, useState } from 'react';
+import { ApproveDialog } from './ApproveDialog.tsx';
+import { findQuest, type GameState } from './gameState.ts';
+import { PlayerHud } from './PlayerHud.tsx';
+import { QuestBoard } from './QuestBoard.tsx';
+import { ReviewResult } from './ReviewResult.tsx';
+import { useStoreState } from './store.ts';
+import { Toasts } from './Toasts.tsx';
+import { useGameController } from './useGameController.ts';
+import { XpPopups } from './XpPopups.tsx';
 
-import type { HealthResponse } from '../shared/api.ts';
-import { apiRequest } from './apiClient.ts';
+const selectState = (state: GameState): GameState => state;
 
 export const App = () => {
-  const [health, setHealth] = useState<HealthResponse | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    apiRequest('health', { params: {}, signal: controller.signal })
-      .then(setHealth)
-      .catch((reason: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : String(reason));
-        }
-      });
-    return () => controller.abort();
-  }, []);
+  const { store, actions } = useGameController();
+  const state = useStoreState(store, selectState);
+  const openRun = state.openRunId ? state.runs[state.openRunId] : undefined;
+  const approveQuest = findQuest(state, state.approveQuestId);
 
   return (
-    <main>
-      <h1>PR Quest</h1>
-      {health ? (
-        <p>
-          Server is up. Linear key: {health.config.linearApiKey ? 'set' : 'missing'}. Cursor key:{' '}
-          {health.config.cursorApiKey ? 'set' : 'missing'}.
-        </p>
-      ) : (
-        <p>{error ?? 'Connecting to the server...'}</p>
-      )}
-    </main>
+    <div className="app">
+      <a className="skip-link" href="#quest-board">
+        Skip to quests
+      </a>
+      <header className="app__header">
+        <h1 className="app__title pixel">
+          <span aria-hidden="true">⚔️</span> PR Quest
+        </h1>
+        <PlayerHud
+          achievements={state.achievements}
+          achievementsError={state.achievementsError}
+          connection={state.connection}
+          notificationAccess={state.notificationAccess}
+          notificationsEnabled={state.notificationsEnabled}
+          onClickNotifications={actions.toggleNotifications}
+          onClickSound={actions.toggleSound}
+          player={state.player}
+          playerError={state.playerError}
+          soundEnabled={state.soundEnabled}
+        />
+        <XpPopups onDone={actions.dismissXpPopup} popups={state.xpPopups} />
+      </header>
+
+      <main className="app__main" id="quest-board" tabIndex={-1}>
+        <QuestBoard
+          error={state.questsError}
+          fetchedAt={state.questsFetchedAt}
+          loadState={state.questsLoad}
+          onClickApprove={actions.requestApprove}
+          onClickOpenResult={actions.openResult}
+          onClickRefresh={actions.refreshQuests}
+          onClickSendAgent={actions.sendReviewAgent}
+          questActionErrors={state.questActionErrors}
+          questActions={state.questActions}
+          quests={state.quests}
+          runs={state.runs}
+          source={state.questSource}
+        />
+      </main>
+
+      {openRun ? (
+        <ReviewResult
+          key={openRun.id}
+          onClickApprove={actions.requestApprove}
+          onClickClose={actions.closeResult}
+          onDiscard={() => actions.discardFindings(openRun.id)}
+          onPost={(event) => actions.postFindings(openRun.id, event)}
+          quest={findQuest(state, openRun.questId)}
+          run={openRun}
+        />
+      ) : null}
+
+      {approveQuest ? (
+        <ApproveDialog
+          key={approveQuest.id}
+          onClickClose={actions.cancelApprove}
+          onConfirm={(comment) => actions.confirmApprove(approveQuest.id, comment)}
+          quest={approveQuest}
+        />
+      ) : null}
+
+      <Toasts
+        onClickOpenResult={actions.openResult}
+        onDismiss={actions.dismissToast}
+        toasts={state.toasts}
+      />
+    </div>
   );
 };
