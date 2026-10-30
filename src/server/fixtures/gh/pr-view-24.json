@@ -1,0 +1,49 @@
+{
+  "additions": 1800,
+  "author": {
+    "id": "U_kgDOBwOmHw",
+    "is_bot": false,
+    "login": "kpr-example",
+    "name": "Kieran Example"
+  },
+  "baseRefName": "main",
+  "changedFiles": 12,
+  "createdAt": "2026-10-28T09:00:00Z",
+  "deletions": 150,
+  "headRefName": "kpr/quarterly-report",
+  "headRefOid": "0123456789abcdef0123456789abcdef01234567",
+  "isDraft": true,
+  "latestReviews": [
+    {
+      "id": "PRR_kwDOA1",
+      "author": { "login": "someone-else" },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-29T09:00:00Z",
+      "state": "APPROVED"
+    },
+    {
+      "id": "PRR_kwDOA2",
+      "author": { "login": "player-login" },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-29T09:30:00Z",
+      "state": "APPROVED"
+    },
+    {
+      "id": "PRR_kwDOA3",
+      "author": { "login": "third-reviewer" },
+      "authorAssociation": "MEMBER",
+      "body": "Please split this.",
+      "submittedAt": "2026-10-29T10:00:00Z",
+      "state": "CHANGES_REQUESTED"
+    }
+  ],
+  "reviewRequests": [
+    { "__typename": "Team", "name": "team-gluon", "slug": "Trackunit/team-gluon" },
+    { "__typename": "User", "login": "player-login" },
+    { "__typename": "User", "login": "someone-else" }
+  ],
+  "title": "feat: add the quarterly report",
+  "url": "https://github.com/Trackunit/state-of-code/pull/24"
+}
