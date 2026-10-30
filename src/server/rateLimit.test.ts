@@ -1,52 +1,63 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
-import { GhError, parseHttpStatus } from './gh.ts';
+import { GitHubApiError } from './githubApi.ts';
 import {
   BACKOFF_MAX_MS,
   backoffDelayMs,
   detectRateLimit,
   nextBackoff,
   parseRateLimitReset,
+  rateLimitResetOf,
 } from './rateLimit.ts';
 
-const RATE_LIMIT = readFileSync(new URL('./fixtures/gh/rate-limit.json', import.meta.url), 'utf8');
+const RATE_LIMIT = readFileSync(
+  new URL('./fixtures/github/rate-limit.json', import.meta.url),
+  'utf8',
+);
 const NOW = new Date('2026-10-30T14:00:00.000Z');
 
 describe('detectRateLimit', () => {
   test.each([
     [
-      'gh search primary limit',
-      new GhError(
-        'HTTP 403: API rate limit exceeded for user ID 123. (https://api.github.com/search/issues?q=x)',
-        403,
+      'search primary limit',
+      new GitHubApiError(
+        'GitHub GET /search/issues failed (HTTP 403): API rate limit exceeded for user ID 123.',
+        { httpStatus: 403 },
       ),
       'primary',
     ],
     [
       'GraphQL primary limit',
-      new GhError('gh api graphql returned no data: API rate limit exceeded for user ID 123.'),
+      new GitHubApiError(
+        'GitHub GraphQL returned no data: API rate limit exceeded for user ID 123.',
+      ),
       'primary',
     ],
     [
-      'GraphQL RATE_LIMITED error in stdout',
-      new GhError('gh: exit status 1', undefined, '{"errors":[{"type":"RATE_LIMITED"}]}'),
+      'GraphQL RATE_LIMITED error in the body',
+      new GitHubApiError('GitHub GraphQL failed', { body: '{"errors":[{"type":"RATE_LIMITED"}]}' }),
       'primary',
     ],
     [
       'secondary limit',
-      new GhError(
-        'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)',
-        403,
+      new GitHubApiError(
+        'GitHub GET /search/issues failed (HTTP 403): You have exceeded a secondary rate limit.',
+        { httpStatus: 403 },
       ),
       'secondary',
     ],
     [
       'abuse detection',
-      new GhError('gh: You have triggered an abuse detection mechanism.'),
+      new GitHubApiError('You have triggered an abuse detection mechanism.'),
       'secondary',
     ],
-    ['bare HTTP 429', new GhError('gh: Too Many Requests (HTTP 429)', 429), 'secondary'],
+    ['bare HTTP 429', new GitHubApiError('Too Many Requests', { httpStatus: 429 }), 'secondary'],
+    [
+      'limit named only by the headers',
+      new GitHubApiError('Forbidden', { httpStatus: 403, rateLimit: { kind: 'primary' } }),
+      'primary',
+    ],
     ['plain Error with the wording', new Error('API rate limit exceeded'), 'primary'],
   ])('detects a %s', (_name, error, kind) => {
     expect(detectRateLimit(error)).toBe(kind);
@@ -55,20 +66,28 @@ describe('detectRateLimit', () => {
   test.each([
     [
       'a SAML 403',
-      new GhError('gh: Resource protected by organization SAML enforcement. (HTTP 403)', 403),
+      new GitHubApiError('Resource protected by organization SAML enforcement.', {
+        httpStatus: 403,
+      }),
     ],
-    ['a 502', new GhError('gh: Bad Gateway (HTTP 502)', 502)],
+    ['a 502', new GitHubApiError('Bad Gateway', { httpStatus: 502 })],
     ['a non-error', 'API rate limit exceeded'],
   ])('ignores %s', (_name, error) => {
     expect(detectRateLimit(error)).toBeUndefined();
   });
 });
 
-describe('parseHttpStatus', () => {
-  test('reads the status from gh api and gh search messages', () => {
-    expect(parseHttpStatus('gh: Not Found (HTTP 404)')).toBe(404);
-    expect(parseHttpStatus('HTTP 403: API rate limit exceeded for user ID 1.')).toBe(403);
-    expect(parseHttpStatus('no status here')).toBeUndefined();
+describe('rateLimitResetOf', () => {
+  test('returns the reset time the response headers gave', () => {
+    const resetAt = new Date('2026-10-30T14:05:00.000Z');
+    const error = new GitHubApiError('limited', { rateLimit: { kind: 'primary', resetAt } });
+
+    expect(rateLimitResetOf(error)).toEqual(resetAt);
+  });
+
+  test('returns undefined without a reset time', () => {
+    expect(rateLimitResetOf(new GitHubApiError('limited'))).toBeUndefined();
+    expect(rateLimitResetOf(new Error('x'))).toBeUndefined();
   });
 });
 
@@ -121,6 +140,16 @@ describe('nextBackoff', () => {
       limitedUntil: new Date('2026-10-30T14:00:42.000Z'),
       attempt: 1,
     });
+  });
+
+  test("waits for a secondary limit's Retry-After, plus a small margin", () => {
+    const backoff = nextBackoff({
+      kind: 'secondary',
+      now: NOW,
+      resetAt: new Date('2026-10-30T14:00:30.000Z'),
+    });
+
+    expect(backoff.limitedUntil).toEqual(new Date('2026-10-30T14:00:32.000Z'));
   });
 
   test('backs off exponentially for secondary limits and unknown resets', () => {

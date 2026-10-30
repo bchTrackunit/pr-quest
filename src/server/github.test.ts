@@ -1,79 +1,120 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, test, vi } from 'vitest';
 
-import { GhError, type GhRunner } from './gh.ts';
 import {
   buildPullRequestBatchQuery,
   DETAILS_BATCH_SIZE,
   GitHubClient,
   IncompleteQuestListError,
   parsePullRequestBatch,
-  parsePullRequestDetails,
   parseSearchResults,
   toQuest,
 } from './github.ts';
+import { GitHubApi, GitHubApiError, type FetchLike } from './githubApi.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
-
-const fixture = (name: string): string =>
-  readFileSync(new URL(`./fixtures/gh/${name}`, import.meta.url), 'utf8');
+import { fixture, reviewRequests } from './test-utils/fixtures.ts';
 
 const SEARCH_ALL = fixture('search-all.json');
 const SEARCH_DIRECT = fixture('search-direct.json');
-const VIEW_930 = fixture('pr-view-930.json');
-const VIEW_24 = fixture('pr-view-24.json');
 const BATCH = fixture('graphql-batch.json');
 const BATCH_PARTIAL = fixture('graphql-batch-partial.json');
 const RATE_LIMIT = fixture('rate-limit.json');
+const [TEAM, DIRECT] = reviewRequests();
+if (!TEAM || !DIRECT) {
+  throw new Error('fixtures need two review requests');
+}
 
-const isBatch = (args: Array<string>): boolean => args[0] === 'api' && args[1] === 'graphql';
-const isView = (args: Array<string>): boolean => args[0] === 'pr' && args[1] === 'view';
+type Reply = { status: number; body: string; headers?: Record<string, string> };
 
-const searchLimited = (): GhError =>
-  new GhError(
-    'HTTP 403: API rate limit exceeded for user ID 1. (https://api.github.com/search)',
-    403,
-  );
+const ok = (body: string): Reply => ({ status: 200, body });
+const json = (value: unknown, status = 200): Reply => ({ status, body: JSON.stringify(value) });
 
-/** Answers each gh invocation from the fixtures, keyed by what the arguments ask for. */
-function fixtureGh(
-  overrides: { search?: Error; batch?: string | Error; view24?: string | Error } = {},
-): ReturnType<typeof vi.fn<GhRunner>> {
-  return vi.fn<GhRunner>(async (args) => {
-    if (args[0] === 'search') {
-      if (overrides.search) {
-        throw overrides.search;
-      }
-      return args.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL;
+interface Call {
+  method: string;
+  path: string;
+  query: URLSearchParams;
+  body: unknown;
+  accept: string;
+}
+
+/** A fake GitHub API: `route` answers each call, which is recorded in `calls`. */
+function fakeGitHub(route: (call: Call) => Reply | undefined) {
+  const calls: Array<Call> = [];
+  const fetchMock = vi.fn<FetchLike>(async (url, init) => {
+    const parsed = new URL(url);
+    const headers = new Headers(init.headers);
+    const call: Call = {
+      method: init.method ?? 'GET',
+      path: parsed.pathname,
+      query: parsed.searchParams,
+      body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
+      accept: headers.get('accept') ?? '',
+    };
+    calls.push(call);
+    const reply = route(call);
+    if (!reply) {
+      throw new Error(`unexpected GitHub call: ${call.method} ${call.path}`);
     }
-    if (args[0] === 'api' && args[1] === 'user') {
-      return 'player-login\n';
-    }
-    if (args[0] === 'api' && args[1] === 'rate_limit') {
-      return RATE_LIMIT;
-    }
-    if (isBatch(args)) {
-      const batch = overrides.batch ?? BATCH;
-      if (batch instanceof Error) {
-        throw batch;
-      }
-      return batch;
-    }
-    if (args[0] === 'pr' && args[1] === 'view') {
-      const view24 = overrides.view24 ?? VIEW_24;
-      if (args[2] === '24') {
-        if (view24 instanceof Error) {
-          throw view24;
-        }
-        return view24;
-      }
-      return VIEW_930;
-    }
-    throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    return new Response(reply.body, { status: reply.status, headers: reply.headers });
   });
+  const client = (onWarning?: (message: string) => void) =>
+    new GitHubClient(new GitHubApi({ token: async () => 'gho_test', fetch: fetchMock }), {
+      onWarning,
+    });
+  return { calls, client };
+}
+
+const isBatch = (call: Call): boolean => call.path === '/graphql';
+const batchSize = (call: Call): number =>
+  Object.keys((call.body as { variables: object }).variables).length / 3;
+
+/** The default answers: both searches, the batch, `/user` and `/rate_limit`. */
+function fixtureRoute(
+  overrides: { search?: Reply; batch?: (call: Call) => Reply } = {},
+): (call: Call) => Reply | undefined {
+  return (call) => {
+    if (call.path === '/search/issues') {
+      return (
+        overrides.search ??
+        ok(call.query.get('q')?.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL)
+      );
+    }
+    if (isBatch(call)) {
+      return overrides.batch ? overrides.batch(call) : ok(BATCH);
+    }
+    if (call.path === '/user') {
+      return json({ login: 'player-login', avatar_url: 'https://avatars/x' });
+    }
+    if (call.path === '/rate_limit') {
+      return ok(RATE_LIMIT);
+    }
+    return undefined;
+  };
+}
+
+const searchLimited: Reply = {
+  status: 403,
+  body: JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }),
+  headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1793368860' },
+};
+
+const badGateway: Reply = { status: 502, body: '{"message":"Bad Gateway"}' };
+
+/** Answers single-PR fallback queries from the batch fixture, by PR number. */
+function singleFromBatch(call: Call, failNumber?: number, failure: Reply = badGateway): Reply {
+  const { variables } = call.body as { variables: Record<string, unknown> };
+  if (Object.keys(variables).length > 3) {
+    return badGateway;
+  }
+  if (variables.number0 === failNumber) {
+    return failure;
+  }
+  const data = JSON.parse(BATCH).data;
+  const pullRequest = variables.number0 === 930 ? data.pr0 : data.pr1;
+  return json({ data: { viewer: data.viewer, pr0: pullRequest } });
 }
 
 describe('parseSearchResults', () => {
-  test('reads number, repo and timestamps from gh search output', () => {
+  test('reads number, repo and timestamps from the search API', () => {
     const [first] = parseSearchResults(SEARCH_ALL);
 
     expect(first).toEqual({
@@ -88,44 +129,21 @@ describe('parseSearchResults', () => {
     });
   });
 
-  test('rejects output that is not a search result list', () => {
-    expect(() => parseSearchResults('{"message":"rate limited"}')).toThrow(
-      /Unexpected gh search output/,
-    );
-  });
-});
+  test('skips items whose repository URL it cannot read', () => {
+    const value = JSON.parse(SEARCH_ALL);
+    value.items[0].repository_url = 'https://example.com/elsewhere';
 
-describe('parsePullRequestDetails', () => {
-  test('reads branches, diff stats and review requests', () => {
-    expect(parsePullRequestDetails(VIEW_24)).toMatchObject({
-      headRefName: 'kpr/quarterly-report',
-      baseRefName: 'main',
-      headRefOid: '0123456789abcdef0123456789abcdef01234567',
-      isDraft: true,
-      additions: 1800,
-      deletions: 150,
-      changedFiles: 12,
-      authorName: 'Kieran Example',
-      requestedTeams: ['team-gluon'],
-      approvedBy: ['someone-else', 'player-login'],
-    });
+    expect(parseSearchResults(JSON.stringify(value)).map((item) => item.number)).toEqual([24]);
   });
 
-  test('rejects malformed output', () => {
-    expect(() => parsePullRequestDetails('not json')).toThrow(/Unexpected gh pr view output/);
+  test('rejects output that is not a search result', () => {
+    expect(() => parseSearchResults('[]')).toThrow(/Unexpected GitHub search response/);
   });
 });
 
 describe('toQuest', () => {
   test('maps a team request without Linear data', () => {
-    const item = parseSearchResults(SEARCH_ALL).at(0);
-    if (!item) {
-      throw new Error('fixture is empty');
-    }
-
-    const quest = toQuest({ item, details: parsePullRequestDetails(VIEW_930), direct: false });
-
-    expect(quest).toEqual({
+    expect(toQuest(TEAM)).toEqual({
       id: 'Trackunit/circleci-configuration#930',
       title: 'chore(builds): register indoor-tracking-api with the API_V3 CI generator',
       repo: { owner: 'Trackunit', name: 'circleci-configuration' },
@@ -152,15 +170,8 @@ describe('toQuest', () => {
   });
 
   test('maps a direct draft request enriched by Linear', () => {
-    const item = parseSearchResults(SEARCH_ALL).at(1);
-    if (!item) {
-      throw new Error('fixture is missing the second item');
-    }
-
     const quest = toQuest({
-      item,
-      details: parsePullRequestDetails(VIEW_24),
-      direct: true,
+      ...DIRECT,
       viewerLogin: 'player-login',
       linear: { appUrl: 'https://linear.app/trackunit/review/x-1', needsAttention: true },
     });
@@ -181,13 +192,9 @@ describe('toQuest', () => {
   });
 
   test("ignores the player's own approval whatever its letter case", () => {
-    const item = parseSearchResults(SEARCH_ALL).at(1);
-    if (!item) {
-      throw new Error('fixture is missing the second item');
-    }
-    const details = { ...parsePullRequestDetails(VIEW_24), approvedBy: ['Player-Login'] };
+    const details = { ...DIRECT.details, approvedBy: ['Player-Login'] };
 
-    expect(toQuest({ item, details, direct: true, viewerLogin: 'player-login' })).toMatchObject({
+    expect(toQuest({ ...DIRECT, details, viewerLogin: 'player-login' })).toMatchObject({
       approvedByOthers: false,
       approvalCount: 0,
     });
@@ -196,9 +203,7 @@ describe('toQuest', () => {
 
 describe('GitHubClient.fetchReviewRequests', () => {
   test('marks PRs found by the direct-only search as direct', async () => {
-    const client = new GitHubClient(fixtureGh());
-
-    const data = await client.fetchReviewRequests();
+    const data = await fakeGitHub(fixtureRoute()).client().fetchReviewRequests();
 
     expect(data.map((entry) => [entry.item.number, entry.direct])).toEqual([
       [930, false],
@@ -207,20 +212,20 @@ describe('GitHubClient.fetchReviewRequests', () => {
   });
 
   test('searches open review requests, then reads every PR in one GraphQL query', async () => {
-    const gh = fixtureGh();
+    const github = fakeGitHub(fixtureRoute());
 
-    await new GitHubClient(gh).fetchReviewRequests();
+    await github.client().fetchReviewRequests();
 
-    expect(gh).toHaveBeenCalledWith(
-      expect.arrayContaining(['search', 'prs', '--review-requested=@me', '--state=open']),
-    );
-    expect(gh).toHaveBeenCalledWith(
-      expect.arrayContaining(['search', 'prs', 'user-review-requested:@me', '--state=open']),
-    );
-    const batchCalls = gh.mock.calls.filter(([args]) => isBatch(args));
-    expect(batchCalls).toHaveLength(1);
-    expect(batchCalls[0]?.[0]).toEqual(['api', 'graphql', '--input', '-']);
-    expect(JSON.parse(batchCalls[0]?.[1]?.input ?? '{}')).toMatchObject({
+    const queries = github.calls
+      .filter((call) => call.path === '/search/issues')
+      .map((call) => [call.query.get('q'), call.query.get('per_page')]);
+    expect(queries).toEqual([
+      ['is:pr is:open review-requested:@me', '100'],
+      ['is:pr is:open user-review-requested:@me', '100'],
+    ]);
+    const batches = github.calls.filter(isBatch);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.body).toMatchObject({
       variables: {
         owner0: 'Trackunit',
         name0: 'circleci-configuration',
@@ -230,210 +235,167 @@ describe('GitHubClient.fetchReviewRequests', () => {
         number1: 24,
       },
     });
-    expect(gh.mock.calls.some(([args]) => args[0] === 'pr')).toBe(false);
   });
 
   test('reads branches, diff stats and team requests from the batch', async () => {
-    const data = await new GitHubClient(fixtureGh()).fetchReviewRequests();
+    const data = await fakeGitHub(fixtureRoute()).client().fetchReviewRequests();
 
-    expect(data.map((entry) => entry.details)).toEqual([
-      parsePullRequestDetails(VIEW_930),
-      parsePullRequestDetails(VIEW_24),
-    ]);
+    expect(data.map((entry) => entry.details)).toEqual([TEAM.details, DIRECT.details]);
   });
 
   test("asks the batch for drafts, latest reviews and the player's login", async () => {
-    const gh = fixtureGh();
+    const github = fakeGitHub(fixtureRoute());
 
-    const data = await new GitHubClient(gh).fetchReviewRequests();
+    const data = await github.client().fetchReviewRequests();
 
-    const query: string = JSON.parse(
-      gh.mock.calls.find(([args]) => isBatch(args))?.[1]?.input ?? '{}',
-    ).query;
+    const { query } = github.calls.find(isBatch)?.body as { query: string };
     expect(query).toContain('viewer { login }');
     expect(query).toContain('isDraft');
     expect(query).toContain('latestReviews(first: 100) { nodes { state author { login } } }');
     expect(data.map((entry) => entry.viewerLogin)).toEqual(['player-login', 'player-login']);
-    expect(gh.mock.calls.some(([args]) => args[0] === 'api' && args[1] === 'user')).toBe(false);
+    expect(github.calls.some((call) => call.path === '/user')).toBe(false);
   });
 
-  test('rejects a rate-limited search without any further calls', async () => {
-    const gh = fixtureGh({ search: searchLimited() });
+  test('rejects a rate-limited search with its reset time and makes no further calls', async () => {
+    const github = fakeGitHub(fixtureRoute({ search: searchLimited }));
 
-    await expect(new GitHubClient(gh).fetchReviewRequests()).rejects.toThrow(
+    const error = await github
+      .client()
+      .fetchReviewRequests()
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining('API rate limit exceeded'),
+      rateLimit: { kind: 'primary', resetAt: new Date(1793368860 * 1000) },
+    });
+    expect(github.calls.some(isBatch)).toBe(false);
+  });
+
+  test('does not fall back to single-PR queries when the batch is rate limited', async () => {
+    const onWarning = vi.fn();
+    const limited = json({
+      errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded for user ID 1.' }],
+    });
+    const github = fakeGitHub(fixtureRoute({ batch: () => limited }));
+
+    await expect(github.client(onWarning).fetchReviewRequests()).rejects.toThrow(
       'API rate limit exceeded',
     );
-    expect(gh.mock.calls.some(([args]) => isBatch(args) || isView(args))).toBe(false);
-  });
-
-  test('does not fall back to gh pr view when the batch is rate limited', async () => {
-    const onWarning = vi.fn();
-    const limited = new GhError(
-      'gh: exit status 1',
-      undefined,
-      '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}',
-    );
-    const gh = fixtureGh({ batch: limited });
-
-    await expect(new GitHubClient(gh, { onWarning }).fetchReviewRequests()).rejects.toBe(limited);
-    expect(gh.mock.calls.some(([args]) => isView(args))).toBe(false);
+    expect(github.calls.filter(isBatch)).toHaveLength(1);
     expect(onWarning).not.toHaveBeenCalled();
   });
 
-  test('stops the per-PR fallback at the first rate-limited view', async () => {
-    const gh = fixtureGh({
-      batch: new GhError('gh: Bad Gateway (HTTP 502)', 502),
-      view24: new GhError('gh: You have exceeded a secondary rate limit (HTTP 403)', 403),
-    });
-
-    await expect(new GitHubClient(gh).fetchReviewRequests()).rejects.toThrow(
-      'secondary rate limit',
+  test('stops the per-PR fallback at the first rate-limited query', async () => {
+    const secondary: Reply = {
+      status: 403,
+      body: '{"message":"You have exceeded a secondary rate limit."}',
+    };
+    const github = fakeGitHub(
+      fixtureRoute({ batch: (call) => singleFromBatch(call, 24, secondary) }),
     );
-  });
 
-  test('reads the login with gh api user when every batch fell back', async () => {
-    const gh = fixtureGh({ batch: new GhError('gh: Bad Gateway (HTTP 502)', 502) });
-
-    const data = await new GitHubClient(gh).fetchReviewRequests();
-
-    expect(gh).toHaveBeenCalledWith(['api', 'user', '--jq', '.login']);
-    expect(data.at(1)?.viewerLogin).toBe('player-login');
+    await expect(github.client().fetchReviewRequests()).rejects.toThrow('secondary rate limit');
   });
 
   test('keeps the rest of a batch when GitHub cannot resolve one PR', async () => {
     const onWarning = vi.fn();
-    const partialFailure = new GhError(
-      'gh: Could not resolve to a PullRequest with the number of 24.',
-      undefined,
-      BATCH_PARTIAL,
-    );
-    const gh = fixtureGh({ batch: partialFailure });
+    const github = fakeGitHub(fixtureRoute({ batch: () => ok(BATCH_PARTIAL) }));
 
-    const data = await new GitHubClient(gh, { onWarning }).fetchReviewRequests();
+    const data = await github.client(onWarning).fetchReviewRequests();
 
     expect(data.map((entry) => entry.item.number)).toEqual([930]);
     expect(onWarning).toHaveBeenCalledWith(
       'Skipping Trackunit/state-of-code#24: Could not resolve to a PullRequest with the number of 24.',
     );
-    expect(gh.mock.calls.some(([args]) => args[0] === 'pr')).toBe(false);
+    expect(github.calls.filter(isBatch)).toHaveLength(1);
   });
 
-  test('falls back to one gh pr view per PR when the whole batch fails', async () => {
+  test('falls back to one query per PR when the whole batch fails', async () => {
     const onWarning = vi.fn();
-    const gh = fixtureGh({ batch: new GhError('gh: Bad Gateway (HTTP 502)', 502) });
+    const github = fakeGitHub(fixtureRoute({ batch: (call) => singleFromBatch(call) }));
 
-    const data = await new GitHubClient(gh, { onWarning }).fetchReviewRequests();
+    const data = await github.client(onWarning).fetchReviewRequests();
 
     expect(data.map((entry) => entry.item.number)).toEqual([930, 24]);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('falling back'));
-    expect(gh).toHaveBeenCalledWith([
-      'pr',
-      'view',
-      '24',
-      '-R',
-      'Trackunit/state-of-code',
-      '--json',
-      expect.any(String),
-    ]);
+    expect(github.calls.filter(isBatch).map(batchSize)).toEqual([2, 1, 1]);
   });
 
-  test('skips a PR whose fallback view fails and reports it', async () => {
-    const onWarning = vi.fn();
-    const client = new GitHubClient(
-      fixtureGh({
-        batch: new GhError('gh: Bad Gateway (HTTP 502)', 502),
-        view24: new GhError('gh: Not Found (HTTP 404)', 404),
-      }),
-      { onWarning },
-    );
+  test('reads the login from /user when every batch fell back', async () => {
+    const withoutViewer = (call: Call): Reply => {
+      const reply = singleFromBatch(call);
+      const value = JSON.parse(reply.body);
+      delete value.data?.viewer;
+      return json(value, reply.status);
+    };
+    const github = fakeGitHub(fixtureRoute({ batch: withoutViewer }));
 
-    const data = await client.fetchReviewRequests();
+    const data = await github.client(vi.fn()).fetchReviewRequests();
+
+    expect(github.calls.filter((call) => call.path === '/user')).toHaveLength(1);
+    expect(data.at(1)?.viewerLogin).toBe('player-login');
+  });
+
+  test('skips a PR whose fallback query fails and reports it', async () => {
+    const onWarning = vi.fn();
+    const github = fakeGitHub(fixtureRoute({ batch: (call) => singleFromBatch(call, 24) }));
+
+    const data = await github.client(onWarning).fetchReviewRequests();
 
     expect(data.map((entry) => entry.item.number)).toEqual([930]);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Trackunit/state-of-code#24'));
   });
 
   test('fails instead of returning an empty queue when every PR lookup fails', async () => {
-    const gh = vi.fn<GhRunner>(async (args) => {
-      if (args[0] === 'search') {
-        return args.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL;
-      }
-      throw new GhError('dial tcp: network is unreachable');
-    });
+    const github = fakeGitHub(fixtureRoute({ batch: () => badGateway }));
 
-    const result = new GitHubClient(gh, { onWarning: vi.fn() }).fetchReviewRequests();
+    const result = github.client(vi.fn()).fetchReviewRequests();
 
     await expect(result).rejects.toBeInstanceOf(IncompleteQuestListError);
     await expect(result).rejects.toThrow('Could not read 2 of 2 review requests');
   });
 
-  test('fails when most PR lookups fail', async () => {
-    const search = [1, 2, 3].map((number) => ({
-      number,
-      title: `PR ${number}`,
-      url: `https://github.com/o/r/pull/${number}`,
-      repository: { nameWithOwner: 'o/r' },
-      author: { login: 'a' },
-      createdAt: '2026-10-30T10:00:00Z',
-      updatedAt: '2026-10-30T10:00:00Z',
-      isDraft: false,
-    }));
-    const [, onePullRequest] = Object.values(
-      (JSON.parse(BATCH) as { data: Record<string, unknown> }).data,
-    );
-    const gh = vi.fn<GhRunner>(async (args) => {
-      if (args[0] === 'search') {
-        return args.includes('user-review-requested:@me') ? '[]' : JSON.stringify(search);
-      }
-      return JSON.stringify({ data: { viewer: { login: 'me' }, pr0: onePullRequest } });
-    });
-
-    await expect(
-      new GitHubClient(gh, { onWarning: vi.fn() }).fetchReviewRequests(),
-    ).rejects.toThrow('Could not read 2 of 3 review requests');
-  });
-
   test('returns an empty queue when the search finds nothing', async () => {
-    const gh = vi.fn<GhRunner>(async () => '[]');
+    const empty = json({ total_count: 0, incomplete_results: false, items: [] });
+    const github = fakeGitHub(fixtureRoute({ search: empty }));
 
-    await expect(new GitHubClient(gh).fetchReviewRequests()).resolves.toEqual([]);
+    await expect(github.client().fetchReviewRequests()).resolves.toEqual([]);
+    expect(github.calls.some(isBatch)).toBe(false);
   });
 
   test(`splits the queue into queries of ${DETAILS_BATCH_SIZE} PRs`, async () => {
     const count = DETAILS_BATCH_SIZE + 5;
-    const search = Array.from({ length: count }, (_, index) => ({
+    const items = Array.from({ length: count }, (_, index) => ({
       number: index + 1,
       title: `PR ${index + 1}`,
-      url: `https://github.com/o/r/pull/${index + 1}`,
-      repository: { nameWithOwner: 'o/r' },
-      author: { login: 'a' },
-      createdAt: '2026-10-30T10:00:00Z',
-      updatedAt: '2026-10-30T10:00:00Z',
-      isDraft: false,
+      html_url: `https://github.com/o/r/pull/${index + 1}`,
+      repository_url: 'https://api.github.com/repos/o/r',
+      user: { login: 'a' },
+      created_at: '2026-10-30T10:00:00Z',
+      updated_at: '2026-10-30T10:00:00Z',
     }));
-    const batch: { data: Record<string, unknown> } = JSON.parse(BATCH);
-    const [, onePullRequest] = Object.values(batch.data);
-    const gh = vi.fn<GhRunner>(async (args, options) => {
-      if (args[0] === 'search') {
-        return args.includes('user-review-requested:@me') ? '[]' : JSON.stringify(search);
-      }
-      const { variables }: { variables: Record<string, unknown> } = JSON.parse(
-        options?.input ?? '{}',
-      );
-      const size = Object.keys(variables).length / 3;
-      const data = Object.fromEntries(
-        Array.from({ length: size }, (_, index) => [`pr${index}`, onePullRequest]),
-      );
-      return JSON.stringify({ data });
-    });
+    const onePullRequest = JSON.parse(BATCH).data.pr0;
+    const github = fakeGitHub(
+      fixtureRoute({
+        search: json({ total_count: count, incomplete_results: false, items }),
+        batch: (call) =>
+          json({
+            data: Object.fromEntries(
+              Array.from({ length: batchSize(call) }, (_, index) => [`pr${index}`, onePullRequest]),
+            ),
+          }),
+      }),
+    );
 
-    const quests = await new GitHubClient(gh).fetchReviewRequests();
+    const quests = await github.client().fetchReviewRequests();
 
     expect(quests).toHaveLength(count);
-    const batchSizes = gh.mock.calls
-      .filter(([args]) => isBatch(args))
-      .map(([, options]) => Object.keys(JSON.parse(options?.input ?? '{}').variables).length / 3);
-    expect(batchSizes.sort((a, b) => b - a)).toEqual([DETAILS_BATCH_SIZE, 5]);
+    expect(
+      github.calls
+        .filter(isBatch)
+        .map(batchSize)
+        .sort((a, b) => b - a),
+    ).toEqual([DETAILS_BATCH_SIZE, 5]);
   });
 });
 
@@ -478,78 +440,92 @@ describe('parsePullRequestBatch', () => {
 });
 
 describe('GitHubClient.fetchRateLimitReset', () => {
-  test('reads the exhausted quota reset from gh api rate_limit', async () => {
-    const gh = fixtureGh();
+  test('reads the exhausted quota reset from /rate_limit', async () => {
+    const github = fakeGitHub(fixtureRoute());
 
-    await expect(new GitHubClient(gh).fetchRateLimitReset()).resolves.toEqual(
+    await expect(github.client().fetchRateLimitReset()).resolves.toEqual(
       new Date('2026-10-30T14:01:00.000Z'),
     );
-    expect(gh).toHaveBeenCalledWith(['api', 'rate_limit']);
+    expect(github.calls.map((call) => call.path)).toEqual(['/rate_limit']);
   });
 
   test('returns undefined and warns when the call fails', async () => {
     const onWarning = vi.fn();
-    const gh = vi.fn<GhRunner>().mockRejectedValue(new GhError('gh: timeout'));
+    const github = fakeGitHub(() => badGateway);
 
-    await expect(
-      new GitHubClient(gh, { onWarning }).fetchRateLimitReset(),
-    ).resolves.toBeUndefined();
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('gh: timeout'));
+    await expect(github.client(onWarning).fetchRateLimitReset()).resolves.toBeUndefined();
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Bad Gateway'));
+  });
+});
+
+describe('GitHubClient.fetchViewer', () => {
+  test("reads the player's login, name and avatar from /user", async () => {
+    const github = fakeGitHub(() =>
+      json({ login: 'Player', name: 'Pat Player', avatar_url: 'https://avatars/p' }),
+    );
+
+    await expect(github.client().fetchViewer()).resolves.toEqual({
+      login: 'Player',
+      name: 'Pat Player',
+      avatarUrl: 'https://avatars/p',
+    });
   });
 });
 
 describe('GitHubClient.approve', () => {
   const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
   const sha = '0123456789abcdef0123456789abcdef01234567';
-  const created = '{"html_url":"https://github.com/o/r/pull/5#pullrequestreview-3"}';
+  const created = json({ html_url: 'https://github.com/o/r/pull/5#pullrequestreview-3' });
 
-  test('approves the given commit through the reviews API with the body on stdin', async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue(created);
+  test('approves the given commit through the reviews API', async () => {
+    const github = fakeGitHub(() => created);
 
-    await new GitHubClient(gh).approve(ref, { commitId: sha, body: 'LGTM "ship it"' });
+    await github.client().approve(ref, { commitId: sha, body: 'LGTM "ship it"' });
 
-    expect(gh).toHaveBeenCalledWith(
-      ['api', '-X', 'POST', 'repos/o/r/pulls/5/reviews', '--input', '-'],
-      { input: expect.any(String) },
-    );
-    expect(JSON.parse(gh.mock.calls[0]?.[1]?.input ?? 'null')).toEqual({
-      event: 'APPROVE',
-      commit_id: sha,
-      body: 'LGTM "ship it"',
-    });
+    expect(github.calls).toEqual([
+      expect.objectContaining({
+        method: 'POST',
+        path: '/repos/o/r/pulls/5/reviews',
+        body: { event: 'APPROVE', commit_id: sha, body: 'LGTM "ship it"' },
+      }),
+    ]);
   });
 
   test('approves without a body', async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue(created);
+    const github = fakeGitHub(() => created);
 
-    await new GitHubClient(gh).approve(ref, { commitId: sha });
+    await github.client().approve(ref, { commitId: sha });
 
-    expect(JSON.parse(gh.mock.calls[0]?.[1]?.input ?? 'null')).toEqual({
-      event: 'APPROVE',
-      commit_id: sha,
-    });
+    expect(github.calls[0]?.body).toEqual({ event: 'APPROVE', commit_id: sha });
+  });
+
+  test('encodes owner and repo names in the path', async () => {
+    const github = fakeGitHub(() => created);
+
+    await github
+      .client()
+      .approve({ repo: { owner: 'o', name: 'r/../x' }, number: 5 }, { commitId: sha });
+
+    expect(github.calls[0]?.path).toBe('/repos/o/r%2F..%2Fx/pulls/5/reviews');
   });
 });
 
 describe('GitHubClient.fetchHeadSha', () => {
   test("reads the PR's current head commit", async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue('{"headRefOid":"ABCDEF0123"}\n');
+    const github = fakeGitHub(() => json({ head: { sha: 'ABCDEF0123' } }));
 
-    const head = await new GitHubClient(gh).fetchHeadSha({
-      repo: { owner: 'o', name: 'r' },
-      number: 5,
-    });
+    const head = await github.client().fetchHeadSha({ repo: { owner: 'o', name: 'r' }, number: 5 });
 
     expect(head).toBe('abcdef0123');
-    expect(gh).toHaveBeenCalledWith(['pr', 'view', '5', '-R', 'o/r', '--json', 'headRefOid']);
+    expect(github.calls[0]).toMatchObject({ method: 'GET', path: '/repos/o/r/pulls/5' });
   });
 
-  test('rejects output without a head commit', async () => {
-    const gh = vi.fn<GhRunner>().mockResolvedValue('{}');
+  test('rejects a response without a head commit', async () => {
+    const github = fakeGitHub(() => json({}));
 
     await expect(
-      new GitHubClient(gh).fetchHeadSha({ repo: { owner: 'o', name: 'r' }, number: 5 }),
-    ).rejects.toThrow(GhError);
+      github.client().fetchHeadSha({ repo: { owner: 'o', name: 'r' }, number: 5 }),
+    ).rejects.toThrow(GitHubApiError);
   });
 });
 
@@ -566,43 +542,39 @@ describe('GitHubClient.submitReview', () => {
     ],
   };
 
-  const postedPayloads = (gh: ReturnType<typeof vi.fn<GhRunner>>): Array<unknown> =>
-    gh.mock.calls.map(([, options]) => JSON.parse(options?.input ?? 'null'));
-
   test('posts one review with inline comments and returns its URL', async () => {
-    const gh = vi
-      .fn<GhRunner>()
-      .mockResolvedValue('{"html_url":"https://github.com/o/r/pull/5#pullrequestreview-1"}');
+    const github = fakeGitHub(() =>
+      json({ html_url: 'https://github.com/o/r/pull/5#pullrequestreview-1' }),
+    );
 
-    const result = await new GitHubClient(gh).submitReview(ref, draft);
+    const result = await github.client().submitReview(ref, draft);
 
     expect(result).toEqual({
       url: 'https://github.com/o/r/pull/5#pullrequestreview-1',
       inlineCommentsDropped: false,
     });
-    expect(gh).toHaveBeenCalledWith(
-      ['api', '-X', 'POST', 'repos/o/r/pulls/5/reviews', '--input', '-'],
-      {
-        input: expect.any(String),
+    expect(github.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/repos/o/r/pulls/5/reviews',
+      body: {
+        event: 'COMMENT',
+        commit_id: 'abc123',
+        comments: [{ path: 'src/a.ts', line: 3, side: 'RIGHT' }],
       },
-    );
-    expect(postedPayloads(gh)[0]).toMatchObject({
-      event: 'COMMENT',
-      commit_id: 'abc123',
-      comments: [{ path: 'src/a.ts', line: 3, side: 'RIGHT' }],
     });
   });
 
   test('retries with every finding in the body when GitHub rejects the lines', async () => {
-    const gh = vi
-      .fn<GhRunner>()
-      .mockRejectedValueOnce(new GhError('gh: Validation Failed (HTTP 422)', 422))
-      .mockResolvedValueOnce('{"html_url":"https://github.com/o/r/pull/5#pullrequestreview-2"}');
+    const replies = [
+      json({ message: 'Validation Failed' }, 422),
+      json({ html_url: 'https://github.com/o/r/pull/5#pullrequestreview-2' }),
+    ];
+    const github = fakeGitHub(() => replies.shift());
 
-    const result = await new GitHubClient(gh).submitReview(ref, draft);
+    const result = await github.client().submitReview(ref, draft);
 
     expect(result.inlineCommentsDropped).toBe(true);
-    const retry = postedPayloads(gh)[1] as {
+    const retry = github.calls[1]?.body as {
       comments: Array<unknown>;
       body: string;
       commit_id?: string;
@@ -613,9 +585,9 @@ describe('GitHubClient.submitReview', () => {
   });
 
   test('does not retry other failures', async () => {
-    const gh = vi.fn<GhRunner>().mockRejectedValue(new GhError('gh: Forbidden (HTTP 403)', 403));
+    const github = fakeGitHub(() => json({ message: 'Forbidden' }, 403));
 
-    await expect(new GitHubClient(gh).submitReview(ref, draft)).rejects.toThrow('HTTP 403');
-    expect(gh).toHaveBeenCalledTimes(1);
+    await expect(github.client().submitReview(ref, draft)).rejects.toThrow('HTTP 403');
+    expect(github.calls).toHaveLength(1);
   });
 });

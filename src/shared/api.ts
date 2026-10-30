@@ -233,6 +233,13 @@ export interface GameOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub account
+// ---------------------------------------------------------------------------
+
+/** `oauth`: the player signed in through PR Quest. `gh`: the token of a logged-in GitHub CLI. */
+export type GitHubTokenSource = 'oauth' | 'gh';
+
+// ---------------------------------------------------------------------------
 // Server-sent events (GET /api/events)
 // ---------------------------------------------------------------------------
 

@@ -4,8 +4,10 @@ import { inspect } from 'node:util';
 import { loadConfig } from './config.ts';
 import { EventHub } from './events.ts';
 import { GameService } from './game.ts';
-import { runGh } from './gh.ts';
+import { readGhToken } from './ghToken.ts';
 import { GitHubClient } from './github.ts';
+import { GitHubApi } from './githubApi.ts';
+import { GitHubTokenProvider } from './githubToken.ts';
 import { createHandlers } from './handlers.ts';
 import { LinearReviewClient } from './linear.ts';
 import { QuestCache } from './questCache.ts';
@@ -26,7 +28,13 @@ async function main(): Promise<void> {
   const store = await StateStore.open(config.stateDir, { onWarning: warn });
   const events = new EventHub();
   const game = new GameService(store, events);
-  const github = new GitHubClient(runGh, { onWarning: warn });
+  const tokens = new GitHubTokenProvider({
+    oauthToken: async () => undefined,
+    ghToken: readGhToken,
+  });
+  const github = new GitHubClient(new GitHubApi({ token: () => tokens.token() }), {
+    onWarning: warn,
+  });
   const linear = new LinearReviewClient({ apiKey: config.linearApiKey, onWarning: warn });
   const runs = new ReviewRunService({
     store,
