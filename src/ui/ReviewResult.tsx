@@ -51,7 +51,8 @@ export const ReviewResult = ({
   );
   const [pending, setPending] = useState<Pending>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
-  const label = quest ? questLabel(quest) : run.questId;
+  const summary = quest ?? run.quest;
+  const label = questLabel(summary);
   const groups = result ? groupFindings(result.findings) : [];
   const findingCount = result?.findings.length ?? 0;
   const isAwaitingDecision = run.disposition === 'pending';
@@ -74,7 +75,7 @@ export const ReviewResult = ({
       onClickClose={onClickClose}
       title={`Loot from ${label}`}
     >
-      {quest ? <p className="result__quest">{quest.title}</p> : null}
+      <p className="result__quest">{summary.title}</p>
       {result && verdict ? (
         <>
           <section aria-labelledby="result-summary" className="result__summary">
@@ -220,17 +221,15 @@ export const ReviewResult = ({
               {pending === 'discard' ? 'Discarding…' : 'Discard'}
             </button>
           ) : null}
-          {quest ? (
-            <a
-              className="button"
-              href={quest.linearUrl ?? quest.githubUrl}
-              rel="noopener noreferrer"
-              target="_blank"
-            >
-              {quest.linearUrl ? 'Open in Linear' : 'Open on GitHub'}
-              <span className="visually-hidden"> (opens in a new tab)</span>
-            </a>
-          ) : null}
+          <a
+            className="button"
+            href={summary.linearUrl ?? summary.githubUrl}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            {summary.linearUrl ? 'Open in Linear' : 'Open on GitHub'}
+            <span className="visually-hidden"> (opens in a new tab)</span>
+          </a>
           {quest ? (
             <button
               className="button button--success"

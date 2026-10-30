@@ -84,13 +84,26 @@ describe('QuestService.refresh', () => {
     expect(response.quests.find((quest) => quest.number === 24)?.source).toBe('github');
   });
 
-  test('broadcasts the quests and checks the queue for Inbox Zero', async () => {
+  test('broadcasts the quests with their source and checks the queue for Inbox Zero', async () => {
     await service().refresh();
 
     expect(events).toEqual([
-      expect.objectContaining({ type: 'questsUpdated', fetchedAt: '2026-10-30T14:00:00.000Z' }),
+      expect.objectContaining({
+        type: 'questsUpdated',
+        fetchedAt: '2026-10-30T14:00:00.000Z',
+        source: 'github',
+      }),
     ]);
     expect(recordQueueChecked).toHaveBeenCalledWith(2);
+  });
+
+  test('replays the latest quests with their source to late subscribers', async () => {
+    const quests = service();
+    expect(quests.snapshotEvent()).toBeUndefined();
+
+    await quests.refresh();
+
+    expect(quests.snapshotEvent()).toMatchObject({ type: 'questsUpdated', source: 'github' });
   });
 
   test('marks the active run on its quest', async () => {

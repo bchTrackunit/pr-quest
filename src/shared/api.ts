@@ -110,9 +110,22 @@ export interface ReviewRunError {
   retryable?: boolean;
 }
 
+/**
+ * The quest as it was when the run started. It stays on the run because the quest can leave the
+ * queue (approved elsewhere, merged) while its findings are still waiting for a decision.
+ */
+export interface ReviewRunQuest {
+  title: string;
+  repo: RepoRef;
+  number: number;
+  githubUrl: string;
+  linearUrl?: string;
+}
+
 export interface ReviewRun {
   id: string;
   questId: string;
+  quest: ReviewRunQuest;
   /** Cursor cloud agent id (`bc-...`); absent until the agent is created. */
   agentId?: string;
   /** Cursor run id; absent until the first send returns. */
@@ -193,9 +206,23 @@ export interface AchievementStatus extends AchievementDef {
   progress?: number;
 }
 
+/**
+ * One XP award. The server also broadcasts it as an `xpGained` event with the same `eventId`, so a
+ * client that sees it both ways counts it once.
+ */
+export interface XpGain {
+  eventId: string;
+  amount: number;
+  reason: XpReason;
+  questId?: string;
+}
+
 /** Game side effects of an action, returned so the UI can animate without waiting for SSE. */
 export interface GameOutcome {
+  /** Sum of `gains`. */
   xpGained: number;
+  /** The action's award first, then one per unlocked achievement. */
+  gains: Array<XpGain>;
   player: PlayerState;
   unlocked: Array<UnlockedAchievement>;
 }
@@ -209,10 +236,10 @@ export interface GameOutcome {
  * `event:` field is not used, so clients read everything through `EventSource.onmessage`.
  */
 export type ServerEvent =
-  | { type: 'questsUpdated'; quests: Array<Quest>; fetchedAt: string }
+  | { type: 'questsUpdated'; quests: Array<Quest>; fetchedAt: string; source: QuestSource }
   | { type: 'runUpdated'; run: ReviewRun }
   | { type: 'achievementUnlocked'; achievement: AchievementDef; unlockedAt: string }
-  | { type: 'xpGained'; amount: number; reason: XpReason; questId?: string; player: PlayerState };
+  | ({ type: 'xpGained'; player: PlayerState } & XpGain);
 
 export type ServerEventType = ServerEvent['type'];
 
@@ -310,6 +337,7 @@ export type HttpMethod = 'GET' | 'POST';
 
 export const API_ROUTES = {
   health: { method: 'GET', path: '/api/health' },
+  /** Serves a cache younger than 15 seconds; `?refresh=1` always fetches. */
   listQuests: { method: 'GET', path: '/api/quests' },
   startReview: { method: 'POST', path: '/api/quests/:id/review' },
   approveQuest: { method: 'POST', path: '/api/quests/:id/approve' },

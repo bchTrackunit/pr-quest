@@ -66,6 +66,14 @@ describe('runGh', () => {
     expect(error).toMatchObject({ httpStatus: 422, message: 'gh: Validation Failed (HTTP 422)' });
   });
 
+  test('keeps what gh printed before failing, such as partial GraphQL data', async () => {
+    respondWith(exitError(1), '{"data":{"pr0":null}}', 'gh: Could not resolve\n');
+
+    const error = await runGh(['api', 'graphql']).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ stdout: '{"data":{"pr0":null}}' });
+  });
+
   test('reports a missing gh binary clearly', async () => {
     respondWith(exitError('ENOENT'));
 

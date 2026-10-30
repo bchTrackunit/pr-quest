@@ -7,11 +7,14 @@ const MAX_MESSAGE_LENGTH = 500;
 export class GhError extends Error {
   /** HTTP status from a `gh api` failure, parsed from `gh: ... (HTTP 422)`. */
   public readonly httpStatus?: number;
+  /** What `gh` printed before failing; `gh api graphql` prints partial data here. */
+  public readonly stdout?: string;
 
-  public constructor(message: string, httpStatus?: number) {
+  public constructor(message: string, httpStatus?: number, stdout?: string) {
     super(message);
     this.name = 'GhError';
     this.httpStatus = httpStatus;
+    this.stdout = stdout;
   }
 }
 
@@ -37,7 +40,7 @@ export const runGh: GhRunner = (args, options = {}) =>
       },
       (error, stdout, stderr) => {
         if (error) {
-          reject(toGhError(error, String(stderr)));
+          reject(toGhError(error, String(stderr), String(stdout)));
           return;
         }
         resolve(String(stdout));
@@ -46,11 +49,15 @@ export const runGh: GhRunner = (args, options = {}) =>
     child.stdin?.end(options.input ?? '');
   });
 
-function toGhError(error: Error & { code?: unknown }, stderr: string): GhError {
+function toGhError(error: Error & { code?: unknown }, stderr: string, stdout: string): GhError {
   if (error.code === 'ENOENT') {
     return new GhError('gh CLI not found on PATH; install it and run `gh auth login`');
   }
   const message = stderr.trim() || error.message;
   const status = /\(HTTP (\d{3})\)/.exec(message)?.[1];
-  return new GhError(message.slice(0, MAX_MESSAGE_LENGTH), status ? Number(status) : undefined);
+  return new GhError(
+    message.slice(0, MAX_MESSAGE_LENGTH),
+    status ? Number(status) : undefined,
+    stdout || undefined,
+  );
 }

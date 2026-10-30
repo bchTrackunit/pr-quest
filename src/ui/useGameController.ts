@@ -7,7 +7,7 @@ import type {
   ReviewRun,
   ServerEvent,
   UnlockedAchievement,
-  XpReason,
+  XpGain,
 } from '../shared/api.ts';
 import {
   approveQuest,
@@ -66,7 +66,7 @@ export interface GameController {
 
 interface InternalHandlers {
   handleServerEvent: (event: ServerEvent) => void;
-  loadQuests: (signal?: AbortSignal) => void;
+  loadQuests: (signal?: AbortSignal, options?: { refresh?: boolean }) => void;
   loadSideData: (signal?: AbortSignal) => void;
 }
 
@@ -89,6 +89,7 @@ export function useGameController(): GameController {
   const controller = useMemo<GameController & InternalHandlers>(() => {
     const announcedAchievements = new Set<string>();
     const announcedRuns = new Set<string>();
+    const shownXpGains = new Set<string>();
 
     const pushToast = (toast: Omit<Toast, 'id'>): void => {
       store.setState((state) => ({
@@ -97,10 +98,12 @@ export function useGameController(): GameController {
       }));
     };
 
-    const pushXpPopup = (amount: number, reason: XpReason): void => {
-      if (amount <= 0) {
+    /** The same gain arrives over REST and SSE; `eventId` makes sure it pops once. */
+    const pushXpGain = ({ eventId, amount, reason }: XpGain): void => {
+      if (amount <= 0 || shownXpGains.has(eventId)) {
         return;
       }
+      shownXpGains.add(eventId);
       store.setState((state) => ({
         ...state,
         xpPopups: [...state.xpPopups, { id: createLocalId('xp'), amount, reason }],
@@ -129,8 +132,7 @@ export function useGameController(): GameController {
         return;
       }
       announcedRuns.add(`${run.id}:${run.status}`);
-      const quest = findQuest(store.getState(), run.questId);
-      const label = quest ? questLabel(quest) : run.questId;
+      const label = questLabel(run.quest);
       if (run.status === 'finished') {
         pushToast({
           kind: 'loot',
@@ -146,7 +148,7 @@ export function useGameController(): GameController {
         if (notificationsEnabled) {
           showBrowserNotification({
             title: 'PR Quest: loot ready',
-            body: `Review finished for ${label}${quest ? `: ${quest.title}` : ''}`,
+            body: `Review finished for ${label}: ${run.quest.title}`,
             tag: `run-${run.id}`,
             onSelect: () => openResult(run.id),
           });
@@ -170,7 +172,7 @@ export function useGameController(): GameController {
           announceRunTransition(previous, event.run);
           break;
         case 'xpGained':
-          pushXpPopup(event.amount, event.reason);
+          pushXpGain(event);
           break;
         case 'achievementUnlocked':
           announceAchievement(event.achievement);
@@ -180,15 +182,10 @@ export function useGameController(): GameController {
       }
     };
 
-    /**
-     * Applies the outcome a REST action returned. SSE also broadcasts the XP, so the popup only
-     * comes from here when the stream is down; achievements are de-duplicated by id.
-     */
-    const applyOutcome = (outcome: GameOutcome, reason: XpReason): void => {
+    /** Applies the outcome a REST action returned; SSE repeats parts of it, de-duplicated by id. */
+    const applyOutcome = (outcome: GameOutcome): void => {
       store.setState((state) => ({ ...state, player: outcome.player }));
-      if (store.getState().connection !== 'open') {
-        pushXpPopup(outcome.xpGained, reason);
-      }
+      outcome.gains.forEach(pushXpGain);
       outcome.unlocked.forEach((unlocked: UnlockedAchievement) => {
         const known = store.getState().achievements.find((entry) => entry.id === unlocked.id);
         const definition: AchievementDef = known ?? {
@@ -219,9 +216,9 @@ export function useGameController(): GameController {
       }));
     };
 
-    const loadQuests = (signal?: AbortSignal): void => {
+    const loadQuests = (signal?: AbortSignal, options: { refresh?: boolean } = {}): void => {
       store.setState((state) => ({ ...state, questsLoad: 'loading', questsError: undefined }));
-      fetchQuests(signal)
+      fetchQuests(signal, options)
         .then((response) => {
           store.setState((state) => ({
             ...state,
@@ -280,7 +277,7 @@ export function useGameController(): GameController {
     };
 
     const actions: GameActions = {
-      refreshQuests: () => loadQuests(),
+      refreshQuests: () => loadQuests(undefined, { refresh: true }),
       sendReviewAgent: (questId) => {
         unlockAudio();
         setQuestAction(questId, 'review');
@@ -314,7 +311,7 @@ export function useGameController(): GameController {
           message: `Approved ${quest ? questLabel(quest) : questId}.`,
           icon: '✅',
         });
-        applyOutcome(response.outcome, 'approved');
+        applyOutcome(response.outcome);
       },
       postFindings: async (runId, event) => {
         const response = await postRun(runId, { event });
@@ -326,10 +323,7 @@ export function useGameController(): GameController {
           icon: '📜',
           href: response.reviewUrl,
         });
-        applyOutcome(
-          response.outcome,
-          event === 'requestChanges' ? 'changesRequested' : 'reviewPosted',
-        );
+        applyOutcome(response.outcome);
       },
       discardFindings: async (runId) => {
         const response = await discardRun(runId);

@@ -17,6 +17,14 @@ export interface QuestCardProps {
   onClickApprove: (questId: string) => void;
 }
 
+/** `owner/repo#123` that wraps after the slash instead of inside the PR number. */
+const WrappableLabel = ({ quest }: { quest: Quest }) => (
+  <>
+    {quest.repo.owner}/<wbr />
+    {quest.repo.name}#{quest.number}
+  </>
+);
+
 export const QuestCard = ({
   quest,
   now,
@@ -75,10 +83,10 @@ export const QuestCard = ({
           <dd>
             {quest.linearUrl ? (
               <a href={quest.githubUrl} rel="noopener noreferrer" target="_blank">
-                {label}
+                <WrappableLabel quest={quest} />
               </a>
             ) : (
-              label
+              <WrappableLabel quest={quest} />
             )}
           </dd>
         </div>

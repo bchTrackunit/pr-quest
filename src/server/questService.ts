@@ -88,8 +88,7 @@ export class QuestService {
     if (!this.cache) {
       return undefined;
     }
-    const { quests, fetchedAt } = this.response();
-    return { type: 'questsUpdated', quests, fetchedAt };
+    return { type: 'questsUpdated', ...this.response() };
   }
 
   /** Refreshes now and then on an interval. Returns a function that stops polling. */
@@ -126,11 +125,7 @@ export class QuestService {
 
   private async publish(): Promise<ListQuestsResponse> {
     const response = this.response();
-    this.options.events.broadcast({
-      type: 'questsUpdated',
-      quests: response.quests,
-      fetchedAt: response.fetchedAt,
-    });
+    this.options.events.broadcast({ type: 'questsUpdated', ...response });
     await this.options.game.recordQueueChecked(response.quests.length).catch((error: unknown) => {
       this.options.log(
         `inbox check failed: ${error instanceof Error ? error.message : String(error)}`,

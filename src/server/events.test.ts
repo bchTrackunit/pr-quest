@@ -39,6 +39,7 @@ const event: ServerEvent = {
   type: 'questsUpdated',
   quests: [],
   fetchedAt: '2026-10-30T10:00:00.000Z',
+  source: 'github',
 };
 
 let hub: EventHub;

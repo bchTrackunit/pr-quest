@@ -1,0 +1,27 @@
+{
+  "data": {
+    "pr0": {
+      "pullRequest": {
+        "headRefName": "kfr-example/ins-2967-register-ci",
+        "baseRefName": "master",
+        "headRefOid": "d77c66a89e0707ccc917203251d3a3a1efce4182",
+        "additions": 1,
+        "deletions": 0,
+        "changedFiles": 1,
+        "author": { "login": "kfr-example", "name": "" },
+        "reviewRequests": {
+          "nodes": [{ "requestedReviewer": { "__typename": "Team", "slug": "team-gluon" } }]
+        }
+      }
+    },
+    "pr1": { "pullRequest": null }
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": ["pr1", "pullRequest"],
+      "locations": [{ "line": 3, "column": 75 }],
+      "message": "Could not resolve to a PullRequest with the number of 24."
+    }
+  ]
+}

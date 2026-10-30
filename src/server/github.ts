@@ -11,6 +11,19 @@ const VIEW_FIELDS =
   'headRefName,baseRefName,headRefOid,additions,deletions,changedFiles,reviewRequests,createdAt,url,title,author,isDraft';
 const SEARCH_LIMIT = '100';
 const VIEW_CONCURRENCY = 4;
+/** PRs per GraphQL query; GitHub's cost limits leave plenty of room at this size. */
+export const DETAILS_BATCH_SIZE = 25;
+const BATCH_CONCURRENCY = 2;
+
+const BATCH_FIELDS = `
+  headRefName
+  baseRefName
+  headRefOid
+  additions
+  deletions
+  changedFiles
+  author { login ... on User { name } }
+  reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on Team { slug } } } }`;
 
 const SearchItemSchema = z.object({
   number: z.number().int().positive(),
@@ -25,7 +38,9 @@ const SearchItemSchema = z.object({
 
 const DirectSearchSchema = z.array(z.object({ url: z.string() }));
 
-const PullRequestDetailsSchema = z.object({
+const ReviewerSchema = z.object({ __typename: z.string(), slug: z.string().nullish() });
+
+const PullRequestCoreSchema = z.object({
   headRefName: z.string(),
   baseRefName: z.string(),
   headRefOid: z.string(),
@@ -33,7 +48,30 @@ const PullRequestDetailsSchema = z.object({
   deletions: z.number().int().nonnegative(),
   changedFiles: z.number().int().nonnegative(),
   author: z.object({ login: z.string(), name: z.string().nullish() }).nullish(),
-  reviewRequests: z.array(z.object({ __typename: z.string(), slug: z.string().nullish() })),
+});
+
+const PullRequestDetailsSchema = PullRequestCoreSchema.extend({
+  reviewRequests: z.array(ReviewerSchema),
+});
+
+const BatchPullRequestSchema = PullRequestCoreSchema.extend({
+  reviewRequests: z.object({
+    nodes: z.array(z.object({ requestedReviewer: ReviewerSchema.nullish() }).nullish()),
+  }),
+});
+
+const BatchResponseSchema = z.object({
+  data: z
+    .record(z.string(), z.object({ pullRequest: BatchPullRequestSchema.nullish() }).nullish())
+    .nullish(),
+  errors: z
+    .array(
+      z.object({
+        message: z.string(),
+        path: z.array(z.union([z.string(), z.number()])).nullish(),
+      }),
+    )
+    .nullish(),
 });
 
 const CreatedReviewSchema = z.object({ html_url: z.string() });
@@ -119,8 +157,10 @@ export function parseSearchResults(text: string): Array<SearchItem> {
   });
 }
 
-export function parsePullRequestDetails(text: string): PullRequestDetails {
-  const raw = parseJson(text, PullRequestDetailsSchema, 'gh pr view');
+function toDetails(
+  raw: z.infer<typeof PullRequestCoreSchema>,
+  reviewers: ReadonlyArray<z.infer<typeof ReviewerSchema>>,
+): PullRequestDetails {
   return {
     headRefName: raw.headRefName,
     baseRefName: raw.baseRefName,
@@ -129,12 +169,73 @@ export function parsePullRequestDetails(text: string): PullRequestDetails {
     deletions: raw.deletions,
     changedFiles: raw.changedFiles,
     authorName: raw.author?.name || undefined,
-    requestedTeams: raw.reviewRequests.flatMap((request) =>
-      request.__typename === 'Team' && request.slug
-        ? [request.slug.split('/').at(-1) ?? request.slug]
+    requestedTeams: reviewers.flatMap((reviewer) =>
+      reviewer.__typename === 'Team' && reviewer.slug
+        ? [reviewer.slug.split('/').at(-1) ?? reviewer.slug]
         : [],
     ),
   };
+}
+
+export function parsePullRequestDetails(text: string): PullRequestDetails {
+  const raw = parseJson(text, PullRequestDetailsSchema, 'gh pr view');
+  return toDetails(raw, raw.reviewRequests);
+}
+
+export interface PullRequestBatchQuery {
+  query: string;
+  variables: Record<string, string | number>;
+}
+
+/** One aliased `repository { pullRequest }` lookup per ref (`pr0`, `pr1`, ...), as variables. */
+export function buildPullRequestBatchQuery(refs: ReadonlyArray<QuestRef>): PullRequestBatchQuery {
+  const variables: Record<string, string | number> = {};
+  const params: Array<string> = [];
+  const lookups: Array<string> = [];
+  refs.forEach((ref, index) => {
+    variables[`owner${index}`] = ref.repo.owner;
+    variables[`name${index}`] = ref.repo.name;
+    variables[`number${index}`] = ref.number;
+    params.push(`$owner${index}: String!, $name${index}: String!, $number${index}: Int!`);
+    lookups.push(
+      `  pr${index}: repository(owner: $owner${index}, name: $name${index}) { pullRequest(number: $number${index}) { ...Details } }`,
+    );
+  });
+  return {
+    query: [
+      `query(${params.join(', ')}) {`,
+      ...lookups,
+      '}',
+      `fragment Details on PullRequest {${BATCH_FIELDS}\n}`,
+    ].join('\n'),
+    variables,
+  };
+}
+
+/** Details for one ref of a batch, or GitHub's reason for returning none. */
+export type BatchEntry = { details: PullRequestDetails } | { error: string };
+
+/**
+ * Splits a batch response into one entry per ref, in request order. Throws when the response has
+ * no data at all (bad query, auth, rate limit), so the caller can fall back.
+ */
+export function parsePullRequestBatch(text: string, count: number): Array<BatchEntry> {
+  const { data, errors } = parseJson(text, BatchResponseSchema, 'gh api graphql');
+  if (!data) {
+    throw new GhError(`gh api graphql returned no data: ${errors?.at(0)?.message ?? 'no reason'}`);
+  }
+  return Array.from({ length: count }, (_, index): BatchEntry => {
+    const alias = `pr${index}`;
+    const pullRequest = data[alias]?.pullRequest;
+    if (pullRequest) {
+      const reviewers = pullRequest.reviewRequests.nodes.flatMap(
+        (node) => node?.requestedReviewer ?? [],
+      );
+      return { details: toDetails(pullRequest, reviewers) };
+    }
+    const reason = errors?.find((error) => error.path?.[0] === alias)?.message;
+    return { error: reason ?? 'GitHub returned no pull request' };
+  });
 }
 
 export function toQuest({ item, details, direct, linear }: QuestInput): Quest {
@@ -212,17 +313,34 @@ export class GitHubClient {
       parseJson(directText, DirectSearchSchema, 'gh search').map((entry) => entry.url),
     );
 
-    const results = await mapWithConcurrency(items, VIEW_CONCURRENCY, async (item) => {
-      try {
-        const details = await this.viewPullRequest({ repo: item.repo, number: item.number });
-        return { item, details, direct: directUrls.has(item.url) };
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.onWarning(`Skipping ${formatQuestId(item.repo, item.number)}: ${reason}`);
-        return undefined;
-      }
+    const batches = await mapWithConcurrency(
+      chunk(items, DETAILS_BATCH_SIZE),
+      BATCH_CONCURRENCY,
+      (batch) => this.detailsFor(batch),
+    );
+    const details = batches.flat();
+    return items.flatMap((item, index): Array<ReviewRequestData> => {
+      const found = details[index];
+      return found ? [{ item, details: found, direct: directUrls.has(item.url) }] : [];
     });
-    return results.filter((result): result is ReviewRequestData => result !== undefined);
+  }
+
+  /**
+   * Details for every ref in one GraphQL query. `gh api graphql` exits non-zero when any lookup
+   * fails but still prints the others, so partial data is kept.
+   */
+  public async viewPullRequests(refs: ReadonlyArray<QuestRef>): Promise<Array<BatchEntry>> {
+    const input = JSON.stringify(buildPullRequestBatchQuery(refs));
+    let text: string;
+    try {
+      text = await this.gh(['api', 'graphql', '--input', '-'], { input });
+    } catch (error) {
+      if (!(error instanceof GhError) || !error.stdout) {
+        throw error;
+      }
+      text = error.stdout;
+    }
+    return parsePullRequestBatch(text, refs.length);
   }
 
   public async viewPullRequest(ref: QuestRef): Promise<PullRequestDetails> {
@@ -270,6 +388,42 @@ export class GitHubClient {
     }
   }
 
+  /** One batch of details aligned with `items`; `undefined` marks a PR that was skipped. */
+  private async detailsFor(
+    items: ReadonlyArray<SearchItem>,
+  ): Promise<Array<PullRequestDetails | undefined>> {
+    let entries: Array<BatchEntry>;
+    try {
+      entries = await this.viewPullRequests(items);
+    } catch (error) {
+      this.onWarning(
+        `Batched PR lookup failed, falling back to one gh pr view per PR: ${errorMessage(error)}`,
+      );
+      return mapWithConcurrency(items, VIEW_CONCURRENCY, async (item) => {
+        try {
+          return await this.viewPullRequest(item);
+        } catch (viewError) {
+          this.skip(item, errorMessage(viewError));
+          return undefined;
+        }
+      });
+    }
+    return entries.map((entry, index) => {
+      if ('details' in entry) {
+        return entry.details;
+      }
+      const item = items.at(index);
+      if (item) {
+        this.skip(item, entry.error);
+      }
+      return undefined;
+    });
+  }
+
+  private skip(item: SearchItem, reason: string): void {
+    this.onWarning(`Skipping ${formatQuestId(item.repo, item.number)}: ${reason}`);
+  }
+
   private async postReview(ref: QuestRef, payload: unknown): Promise<string> {
     const path = `repos/${ref.repo.owner}/${ref.repo.name}/pulls/${ref.number}/reviews`;
     const text = await this.gh(['api', '-X', 'POST', path, '--input', '-'], {
@@ -280,6 +434,17 @@ export class GitHubClient {
 }
 
 const repoArg = (ref: QuestRef): string => `${ref.repo.owner}/${ref.repo.name}`;
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+function chunk<TItem>(items: ReadonlyArray<TItem>, size: number): Array<Array<TItem>> {
+  const chunks: Array<Array<TItem>> = [];
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+  return chunks;
+}
 
 async function mapWithConcurrency<TItem, TResult>(
   items: ReadonlyArray<TItem>,

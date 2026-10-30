@@ -140,6 +140,12 @@ describe('ReviewRunService.start', () => {
       status: 'queued',
       disposition: 'pending',
     });
+    expect(run.quest).toEqual({
+      title: 'Add cache',
+      repo: { owner: 'Trackunit', name: 'manager' },
+      number: 7,
+      githubUrl: 'https://github.com/Trackunit/manager/pull/7',
+    });
     expect(store.state.runs[0]?.quest).toMatchObject({
       id: quest.id,
       headSha: 'abc',
@@ -285,6 +291,12 @@ describe('ReviewRunService.resumeInterrupted', () => {
     run: {
       id: 'review-old',
       questId: quest.id,
+      quest: {
+        title: quest.title,
+        repo: quest.repo,
+        number: quest.number,
+        githubUrl: quest.githubUrl,
+      },
       status: 'running',
       disposition: 'pending',
       startedAt: '2026-10-30T09:00:00.000Z',

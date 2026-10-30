@@ -35,6 +35,7 @@ export class ApiRequestError extends Error {
 
 export interface ApiRequestOptions<TName extends JsonRouteName> {
   params: RouteParams<TName>;
+  query?: Record<string, string>;
   body?: RequestBody<TName>;
   signal?: AbortSignal;
 }
@@ -45,7 +46,8 @@ export async function apiRequest<TName extends JsonRouteName>(
   options: ApiRequestOptions<TName>,
 ): Promise<ResponseBody<TName>> {
   const { method } = API_ROUTES[name];
-  const response = await fetch(buildApiPath(name, options.params), {
+  const search = options.query ? `?${new URLSearchParams(options.query).toString()}` : '';
+  const response = await fetch(`${buildApiPath(name, options.params)}${search}`, {
     method,
     headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -76,8 +78,16 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return apiRequest('health', { params: {}, signal });
 }
 
-export function fetchQuests(signal?: AbortSignal): Promise<ListQuestsResponse> {
-  return apiRequest('listQuests', { params: {}, signal });
+/** `refresh` bypasses the server's short-lived quest cache. */
+export function fetchQuests(
+  signal?: AbortSignal,
+  options: { refresh?: boolean } = {},
+): Promise<ListQuestsResponse> {
+  return apiRequest('listQuests', {
+    params: {},
+    query: options.refresh ? { refresh: '1' } : undefined,
+    signal,
+  });
 }
 
 export function fetchRuns(signal?: AbortSignal): Promise<ListRunsResponse> {

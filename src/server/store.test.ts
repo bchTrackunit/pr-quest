@@ -20,6 +20,12 @@ const storedRun: StoredRun = {
   run: {
     id: 'run-1',
     questId: 'o/r#1',
+    quest: {
+      title: 'T',
+      repo: { owner: 'o', name: 'r' },
+      number: 1,
+      githubUrl: 'https://github.com/o/r/pull/1',
+    },
     agentId: 'bc-1',
     runId: 'run-abc',
     status: 'finished',
@@ -66,6 +72,22 @@ describe('StateStore', () => {
 
     expect(reopened.state.game.xp).toBe(42);
     expect(reopened.state.runs).toEqual([storedRun]);
+  });
+
+  test('fills in the quest summary for runs saved before runs carried it', async () => {
+    const { quest: _summary, ...legacyRun } = storedRun.run;
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 1,
+        game: initialGameState(),
+        runs: [{ run: legacyRun, quest: storedRun.quest }],
+      }),
+    );
+
+    const store = await StateStore.open(dir);
+
+    expect(store.state.runs[0]?.run.quest).toEqual(storedRun.run.quest);
   });
 
   test('writes through a temporary file and leaves only state.json behind', async () => {

@@ -137,6 +137,7 @@ export function applyServerEvent(state: GameState, event: ServerEvent): GameStat
         ...state,
         quests: event.quests,
         questsFetchedAt: event.fetchedAt,
+        questSource: event.source,
         questsLoad: 'ready',
         questsError: undefined,
       };
@@ -198,7 +199,7 @@ export function groupFindings(findings: ReadonlyArray<ReviewFinding>): Array<Fin
   })).filter((group) => group.findings.length > 0);
 }
 
-export function questLabel(quest: Quest): string {
+export function questLabel(quest: Pick<Quest, 'repo' | 'number'>): string {
   return `${quest.repo.owner}/${quest.repo.name}#${quest.number}`;
 }
 

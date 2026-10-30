@@ -49,6 +49,13 @@ export function makeRun(overrides: Partial<ReviewRun> = {}): ReviewRun {
   return {
     id: 'run-1',
     questId: 'Trackunit/manager#101',
+    quest: {
+      title: 'Add the fleet health widget',
+      repo: { owner: 'Trackunit', name: 'manager' },
+      number: 101,
+      githubUrl: 'https://github.com/Trackunit/manager/pull/101',
+      linearUrl: 'https://linear.app/trackunit/review/manager-101',
+    },
     status: 'queued',
     disposition: 'pending',
     startedAt: '2026-10-30T10:00:00.000Z',

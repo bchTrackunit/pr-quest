@@ -3,18 +3,22 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import type { ReviewRun } from '../shared/api.ts';
+import type { Quest, ReviewRun } from '../shared/api.ts';
 import { ReviewResult } from './ReviewResult.tsx';
 import { makeQuest, makeResult, makeRun } from './test-utils/fixtures.ts';
 
-function renderResult(run: ReviewRun = makeRun({ status: 'finished', result: makeResult() })) {
+function renderResult(
+  run: ReviewRun = makeRun({ status: 'finished', result: makeResult() }),
+  /** `null` renders the result for a quest that is no longer in the queue. */
+  quest: Quest | null = makeQuest(),
+) {
   const handlers = {
     onClickClose: vi.fn(),
     onPost: vi.fn(() => Promise.resolve()),
     onDiscard: vi.fn(() => Promise.resolve()),
     onClickApprove: vi.fn(),
   };
-  render(<ReviewResult quest={makeQuest()} run={run} {...handlers} />);
+  render(<ReviewResult quest={quest ?? undefined} run={run} {...handlers} />);
   return handlers;
 }
 
@@ -72,6 +76,15 @@ describe('ReviewResult', () => {
     expect(handlers.onClickApprove).toHaveBeenCalledWith('Trackunit/manager#101');
     await user.click(screen.getByRole('button', { name: 'Discard' }));
     expect(handlers.onDiscard).toHaveBeenCalled();
+  });
+
+  test('names the quest from the run once it has left the queue, without offering Approve', () => {
+    renderResult(makeRun({ status: 'finished', result: makeResult() }), null);
+
+    expect(screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' })).toBeTruthy();
+    expect(screen.getByText('Add the fleet health widget')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Open in Linear/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
 
   test('shows a failed post', async () => {

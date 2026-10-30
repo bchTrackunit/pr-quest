@@ -18,7 +18,13 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-game-'));
   store = await StateStore.open(dir);
   broadcast = vi.fn<(event: ServerEvent) => void>();
-  game = new GameService(store, { broadcast }, () => now);
+  let eventCount = 0;
+  game = new GameService(
+    store,
+    { broadcast },
+    () => now,
+    () => `xp-${++eventCount}`,
+  );
 });
 
 afterEach(async () => {
@@ -65,6 +71,22 @@ describe('GameService', () => {
       type: 'achievementUnlocked',
       achievement: { id: 'first-blood', name: 'First Blood' },
     });
+  });
+
+  test('returns each gain with the event id it was broadcast under', async () => {
+    const outcome = await game.recordReviewAction(approval);
+
+    expect(outcome.gains).toEqual([
+      { eventId: 'xp-1', amount: 23, reason: 'approved', questId: 'o/r#1' },
+      { eventId: 'xp-2', amount: 10, reason: 'achievement' },
+      { eventId: 'xp-3', amount: 25, reason: 'achievement' },
+    ]);
+    const broadcastGains = broadcast.mock.calls.flatMap(([event]) =>
+      event.type === 'xpGained' ? [{ eventId: event.eventId, amount: event.amount }] : [],
+    );
+    expect(broadcastGains).toEqual(
+      outcome.gains.map(({ eventId, amount }) => ({ eventId, amount })),
+    );
   });
 
   test('a repeated approval returns no XP and broadcasts nothing', async () => {

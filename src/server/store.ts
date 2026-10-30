@@ -3,7 +3,13 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-import type { DifficultyTier, RepoRef, RequestKind, ReviewRun } from '../shared/api.ts';
+import type {
+  DifficultyTier,
+  RepoRef,
+  RequestKind,
+  ReviewRun,
+  ReviewRunQuest,
+} from '../shared/api.ts';
 import { initialGameState, type GameState } from './gamification.ts';
 import { ReviewResultSchema, type ReviewTarget } from './reviewResult.ts';
 
@@ -14,9 +20,24 @@ export interface QuestSnapshot extends ReviewTarget {
   repo: RepoRef;
   number: number;
   headSha?: string;
+  linearUrl?: string;
   difficulty: DifficultyTier;
   requestKind: RequestKind;
   requestedAt: string;
+}
+
+/** The part of the snapshot the UI sees on `ReviewRun.quest`. */
+export function runQuestOf(snapshot: QuestSnapshot): ReviewRunQuest {
+  const quest: ReviewRunQuest = {
+    title: snapshot.title,
+    repo: snapshot.repo,
+    number: snapshot.number,
+    githubUrl: snapshot.githubUrl,
+  };
+  if (snapshot.linearUrl) {
+    quest.linearUrl = snapshot.linearUrl;
+  }
+  return quest;
 }
 
 export interface StoredRun {
@@ -61,10 +82,22 @@ const GameStateSchema = z.object({
 
 const TierSchema = z.enum(['Trivial', 'Normal', 'Hard', 'Boss']);
 
+const RepoSchema = z.object({ owner: z.string(), name: z.string() });
+
 const StoredRunSchema = z.object({
   run: z.object({
     id: z.string(),
     questId: z.string(),
+    /** Absent in state written before runs carried it; filled from `quest` on load. */
+    quest: z
+      .object({
+        title: z.string(),
+        repo: RepoSchema,
+        number: z.number().int().positive(),
+        githubUrl: z.string(),
+        linearUrl: z.string().optional(),
+      })
+      .optional(),
     agentId: z.string().optional(),
     runId: z.string().optional(),
     status: z.enum(['queued', 'running', 'finished', 'error', 'startupFailed']),
@@ -78,12 +111,13 @@ const StoredRunSchema = z.object({
   quest: z.object({
     id: z.string(),
     title: z.string(),
-    repo: z.object({ owner: z.string(), name: z.string() }),
+    repo: RepoSchema,
     number: z.number().int().positive(),
     githubUrl: z.string(),
     sourceBranch: z.string(),
     targetBranch: z.string(),
     headSha: z.string().optional(),
+    linearUrl: z.string().optional(),
     difficulty: TierSchema,
     requestKind: z.enum(['direct', 'team']),
     requestedAt: z.string(),
@@ -162,7 +196,13 @@ async function readState(
 
   const parsed = PersistedStateSchema.safeParse(safeJson(text));
   if (parsed.success) {
-    return parsed.data;
+    return {
+      ...parsed.data,
+      runs: parsed.data.runs.map(({ run, quest }) => ({
+        run: { ...run, quest: run.quest ?? runQuestOf(quest) },
+        quest,
+      })),
+    };
   }
   const aside = `${file}.corrupt-${Date.now()}`;
   await rename(file, aside);

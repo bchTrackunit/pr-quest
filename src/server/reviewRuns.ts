@@ -5,7 +5,7 @@ import type { Quest, ReviewRun, ReviewRunStatus } from '../shared/api.ts';
 import type { EventSink, GameService } from './game.ts';
 import { buildReviewPrompt, parseReviewResult } from './reviewResult.ts';
 import { ApiError } from './router.ts';
-import type { QuestSnapshot, StateStore, StoredRun } from './store.ts';
+import { runQuestOf, type QuestSnapshot, type StateStore, type StoredRun } from './store.ts';
 
 const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;
@@ -70,17 +70,23 @@ export class ReviewRunService {
   public async start(quest: Quest, options: StartReviewOptions = {}): Promise<ReviewRun> {
     const apiKey = this.apiKey;
     if (!apiKey) {
-      throw new ApiError(400, 'missingConfig', 'Set CURSOR_API_KEY to start agent reviews');
+      throw new ApiError(
+        400,
+        'missingConfig',
+        'Agent reviews need CURSOR_API_KEY. Add it to apps/pr-quest/.env.local and restart PR Quest.',
+      );
     }
+    const snapshot = snapshotOf(quest);
     const stored: StoredRun = {
       run: {
         id: this.newId(),
         questId: quest.id,
+        quest: runQuestOf(snapshot),
         status: 'queued',
         disposition: 'pending',
         startedAt: this.now().toISOString(),
       },
-      quest: snapshotOf(quest),
+      quest: snapshot,
     };
     await this.store.update((state) => {
       if (state.runs.some((entry) => entry.run.questId === quest.id && isActive(entry.run))) {
@@ -324,6 +330,9 @@ function snapshotOf(quest: Quest): QuestSnapshot {
   };
   if (quest.headSha) {
     snapshot.headSha = quest.headSha;
+  }
+  if (quest.linearUrl) {
+    snapshot.linearUrl = quest.linearUrl;
   }
   return snapshot;
 }

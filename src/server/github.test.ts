@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test, vi } from 'vitest';
 
 import { GhError, type GhRunner } from './gh.ts';
-import { GitHubClient, parsePullRequestDetails, parseSearchResults, toQuest } from './github.ts';
+import {
+  buildPullRequestBatchQuery,
+  DETAILS_BATCH_SIZE,
+  GitHubClient,
+  parsePullRequestBatch,
+  parsePullRequestDetails,
+  parseSearchResults,
+  toQuest,
+} from './github.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
 
 const fixture = (name: string): string =>
@@ -12,14 +20,25 @@ const SEARCH_ALL = fixture('search-all.json');
 const SEARCH_DIRECT = fixture('search-direct.json');
 const VIEW_930 = fixture('pr-view-930.json');
 const VIEW_24 = fixture('pr-view-24.json');
+const BATCH = fixture('graphql-batch.json');
+const BATCH_PARTIAL = fixture('graphql-batch-partial.json');
+
+const isBatch = (args: Array<string>): boolean => args[0] === 'api' && args[1] === 'graphql';
 
 /** Answers each gh invocation from the fixtures, keyed by what the arguments ask for. */
 function fixtureGh(
-  overrides: { view24?: string | Error } = {},
+  overrides: { batch?: string | Error; view24?: string | Error } = {},
 ): ReturnType<typeof vi.fn<GhRunner>> {
   return vi.fn<GhRunner>(async (args) => {
     if (args[0] === 'search') {
       return args.includes('user-review-requested:@me') ? SEARCH_DIRECT : SEARCH_ALL;
+    }
+    if (isBatch(args)) {
+      const batch = overrides.batch ?? BATCH;
+      if (batch instanceof Error) {
+        throw batch;
+      }
+      return batch;
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const view24 = overrides.view24 ?? VIEW_24;
@@ -147,7 +166,7 @@ describe('GitHubClient.fetchReviewRequests', () => {
     ]);
   });
 
-  test('searches open review requests with and without team requests', async () => {
+  test('searches open review requests, then reads every PR in one GraphQL query', async () => {
     const gh = fixtureGh();
 
     await new GitHubClient(gh).fetchReviewRequests();
@@ -158,6 +177,57 @@ describe('GitHubClient.fetchReviewRequests', () => {
     expect(gh).toHaveBeenCalledWith(
       expect.arrayContaining(['search', 'prs', 'user-review-requested:@me', '--state=open']),
     );
+    const batchCalls = gh.mock.calls.filter(([args]) => isBatch(args));
+    expect(batchCalls).toHaveLength(1);
+    expect(batchCalls[0]?.[0]).toEqual(['api', 'graphql', '--input', '-']);
+    expect(JSON.parse(batchCalls[0]?.[1]?.input ?? '{}')).toMatchObject({
+      variables: {
+        owner0: 'Trackunit',
+        name0: 'circleci-configuration',
+        number0: 930,
+        owner1: 'Trackunit',
+        name1: 'state-of-code',
+        number1: 24,
+      },
+    });
+    expect(gh.mock.calls.some(([args]) => args[0] === 'pr')).toBe(false);
+  });
+
+  test('reads branches, diff stats and team requests from the batch', async () => {
+    const data = await new GitHubClient(fixtureGh()).fetchReviewRequests();
+
+    expect(data.map((entry) => entry.details)).toEqual([
+      parsePullRequestDetails(VIEW_930),
+      parsePullRequestDetails(VIEW_24),
+    ]);
+  });
+
+  test('keeps the rest of a batch when GitHub cannot resolve one PR', async () => {
+    const onWarning = vi.fn();
+    const partialFailure = new GhError(
+      'gh: Could not resolve to a PullRequest with the number of 24.',
+      undefined,
+      BATCH_PARTIAL,
+    );
+    const gh = fixtureGh({ batch: partialFailure });
+
+    const data = await new GitHubClient(gh, { onWarning }).fetchReviewRequests();
+
+    expect(data.map((entry) => entry.item.number)).toEqual([930]);
+    expect(onWarning).toHaveBeenCalledWith(
+      'Skipping Trackunit/state-of-code#24: Could not resolve to a PullRequest with the number of 24.',
+    );
+    expect(gh.mock.calls.some(([args]) => args[0] === 'pr')).toBe(false);
+  });
+
+  test('falls back to one gh pr view per PR when the whole batch fails', async () => {
+    const onWarning = vi.fn();
+    const gh = fixtureGh({ batch: new GhError('gh: Bad Gateway (HTTP 502)', 502) });
+
+    const data = await new GitHubClient(gh, { onWarning }).fetchReviewRequests();
+
+    expect(data.map((entry) => entry.item.number)).toEqual([930, 24]);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('falling back'));
     expect(gh).toHaveBeenCalledWith([
       'pr',
       'view',
@@ -169,19 +239,93 @@ describe('GitHubClient.fetchReviewRequests', () => {
     ]);
   });
 
-  test('skips a PR whose details fail and reports it', async () => {
+  test('skips a PR whose fallback view fails and reports it', async () => {
     const onWarning = vi.fn();
     const client = new GitHubClient(
-      fixtureGh({ view24: new GhError('gh: Not Found (HTTP 404)', 404) }),
-      {
-        onWarning,
-      },
+      fixtureGh({
+        batch: new GhError('gh: Bad Gateway (HTTP 502)', 502),
+        view24: new GhError('gh: Not Found (HTTP 404)', 404),
+      }),
+      { onWarning },
     );
 
     const data = await client.fetchReviewRequests();
 
     expect(data.map((entry) => entry.item.number)).toEqual([930]);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('Trackunit/state-of-code#24'));
+  });
+
+  test(`splits the queue into queries of ${DETAILS_BATCH_SIZE} PRs`, async () => {
+    const count = DETAILS_BATCH_SIZE + 5;
+    const search = Array.from({ length: count }, (_, index) => ({
+      number: index + 1,
+      title: `PR ${index + 1}`,
+      url: `https://github.com/o/r/pull/${index + 1}`,
+      repository: { nameWithOwner: 'o/r' },
+      author: { login: 'a' },
+      createdAt: '2026-10-30T10:00:00Z',
+      updatedAt: '2026-10-30T10:00:00Z',
+      isDraft: false,
+    }));
+    const batch: { data: Record<string, unknown> } = JSON.parse(BATCH);
+    const [, onePullRequest] = Object.values(batch.data);
+    const gh = vi.fn<GhRunner>(async (args, options) => {
+      if (args[0] === 'search') {
+        return args.includes('user-review-requested:@me') ? '[]' : JSON.stringify(search);
+      }
+      const { variables }: { variables: Record<string, unknown> } = JSON.parse(
+        options?.input ?? '{}',
+      );
+      const size = Object.keys(variables).length / 3;
+      const data = Object.fromEntries(
+        Array.from({ length: size }, (_, index) => [`pr${index}`, onePullRequest]),
+      );
+      return JSON.stringify({ data });
+    });
+
+    const quests = await new GitHubClient(gh).fetchReviewRequests();
+
+    expect(quests).toHaveLength(count);
+    const batchSizes = gh.mock.calls
+      .filter(([args]) => isBatch(args))
+      .map(([, options]) => Object.keys(JSON.parse(options?.input ?? '{}').variables).length / 3);
+    expect(batchSizes.sort((a, b) => b - a)).toEqual([DETAILS_BATCH_SIZE, 5]);
+  });
+});
+
+describe('buildPullRequestBatchQuery', () => {
+  test('aliases one lookup per PR and passes owner, name and number as variables', () => {
+    const { query, variables } = buildPullRequestBatchQuery([
+      { repo: { owner: 'o', name: 'r' }, number: 5 },
+      { repo: { owner: 'x', name: 'y"}' }, number: 9 },
+    ]);
+
+    expect(variables).toEqual({
+      owner0: 'o',
+      name0: 'r',
+      number0: 5,
+      owner1: 'x',
+      name1: 'y"}',
+      number1: 9,
+    });
+    expect(query).toContain(
+      'pr1: repository(owner: $owner1, name: $name1) { pullRequest(number: $number1) { ...Details } }',
+    );
+    expect(query).not.toContain('y"}');
+  });
+});
+
+describe('parsePullRequestBatch', () => {
+  test('throws when the response carries no data at all', () => {
+    expect(() =>
+      parsePullRequestBatch('{"errors":[{"message":"API rate limit exceeded"}]}', 1),
+    ).toThrow(/API rate limit exceeded/);
+  });
+
+  test('reports a missing alias without a matching error as not found', () => {
+    expect(parsePullRequestBatch('{"data":{}}', 1)).toEqual([
+      { error: 'GitHub returned no pull request' },
+    ]);
   });
 });
 

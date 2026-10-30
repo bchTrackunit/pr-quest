@@ -63,13 +63,15 @@ describe('groupFindings', () => {
 });
 
 describe('applyServerEvent', () => {
-  test('questsUpdated replaces the quest list and marks it ready', () => {
+  test('questsUpdated replaces the quest list and its source, and marks it ready', () => {
     const state = applyServerEvent(createInitialGameState('default'), {
       type: 'questsUpdated',
       quests: [makeQuest()],
       fetchedAt: '2026-10-30T10:00:00.000Z',
+      source: 'github',
     });
     expect(state.quests).toHaveLength(1);
+    expect(state.questSource).toBe('github');
     expect(state.questsLoad).toBe('ready');
   });
 
@@ -98,6 +100,7 @@ describe('applyServerEvent', () => {
     const player = makePlayer({ xp: 999 });
     const state = applyServerEvent(createInitialGameState('default'), {
       type: 'xpGained',
+      eventId: 'xp-1',
       amount: 50,
       reason: 'reviewPosted',
       player,

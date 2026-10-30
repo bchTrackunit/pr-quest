@@ -154,10 +154,12 @@ describe('App', () => {
 
   test('approving needs confirmation and clears the quest', async () => {
     const user = userEvent.setup();
+    const player = makePlayer({ xpIntoLevel: 190 });
+    const gain = { eventId: 'xp-1', amount: 40, reason: 'approved' as const };
     api.approveQuest.mockResolvedValue({
       questId: 'Trackunit/manager#101',
       approvedVia: 'linear',
-      outcome: { xpGained: 40, player: makePlayer({ xpIntoLevel: 190 }), unlocked: [] },
+      outcome: { xpGained: 40, gains: [gain], player, unlocked: [] },
     });
     await renderApp();
 
@@ -170,12 +172,27 @@ describe('App', () => {
     expect(await screen.findByText('Inbox Zero!')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('190');
+    expect(screen.getAllByText('+40 XP')).toHaveLength(1);
+
+    emit({ type: 'xpGained', ...gain, player });
+    expect(screen.getAllByText('+40 XP')).toHaveLength(1);
+  });
+
+  test('Refresh bypasses the server cache', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    expect(api.fetchQuests).toHaveBeenLastCalledWith(expect.any(AbortSignal), {});
+
+    await user.click(screen.getByRole('button', { name: /Refresh/ }));
+
+    expect(api.fetchQuests).toHaveBeenLastCalledWith(undefined, { refresh: true });
   });
 
   test('shows XP popups and achievement toasts from the event stream', async () => {
     await renderApp();
     emit({
       type: 'xpGained',
+      eventId: 'xp-7',
       amount: 75,
       reason: 'reviewPosted',
       player: makePlayer({ xpIntoLevel: 225 }),

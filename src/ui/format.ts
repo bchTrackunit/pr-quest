@@ -17,6 +17,12 @@ export function formatAge(fromIso: string, now: number): string {
   return `${Math.floor(elapsed / DAY)}d`;
 }
 
+/** Relative time for a sentence: `just now` or `12m ago`. */
+export function formatAgo(fromIso: string, now: number): string {
+  const age = formatAge(fromIso, now);
+  return age === 'just now' ? age : `${age} ago`;
+}
+
 /** Stopwatch format, `mm:ss` or `h:mm:ss`. */
 export function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));

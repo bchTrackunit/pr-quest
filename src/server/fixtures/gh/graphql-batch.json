@@ -1,0 +1,36 @@
+{
+  "data": {
+    "pr0": {
+      "pullRequest": {
+        "headRefName": "kfr-example/ins-2967-register-ci",
+        "baseRefName": "master",
+        "headRefOid": "d77c66a89e0707ccc917203251d3a3a1efce4182",
+        "additions": 1,
+        "deletions": 0,
+        "changedFiles": 1,
+        "author": { "login": "kfr-example", "name": "" },
+        "reviewRequests": {
+          "nodes": [{ "requestedReviewer": { "__typename": "Team", "slug": "team-gluon" } }]
+        }
+      }
+    },
+    "pr1": {
+      "pullRequest": {
+        "headRefName": "kpr/quarterly-report",
+        "baseRefName": "main",
+        "headRefOid": "0123456789abcdef0123456789abcdef01234567",
+        "additions": 1800,
+        "deletions": 150,
+        "changedFiles": 12,
+        "author": { "login": "kpr-example", "name": "Kieran Example" },
+        "reviewRequests": {
+          "nodes": [
+            { "requestedReviewer": { "__typename": "Team", "slug": "team-gluon" } },
+            { "requestedReviewer": { "__typename": "User" } },
+            { "requestedReviewer": null }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { useMemo, useState, type MouseEventHandler } from 'react';
 
 import type { Quest, QuestSource, RequestKind, ReviewRun } from '../shared/api.ts';
-import { formatAge } from './format.ts';
+import { formatAgo } from './format.ts';
 import { selectRunForQuest, sortQuests, type LoadState, type QuestAction } from './gameState.ts';
 import { QuestCard } from './QuestCard.tsx';
 import { useNow } from './useNow.ts';
@@ -146,7 +146,7 @@ export const QuestBoard = ({
             Quest Board
           </h2>
           <p className="muted board__subtitle">
-            {fetchedAt ? `Updated ${formatAge(fetchedAt, now)} ago` : 'Not loaded yet'}
+            {fetchedAt ? `Updated ${formatAgo(fetchedAt, now)}` : 'Not loaded yet'}
             {source ? ` · via ${source === 'linear' ? 'Linear' : 'GitHub'}` : ''}
           </p>
         </div>
