@@ -1,0 +1,23 @@
+{
+  "additions": 1800,
+  "author": {
+    "id": "U_kgDOBwOmHw",
+    "is_bot": false,
+    "login": "kpr-example",
+    "name": "Kieran Example"
+  },
+  "baseRefName": "main",
+  "changedFiles": 12,
+  "createdAt": "2026-10-28T09:00:00Z",
+  "deletions": 150,
+  "headRefName": "kpr/quarterly-report",
+  "headRefOid": "0123456789abcdef0123456789abcdef01234567",
+  "isDraft": true,
+  "reviewRequests": [
+    { "__typename": "Team", "name": "team-gluon", "slug": "Trackunit/team-gluon" },
+    { "__typename": "User", "login": "player-login" },
+    { "__typename": "User", "login": "someone-else" }
+  ],
+  "title": "feat: add the quarterly report",
+  "url": "https://github.com/Trackunit/state-of-code/pull/24"
+}
