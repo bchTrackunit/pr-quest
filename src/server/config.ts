@@ -27,7 +27,7 @@ export interface LoadConfigOptions {
   envFilePath?: string;
 }
 
-/** Reads configuration from the process environment, then `apps/pr-quest/.env.local`. */
+/** Reads configuration from the process environment, then `.env.local` at the repo root. */
 export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const env = options.env ?? process.env;
   const envFilePath = options.envFilePath ?? DEFAULT_ENV_FILE_PATH;

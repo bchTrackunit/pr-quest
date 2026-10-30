@@ -73,7 +73,7 @@ export class ReviewRunService {
       throw new ApiError(
         400,
         'missingConfig',
-        'Agent reviews need CURSOR_API_KEY. Add it to apps/pr-quest/.env.local and restart PR Quest.',
+        'Agent reviews need CURSOR_API_KEY. Add it to .env.local in the PR Quest folder and restart PR Quest.',
       );
     }
     const { headSha } = quest;
