@@ -26,6 +26,7 @@ const storedRun: StoredRun = {
       number: 1,
       githubUrl: 'https://github.com/o/r/pull/1',
     },
+    provider: 'cursor',
     agentId: 'bc-1',
     runId: 'run-abc',
     status: 'finished',
@@ -96,6 +97,43 @@ describe('StateStore', () => {
     const store = await StateStore.open(dir);
 
     expect(store.state.runs[0]?.run.quest).toEqual(storedRun.run.quest);
+  });
+
+  test('reads runs saved before providers existed as Cursor runs', async () => {
+    const { provider: _provider, ...legacyRun } = storedRun.run;
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 1,
+        game: initialGameState(),
+        runs: [{ run: legacyRun, quest: storedRun.quest }],
+      }),
+    );
+
+    const store = await StateStore.open(dir);
+
+    expect(store.state.runs[0]?.run.provider).toBe('cursor');
+  });
+
+  test('keeps the omitted files of a Claude result', async () => {
+    const claudeRun: StoredRun = {
+      ...storedRun,
+      run: {
+        ...storedRun.run,
+        provider: 'claude',
+        model: 'claude-sonnet-5-5',
+        result: {
+          summary: 'Fine.',
+          verdict: 'comment',
+          findings: [],
+          omitted: [{ file: 'yarn.lock', reason: 'lockfile' }],
+        },
+      },
+    };
+    const store = await StateStore.open(dir);
+    await store.update((state) => ({ ...state, runs: [claudeRun] }));
+
+    expect((await StateStore.open(dir)).state.runs).toEqual([claudeRun]);
   });
 
   test('writes through a temporary file and leaves only state.json behind', async () => {

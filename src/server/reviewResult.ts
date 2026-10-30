@@ -44,6 +44,21 @@ export const ReviewResultSchema = z.object({
   findings: z.array(FindingSchema).max(MAX_FINDINGS),
 });
 
+/**
+ * A result as the server stores it. `omitted` is the server's own record of what Claude never saw;
+ * `ReviewResultSchema` strips it, so a reviewer can't claim it.
+ */
+export const StoredReviewResultSchema = ReviewResultSchema.extend({
+  omitted: z
+    .array(
+      z.object({
+        file: z.string(),
+        reason: z.enum(['lockfile', 'generated', 'binary', 'tooLarge']),
+      }),
+    )
+    .optional(),
+});
+
 /** The agent's output: the review result plus the commit it says it reviewed. */
 const AgentOutputSchema = ReviewResultSchema.extend({
   reviewedSha: z.string().trim().toLowerCase().max(64).optional(),

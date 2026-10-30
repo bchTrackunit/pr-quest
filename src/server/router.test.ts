@@ -53,8 +53,12 @@ function send(
   headers: Record<string, string> = {},
   body?: string,
 ): Promise<TestResponse> {
+  const framed =
+    body === undefined
+      ? headers
+      : { ...headers, 'Content-Length': String(Buffer.byteLength(body)) };
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+    const req = request({ host: '127.0.0.1', port, method, path, headers: framed }, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => (text += chunk));
@@ -82,7 +86,7 @@ describe('router', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       ok: true,
-      config: { linearApiKey: false, cursorApiKey: true },
+      config: { linearApiKey: false, cursorApiKey: true, anthropicApiKey: false },
     });
   });
 
@@ -198,6 +202,45 @@ describe('router', () => {
     expect(response).toEqual({
       status: 415,
       body: { error: { code: 'badRequest', message: 'POST bodies must be application/json' } },
+    });
+  });
+
+  test.each([
+    ['PUT', '/api/settings'],
+    ['DELETE', '/api/settings/keys/cursor'],
+  ])('rejects a %s that is not JSON with 415', async (method, path) => {
+    const port = await startServer({});
+
+    const response = await send(port, method, path, { 'Content-Type': 'text/plain' }, '{}');
+
+    expect(response).toEqual({
+      status: 415,
+      body: { error: { code: 'badRequest', message: `${method} bodies must be application/json` } },
+    });
+  });
+
+  test.each(['PUT', 'DELETE'])('rejects a cross-site %s', async (method) => {
+    const port = await startServer({});
+
+    const response = await send(port, method, '/api/settings/keys/cursor', {
+      ...JSON_HEADERS,
+      'Sec-Fetch-Site': 'same-site',
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test('routes PUT and DELETE to their handlers', async () => {
+    const port = await startServer({});
+
+    const put = await send(port, 'PUT', '/api/settings', JSON_HEADERS, '{}');
+    const del = await send(port, 'DELETE', '/api/settings/keys/cursor', JSON_HEADERS);
+
+    expect(put.body).toMatchObject({
+      error: { message: 'Route "updateSettings" is not implemented yet' },
+    });
+    expect(del.body).toMatchObject({
+      error: { message: 'Route "removeApiKey" is not implemented yet' },
     });
   });
 

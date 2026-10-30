@@ -11,9 +11,18 @@ export const DEFAULT_UI_PORT = 4318;
 
 export const DEFAULT_ENV_FILE_PATH = fileURLToPath(new URL('../../.env.local', import.meta.url));
 
+/**
+ * The client ID of a GitHub OAuth App with Device Flow enabled, used when PR_QUEST_GITHUB_CLIENT_ID
+ * isn't set. A client ID isn't secret, so a team can commit theirs here.
+ */
+export const DEFAULT_GITHUB_CLIENT_ID = '';
+
 export interface AppConfig {
   linearApiKey?: string;
   cursorApiKey?: string;
+  anthropicApiKey?: string;
+  /** Enables "Sign in with GitHub"; without it PR Quest relies on the gh CLI's token. */
+  githubClientId?: string;
   host: typeof SERVER_HOST;
   port: number;
   uiPort: number;
@@ -41,6 +50,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   return {
     linearApiKey: read('LINEAR_API_KEY'),
     cursorApiKey: read('CURSOR_API_KEY'),
+    anthropicApiKey: read('ANTHROPIC_API_KEY'),
+    githubClientId: read('PR_QUEST_GITHUB_CLIENT_ID') ?? (DEFAULT_GITHUB_CLIENT_ID || undefined),
     host: SERVER_HOST,
     port: parsePort(read('PR_QUEST_PORT'), DEFAULT_SERVER_PORT, 'PR_QUEST_PORT'),
     uiPort: parsePort(read('PR_QUEST_UI_PORT'), DEFAULT_UI_PORT, 'PR_QUEST_UI_PORT'),

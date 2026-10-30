@@ -86,6 +86,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
     config: {
       linearApiKey: config.linearApiKey !== undefined,
       cursorApiKey: config.cursorApiKey !== undefined,
+      anthropicApiKey: config.anthropicApiKey !== undefined,
     },
   });
   if (!services) {

@@ -90,6 +90,8 @@ export class ReviewRunService {
         id: this.newId(),
         questId: quest.id,
         quest: runQuestOf(snapshot),
+        provider: 'cursor',
+        ...(options.model ? { model: options.model } : {}),
         status: 'queued',
         disposition: 'pending',
         startedAt: this.now().toISOString(),

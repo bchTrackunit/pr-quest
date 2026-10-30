@@ -11,7 +11,7 @@ import type {
   ReviewRunQuest,
 } from '../shared/api.ts';
 import { initialGameState, type GameState } from './gamification.ts';
-import { ReviewResultSchema, type ReviewTarget } from './reviewResult.ts';
+import { StoredReviewResultSchema, type ReviewTarget } from './reviewResult.ts';
 
 const STATE_FILE = 'state.json';
 
@@ -98,13 +98,16 @@ const StoredRunSchema = z.object({
         linearUrl: z.string().optional(),
       })
       .optional(),
+    /** Absent in state written before Claude reviews existed; those runs were Cursor's. */
+    provider: z.enum(['cursor', 'claude']).default('cursor'),
+    model: z.string().optional(),
     agentId: z.string().optional(),
     runId: z.string().optional(),
     status: z.enum(['queued', 'running', 'finished', 'error', 'startupFailed']),
     disposition: z.enum(['pending', 'posted', 'discarded']),
     startedAt: z.string(),
     finishedAt: z.string().optional(),
-    result: ReviewResultSchema.optional(),
+    result: StoredReviewResultSchema.optional(),
     error: z.object({ message: z.string(), retryable: z.boolean().optional() }).optional(),
     postedReviewUrl: z.string().optional(),
   }),

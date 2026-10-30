@@ -347,6 +347,7 @@ describe('ReviewRunService.resumeInterrupted', () => {
         number: quest.number,
         githubUrl: quest.githubUrl,
       },
+      provider: 'cursor',
       status: 'running',
       disposition: 'pending',
       startedAt: '2026-10-30T09:00:00.000Z',

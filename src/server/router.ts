@@ -116,14 +116,14 @@ async function handle(
     throw new ApiError(404, 'notFound', `No route for ${req.method} ${url.pathname}`);
   }
 
-  const isPost = req.method === 'POST';
-  if (isPost && !isJsonContentType(req.headers['content-type'])) {
-    throw new ApiError(415, 'badRequest', 'POST bodies must be application/json');
+  const changesState = isStateChanging(req.method);
+  if (changesState && !isJsonContentType(req.headers['content-type'])) {
+    throw new ApiError(415, 'badRequest', `${req.method} bodies must be application/json`);
   }
 
   const context: JsonHandlerContext = {
     params: match.params,
-    body: isPost ? await readJsonBody(req) : undefined,
+    body: changesState ? await readJsonBody(req) : undefined,
     req,
     res,
   };
@@ -189,9 +189,19 @@ function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<
     throw new ApiError(403, 'forbidden', 'Cross-origin requests are not allowed');
   }
   const site = req.headers['sec-fetch-site'];
-  if (req.method === 'POST' && site !== undefined && site !== 'same-origin' && site !== 'none') {
+  if (
+    isStateChanging(req.method) &&
+    site !== undefined &&
+    site !== 'same-origin' &&
+    site !== 'none'
+  ) {
     throw new ApiError(403, 'forbidden', 'Cross-site requests are not allowed');
   }
+}
+
+/** Everything but GET must be JSON and same-origin; GET routes never change anything. */
+function isStateChanging(method: string | undefined): boolean {
+  return method !== 'GET' && method !== 'HEAD';
 }
 
 /** Browsers can only send JSON cross-origin after a CORS preflight, which this server never grants. */
