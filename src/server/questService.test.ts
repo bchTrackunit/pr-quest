@@ -431,7 +431,37 @@ describe('QuestService rate limits', () => {
     expect(recordQueueChecked).not.toHaveBeenCalled();
   });
 
-  test('reads the primary reset from gh api rate_limit but not for secondary limits', async () => {
+  test('waits for the reset time in the response headers without calling /rate_limit', async () => {
+    const { quests } = await limitedService(
+      new GitHubApiError('API rate limit exceeded', {
+        httpStatus: 403,
+        rateLimit: { kind: 'primary', resetAt: new Date('2026-10-30T14:05:00.000Z') },
+      }),
+    );
+
+    const response = await quests.refresh();
+
+    expect(fetchRateLimitReset).not.toHaveBeenCalled();
+    expect(response.rateLimit).toEqual({
+      kind: 'primary',
+      limitedUntil: '2026-10-30T14:05:02.000Z',
+    });
+  });
+
+  test("waits out a secondary limit's Retry-After", async () => {
+    const { quests } = await limitedService(
+      new GitHubApiError('You have exceeded a secondary rate limit', {
+        httpStatus: 403,
+        rateLimit: { kind: 'secondary', resetAt: new Date('2026-10-30T14:00:20.000Z') },
+      }),
+    );
+
+    const response = await quests.refresh();
+
+    expect(response.rateLimit?.limitedUntil).toBe('2026-10-30T14:00:22.000Z');
+  });
+
+  test('reads a primary reset missing from the headers from /rate_limit, but not for secondary limits', async () => {
     const primary = await limitedService();
     await primary.quests.refresh();
     expect(fetchRateLimitReset).toHaveBeenCalledTimes(1);
