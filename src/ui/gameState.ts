@@ -58,6 +58,8 @@ export interface GameState {
   /** Set while GitHub rate limits the server's quest list. */
   questsRateLimit?: RateLimitStatus;
   runs: Record<string, ReviewRun>;
+  /** Loading the runs failed for a reason the quest board doesn't already show. */
+  runsError?: string;
   player?: PlayerState;
   playerError?: string;
   achievements: Array<AchievementStatus>;
@@ -120,6 +122,25 @@ export function upsertRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): Ga
     merged[run.id] = run;
   }
   return { ...state, runs: merged };
+}
+
+export function replaceRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): GameState {
+  return upsertRuns({ ...state, runs: {} }, runs);
+}
+
+/**
+ * After signing in or out the server serves another player's game, so everything that belonged
+ * to the previous one goes. The connection, sound and notification choices and an open settings
+ * popup stay.
+ */
+export function resetForAccountChange(state: GameState): GameState {
+  return {
+    ...createInitialGameState(state.notificationAccess),
+    connection: state.connection,
+    settings: state.settings,
+    soundEnabled: state.soundEnabled,
+    notificationsEnabled: state.notificationsEnabled,
+  };
 }
 
 export function markAchievementUnlocked(

@@ -47,6 +47,11 @@ export const App = () => {
       </header>
 
       <main className="app__main" id="quest-board" tabIndex={-1}>
+        {state.runsError ? (
+          <p className="notice notice--warning" role="alert">
+            Couldn&apos;t load your review runs: {state.runsError}
+          </p>
+        ) : null}
         <QuestBoard
           error={state.questsError}
           fetchedAt={state.questsFetchedAt}

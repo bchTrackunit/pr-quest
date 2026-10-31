@@ -30,6 +30,7 @@ vi.mock('./apiClient.ts', async (importOriginal) => {
     postRun: vi.fn(),
     discardRun: vi.fn(),
     fetchAuthStatus: vi.fn(),
+    signOut: vi.fn(),
     fetchSettings: vi.fn(),
     fetchModels: vi.fn(),
   };
@@ -318,6 +319,78 @@ describe('App', () => {
       unlockedAt: new Date().toISOString(),
     });
     expect(screen.getAllByText('Achievement unlocked: Team Player')).toHaveLength(1);
+  });
+
+  test("signing out clears the previous player's runs, errors, toasts and player", async () => {
+    const user = userEvent.setup();
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'oauth' },
+      device: { state: 'idle' },
+    });
+    api.fetchRuns.mockResolvedValue({ runs: [makeRun({ status: 'running' })] });
+    api.startReview.mockRejectedValue(new ApiRequestError(409, 'conflict', 'Already running'));
+    await renderApp();
+    expect(await screen.findByText('Agent on quest')).toBeTruthy();
+    emit({
+      type: 'runUpdated',
+      run: makeRun({ id: 'run-old', status: 'error', error: { message: 'Agent crashed' } }),
+    });
+    expect(within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'));
+
+    const notSignedIn = new ApiRequestError(401, 'notSignedIn', 'Sign in with GitHub first.');
+    api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
+    api.fetchQuests.mockRejectedValue(notSignedIn);
+    api.fetchRuns.mockRejectedValue(notSignedIn);
+    api.fetchPlayer.mockRejectedValue(notSignedIn);
+    api.fetchAchievements.mockRejectedValue(notSignedIn);
+    const streamsBefore = MockEventSource.instances.length;
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
+    expect(await screen.findAllByText(/Sign in with GitHub first/)).not.toHaveLength(0);
+    expect(screen.queryByText('Agent on quest')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Add the fleet health widget' })).toBeNull();
+    expect(screen.queryByText('Agent crashed')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Level 3' })).toBeNull();
+    expect(MockEventSource.instances).toHaveLength(streamsBefore + 1);
+    expect(MockEventSource.instances.at(streamsBefore - 1)?.isClosed).toBe(true);
+  });
+
+  test("a late response for the previous account doesn't come back after the switch", async () => {
+    const user = userEvent.setup();
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'oauth' },
+      device: { state: 'idle' },
+    });
+    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () =>
+      undefined;
+    api.fetchRuns.mockReturnValue(
+      new Promise((resolver) => {
+        resolveRuns = resolver;
+      }),
+    );
+    await renderApp();
+
+    api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
+    api.fetchRuns.mockResolvedValue({ runs: [] });
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: /Sign in with GitHub/ });
+
+    act(() => resolveRuns({ runs: [makeRun({ status: 'running' })] }));
+    await act(() => Promise.resolve());
+    expect(screen.queryByText('Agent on quest')).toBeNull();
+  });
+
+  test('says so when the runs fail to load', async () => {
+    api.fetchRuns.mockRejectedValue(new ApiRequestError(500, 'internal', 'Disk full'));
+    await renderApp();
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      "Couldn't load your review runs: Disk full",
+    );
   });
 
   test('shows the quest error state and recovers on retry', async () => {

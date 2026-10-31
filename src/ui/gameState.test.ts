@@ -5,8 +5,11 @@ import {
   applyServerEvent,
   createInitialGameState,
   groupFindings,
+  replaceRuns,
+  resetForAccountChange,
   selectRunForQuest,
   sortQuests,
+  upsertRun,
 } from './gameState.ts';
 import {
   makeAchievements,
@@ -15,6 +18,43 @@ import {
   makeResult,
   makeRun,
 } from './test-utils/fixtures.ts';
+
+describe('resetForAccountChange', () => {
+  test("drops the previous player's game but keeps the player's preferences", () => {
+    const state = {
+      ...upsertRun(createInitialGameState('granted'), makeRun()),
+      quests: [makeQuest()],
+      questsLoad: 'ready' as const,
+      player: makePlayer(),
+      achievements: makeAchievements(),
+      toasts: [{ id: 'toast-1', kind: 'error' as const, title: 'Old' }],
+      xpPopups: [{ id: 'xp-1', amount: 10, reason: 'approved' as const }],
+      questActions: { q: 'review' as const },
+      questActionErrors: { q: { message: 'Old error' } },
+      openRunId: 'run-1',
+      approveQuestId: 'q',
+      runsError: 'Old runs error',
+      connection: 'open' as const,
+      settings: { section: 'github' as const },
+      soundEnabled: false,
+    };
+
+    expect(resetForAccountChange(state)).toEqual({
+      ...createInitialGameState('granted'),
+      connection: 'open',
+      settings: { section: 'github' },
+      soundEnabled: false,
+    });
+  });
+});
+
+describe('replaceRuns', () => {
+  test('drops runs missing from the new list', () => {
+    const state = upsertRun(createInitialGameState('default'), makeRun({ id: 'old' }));
+    const next = replaceRuns(state, [makeRun({ id: 'new' })]);
+    expect(Object.keys(next.runs)).toEqual(['new']);
+  });
+});
 
 describe('selectRunForQuest', () => {
   const quest = makeQuest();

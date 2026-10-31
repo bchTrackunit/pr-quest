@@ -48,10 +48,20 @@ export function parseServerEvent(data: string): ServerEvent | undefined {
   return undefined;
 }
 
+export interface EventStream {
+  /** Closes the stream for good. */
+  close: () => void;
+  /**
+   * Drops the current connection and opens a new one right away, skipping any backoff, e.g. after
+   * the GitHub account changed and the old stream belongs to another player. The caller resyncs
+   * itself, so the new open is not reported as a reconnect.
+   */
+  reconnectNow: () => void;
+}
+
 /**
  * Opens the event stream and keeps it open. The browser's built-in retry uses a fixed delay, so
  * on error the source is closed and reopened with exponential backoff instead.
- * Returns a function that closes the stream for good.
  */
 export function connectEventStream({
   url,
@@ -60,7 +70,7 @@ export function connectEventStream({
   createSource = (target) => new EventSource(target),
   initialDelayMs = 1000,
   maxDelayMs = 30_000,
-}: EventStreamOptions): () => void {
+}: EventStreamOptions): EventStream {
   let source: EventSourceLike | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let delay = initialDelayMs;
@@ -93,13 +103,31 @@ export function connectEventStream({
     };
   };
 
-  open();
-
-  return () => {
-    closed = true;
+  const stop = (): void => {
     if (retryTimer !== undefined) {
       clearTimeout(retryTimer);
+      retryTimer = undefined;
     }
-    source?.close();
+    const current = source;
+    source = undefined;
+    current?.close();
+  };
+
+  open();
+
+  return {
+    close: () => {
+      closed = true;
+      stop();
+    },
+    reconnectNow: () => {
+      if (closed) {
+        return;
+      }
+      stop();
+      delay = initialDelayMs;
+      hasDropped = false;
+      open();
+    },
   };
 }
