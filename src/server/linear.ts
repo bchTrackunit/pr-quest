@@ -9,7 +9,8 @@ export interface LinearReviewInfo {
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface LinearReviewClientOptions {
-  apiKey?: string;
+  /** A function is read on every call, so a key saved in the settings takes effect right away. */
+  apiKey?: string | (() => string | undefined);
   fetch?: FetchLike;
   now?: () => number;
   ttlMs?: number;
@@ -54,7 +55,7 @@ type ReviewInfoMap = Map<string, LinearReviewInfo>;
  * Any failure degrades to `undefined` so quests still load from GitHub alone.
  */
 export class LinearReviewClient {
-  private readonly apiKey?: string;
+  private readonly apiKey: () => string | undefined;
   private readonly fetch: FetchLike;
   private readonly now: () => number;
   private readonly ttlMs: number;
@@ -66,7 +67,8 @@ export class LinearReviewClient {
   private nextId = 1;
 
   public constructor(options: LinearReviewClientOptions = {}) {
-    this.apiKey = options.apiKey;
+    const { apiKey } = options;
+    this.apiKey = typeof apiKey === 'function' ? apiKey : () => apiKey;
     this.fetch = options.fetch ?? ((url, init) => fetch(url, init));
     this.now = options.now ?? Date.now;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
@@ -76,13 +78,14 @@ export class LinearReviewClient {
 
   /** Pending reviews keyed by normalized GitHub PR URL, or `undefined` when Linear is unavailable. */
   public async getReviewInfo(): Promise<ReviewInfoMap | undefined> {
-    if (!this.apiKey) {
+    const apiKey = this.apiKey();
+    if (!apiKey) {
       return undefined;
     }
     if (this.cache && this.now() < this.cache.expiresAt) {
       return this.cache.value;
     }
-    this.inFlight ??= this.load(this.apiKey).finally(() => {
+    this.inFlight ??= this.load(apiKey).finally(() => {
       this.inFlight = undefined;
     });
     return this.inFlight;

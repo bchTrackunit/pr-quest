@@ -457,6 +457,8 @@ export type ApiErrorCode =
   /** The PR's head commit is no longer the `headSha` the approval named; the quest was updated. */
   | 'headChanged'
   | 'missingConfig'
+  /** HTTP 401: there is no GitHub token; sign in with GitHub (or `gh auth login`) first. */
+  | 'notSignedIn'
   | 'upstreamFailed'
   /** GitHub is rate limited and there are no cached quests to serve yet. */
   | 'rateLimited'

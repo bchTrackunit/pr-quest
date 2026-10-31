@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ReviewRun } from '../shared/api.ts';
 import { EventHub } from './events.ts';
 import { GameService } from './game.ts';
-import { GitHubApiError } from './githubApi.ts';
+import { GitHubApiError, NotSignedInError } from './githubApi.ts';
 import { type GitHubClient, type ReviewRequestData } from './github.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
 import { LinearReviewClient } from './linear.ts';
@@ -153,6 +153,14 @@ describe('GET /api/quests', () => {
       source: 'github',
       quests: [{ id: DIRECT_ID, requestKind: 'direct' }, { requestKind: 'team' }],
     });
+  });
+
+  test('asks the player to sign in when there is no GitHub token', async () => {
+    github.fetchReviewRequests.mockRejectedValue(new NotSignedInError());
+
+    const response = await send('GET', '/api/quests');
+
+    expect(response).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
   });
 
   test('reports gh failures as upstreamFailed', async () => {
