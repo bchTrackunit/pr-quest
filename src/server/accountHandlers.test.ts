@@ -351,21 +351,40 @@ describe('request checks on every settings, key and auth write', () => {
     ['POST', '/api/auth/sign-out', undefined],
   ];
 
+  const expectNothingChanged = (): void => {
+    expect([...secrets]).toEqual([['anthropic', SAVED_KEY]]);
+    expect(settings).toEqual({ reviewProvider: 'cursor', models: {} });
+    expect(services.settings.update).not.toHaveBeenCalled();
+    expect(services.deviceFlow.start).not.toHaveBeenCalled();
+    expect(services.deviceFlow.cancel).not.toHaveBeenCalled();
+    expect(services.auth.signOut).not.toHaveBeenCalled();
+  };
+
   test.each(WRITES)('%s %s needs a JSON content type', async (method, path, body) => {
     const response = await send(method, path, { headers: { 'Content-Type': 'text/plain' }, body });
 
     expect(response.status).toBe(415);
-    expect(secrets.get('anthropic')).toBe(SAVED_KEY);
-    expect(secrets.has('cursor')).toBe(false);
+    expectNothingChanged();
   });
 
-  test.each(WRITES)('%s %s refuses other origins', async (method, path, body) => {
+  test.each(WRITES)('%s %s refuses other origins and changes nothing', async (method, path, body) => {
     const response = await send(method, path, {
       headers: { ...JSON_HEADERS, Origin: 'http://127.0.0.1:9999' },
       body,
     });
 
     expect(response.status).toBe(403);
+    expectNothingChanged();
+  });
+
+  test.each(WRITES)('%s %s refuses Origin: null and changes nothing', async (method, path, body) => {
+    const response = await send(method, path, {
+      headers: { ...JSON_HEADERS, Origin: 'null' },
+      body,
+    });
+
+    expect(response.status).toBe(403);
+    expectNothingChanged();
   });
 
   test.each(WRITES)('%s %s refuses cross-site requests', async (method, path, body) => {
@@ -375,8 +394,7 @@ describe('request checks on every settings, key and auth write', () => {
     });
 
     expect(response.status).toBe(403);
-    expect(services.auth.signOut).not.toHaveBeenCalled();
-    expect(services.deviceFlow.start).not.toHaveBeenCalled();
+    expectNothingChanged();
   });
 
   test.each(['/api/settings', '/api/settings/models?provider=cursor', '/api/auth/status'])(
@@ -385,6 +403,18 @@ describe('request checks on every settings, key and auth write', () => {
       const response = await send('GET', path, { headers: { Origin: 'https://evil.example' } });
 
       expect(response.status).toBe(403);
+    },
+  );
+
+  test.each(['cross-site', 'same-site'])(
+    'GET /api/settings/models refuses Sec-Fetch-Site: %s without asking the provider',
+    async (site) => {
+      const response = await send('GET', '/api/settings/models?provider=claude', {
+        headers: { 'Sec-Fetch-Site': site },
+      });
+
+      expect(response.status).toBe(403);
+      expect(services.models.list).not.toHaveBeenCalled();
     },
   );
 });
