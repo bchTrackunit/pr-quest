@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { createHandlers } from './handlers.ts';
 import {
+  ApiError,
   createRouter,
   loopbackOrigins,
   matchRoute,
@@ -98,6 +99,23 @@ describe('router', () => {
     expect(response.status).toBe(501);
     expect(response.body).toEqual({
       error: { code: 'notImplemented', message: 'Route "startReview" is not implemented yet' },
+    });
+  });
+
+  test('names the provider whose configuration is missing', async () => {
+    const port = await startServer({
+      startReview: () => {
+        throw new ApiError(400, 'missingConfig', 'Add an Anthropic API key', { provider: 'claude' });
+      },
+    });
+
+    const response = await send(port, 'POST', START_REVIEW, JSON_HEADERS);
+
+    expect(response).toEqual({
+      status: 400,
+      body: {
+        error: { code: 'missingConfig', message: 'Add an Anthropic API key', provider: 'claude' },
+      },
     });
   });
 

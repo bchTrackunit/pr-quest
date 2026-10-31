@@ -96,6 +96,11 @@ export interface ClaudeReviewerOptions {
   diffBudgetChars?: number;
 }
 
+export interface ClaudeReviewHooks {
+  /** Called once the diff is ready, right before the request goes to Claude. */
+  onRequest?: () => Promise<void>;
+}
+
 export const anthropicCreateMessage: CreateMessage = (apiKey, params) =>
   new Anthropic({ apiKey, timeout: REQUEST_TIMEOUT_MS }).messages.create(params);
 
@@ -119,6 +124,7 @@ export class ClaudeReviewer {
     quest: QuestSnapshot,
     headSha: string,
     model: string | undefined,
+    hooks: ClaudeReviewHooks = {},
   ): Promise<ReviewResult> {
     const apiKey = this.options.apiKey();
     if (!apiKey) {
@@ -134,6 +140,7 @@ export class ClaudeReviewer {
     this.options.log(
       `Claude (${modelId}) is reviewing ${budgeted.files.length} files of ${quest.id} at ${headSha}; ${budgeted.omitted.length} left out`,
     );
+    await hooks.onRequest?.();
     const message = await this.send(apiKey, {
       model: modelId,
       max_tokens: MAX_OUTPUT_TOKENS,

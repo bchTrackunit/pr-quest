@@ -1,20 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 
-import type { Quest, ReviewRun, ReviewRunStatus } from '../shared/api.ts';
+import type {
+  Quest,
+  ReviewProvider,
+  ReviewResult,
+  ReviewRun,
+  ReviewRunStatus,
+} from '../shared/api.ts';
+import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL, type ClaudeReviewer } from './claudeReview.ts';
 import type { EventSink, GameService } from './game.ts';
 import { buildReviewPrompt, parseReviewResult } from './reviewResult.ts';
 import { ApiError } from './router.ts';
+import type { AppSettings } from './settings.ts';
 import { runQuestOf, type QuestSnapshot, type StateStore, type StoredRun } from './store.ts';
 
 const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;
+const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
+
+export type ClaudeRunner = Pick<ClaudeReviewer, 'hasKey' | 'review'>;
 
 export interface ReviewRunServiceOptions {
   store: StateStore;
   events: EventSink;
   game: Pick<GameService, 'recordAgentReviewFinished'>;
-  apiKey?: string;
+  /** Read per review, so a key saved in the settings takes effect without a restart. */
+  cursorApiKey: () => string | undefined;
+  /** The selected provider and models; Cursor with its default model when omitted. */
+  settings?: () => AppSettings;
+  claude?: ClaudeRunner;
   log: (message: string) => void;
   now?: () => Date;
   newId?: () => string;
@@ -29,12 +44,17 @@ const isActive = (run: ReviewRun): boolean => ACTIVE_STATUSES.includes(run.statu
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-/** Launches Cursor cloud review agents, tracks their runs and persists them across restarts. */
+/**
+ * Launches reviews by Cursor cloud agents or Claude, tracks their runs and persists them across
+ * restarts. Both providers review the quest's head commit and share the run lifecycle.
+ */
 export class ReviewRunService {
   private readonly store: StateStore;
   private readonly events: EventSink;
   private readonly game: Pick<GameService, 'recordAgentReviewFinished'>;
-  private readonly apiKey?: string;
+  private readonly cursorApiKey: () => string | undefined;
+  private readonly settings: () => AppSettings;
+  private readonly claude?: ClaudeRunner;
   private readonly log: (message: string) => void;
   private readonly now: () => Date;
   private readonly newId: () => string;
@@ -45,7 +65,9 @@ export class ReviewRunService {
     this.store = options.store;
     this.events = options.events;
     this.game = options.game;
-    this.apiKey = options.apiKey;
+    this.cursorApiKey = options.cursorApiKey;
+    this.settings = options.settings ?? (() => DEFAULT_SETTINGS);
+    this.claude = options.claude;
     this.log = options.log;
     this.now = options.now ?? (() => new Date());
     this.newId = options.newId ?? (() => `review-${randomUUID()}`);
@@ -68,14 +90,13 @@ export class ReviewRunService {
   }
 
   public async start(quest: Quest, options: StartReviewOptions = {}): Promise<ReviewRun> {
-    const apiKey = this.apiKey;
-    if (!apiKey) {
-      throw new ApiError(
-        400,
-        'missingConfig',
-        'Agent reviews need CURSOR_API_KEY. Add it to .env.local in the PR Quest folder and restart PR Quest.',
-      );
-    }
+    const settings = this.settings();
+    const provider = settings.reviewProvider;
+    const launch = this.launcherFor(provider);
+    const model =
+      options.model ??
+      settings.models[provider] ??
+      (provider === 'claude' ? DEFAULT_CLAUDE_MODEL : undefined);
     const { headSha } = quest;
     if (!headSha) {
       throw new ApiError(
@@ -90,8 +111,8 @@ export class ReviewRunService {
         id: this.newId(),
         questId: quest.id,
         quest: runQuestOf(snapshot),
-        provider: 'cursor',
-        ...(options.model ? { model: options.model } : {}),
+        provider,
+        ...(model ? { model } : {}),
         status: 'queued',
         disposition: 'pending',
         startedAt: this.now().toISOString(),
@@ -105,22 +126,59 @@ export class ReviewRunService {
       return { ...state, runs: [...state.runs, stored].slice(-MAX_STORED_RUNS) };
     });
     this.events.broadcast({ type: 'runUpdated', run: stored.run });
-    this.track(this.execute(stored, headSha, apiKey, options.model));
+    this.track(launch(stored, headSha, model));
     return stored.run;
+  }
+
+  /** Checks the provider's key up front, so a missing one is refused before anything is queued. */
+  private launcherFor(
+    provider: ReviewProvider,
+  ): (stored: StoredRun, headSha: string, model: string | undefined) => Promise<void> {
+    if (provider === 'claude') {
+      const claude = this.claude;
+      if (!claude?.hasKey()) {
+        throw new ApiError(
+          400,
+          'missingConfig',
+          'Claude reviews need an Anthropic API key. Add it in Settings.',
+          { provider },
+        );
+      }
+      return (stored, headSha, model) => this.executeClaude(claude, stored, headSha, model);
+    }
+    const apiKey = this.cursorApiKey();
+    if (!apiKey) {
+      throw new ApiError(
+        400,
+        'missingConfig',
+        'Cursor reviews need a Cursor API key. Add it in Settings.',
+        { provider },
+      );
+    }
+    return (stored, headSha, model) => this.execute(stored, headSha, apiKey, model);
   }
 
   /** After a restart: reattach to runs that were still going, or fail the ones that never started. */
   public async resumeInterrupted(): Promise<void> {
     const interrupted = this.store.state.runs.filter((entry) => isActive(entry.run));
     for (const { run } of interrupted) {
+      if (run.provider === 'claude') {
+        await this.fail(
+          run.id,
+          'error',
+          'The server restarted while Claude was reviewing, so the review was lost. Send it again.',
+        );
+        continue;
+      }
       if (run.agentId && run.runId) {
-        if (this.apiKey) {
-          this.track(this.reattach(run.id, run.runId, run.agentId, this.apiKey));
+        const apiKey = this.cursorApiKey();
+        if (apiKey) {
+          this.track(this.reattach(run.id, run.runId, run.agentId, apiKey));
         } else {
           await this.fail(
             run.id,
             'error',
-            'The server restarted without CURSOR_API_KEY, so it cannot follow this agent run',
+            'The server restarted without a Cursor API key (Settings or CURSOR_API_KEY), so it cannot follow this agent run',
           );
         }
         continue;
@@ -246,6 +304,30 @@ export class ReviewRunService {
     }
   }
 
+  /** Claude reads the diff of the head commit, so its findings line up with the posted `commit_id`. */
+  private async executeClaude(
+    claude: ClaudeRunner,
+    stored: StoredRun,
+    headSha: string,
+    model: string | undefined,
+  ): Promise<void> {
+    const { id } = stored.run;
+    try {
+      const result = await claude.review(stored.quest, headSha, model, {
+        onRequest: async () => {
+          await this.patch(id, { status: 'running' });
+        },
+      });
+      await this.finish(id, result);
+    } catch (error) {
+      if (error instanceof ClaudeReviewError && error.stage === 'startup') {
+        await this.fail(id, 'startupFailed', error.message, error.retryable);
+      } else {
+        await this.fail(id, 'error', errorMessage(error));
+      }
+    }
+  }
+
   private async reattach(
     id: string,
     runId: string,
@@ -285,7 +367,6 @@ export class ReviewRunService {
     result: RunResult,
     fallbackText: string | undefined,
   ): Promise<void> {
-    const finishedAt = this.now().toISOString();
     if (result.status !== 'finished') {
       const message =
         result.status === 'cancelled'
@@ -309,8 +390,12 @@ export class ReviewRunService {
       );
       return;
     }
-    await this.patch(id, { status: 'finished', finishedAt, result: parsed.result });
-    this.log(`review ${id}: finished with ${parsed.result.findings.length} findings`);
+    await this.finish(id, parsed.result);
+  }
+
+  private async finish(id: string, result: ReviewResult): Promise<void> {
+    await this.patch(id, { status: 'finished', finishedAt: this.now().toISOString(), result });
+    this.log(`review ${id}: finished with ${result.findings.length} findings`);
     await this.game.recordAgentReviewFinished().catch((error: unknown) => {
       this.log(`review ${id}: could not count the agent review: ${errorMessage(error)}`);
     });

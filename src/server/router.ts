@@ -13,15 +13,25 @@ import {
 const MAX_BODY_BYTES = 1024 * 1024;
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost']);
 
+/** Extra fields of an error body beyond `code` and `message`. */
+export type ApiErrorDetails = Omit<ApiErrorResponse['error'], 'code' | 'message'>;
+
 export class ApiError extends Error {
   public readonly status: number;
   public readonly code: ApiErrorCode;
+  public readonly details: ApiErrorDetails;
 
-  public constructor(status: number, code: ApiErrorCode, message: string) {
+  public constructor(
+    status: number,
+    code: ApiErrorCode,
+    message: string,
+    details: ApiErrorDetails = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -93,11 +103,11 @@ export function createRouter(
   return (req, res) => {
     handle(handlers, allowedOrigins, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
-        sendError(res, error.status, error.code, error.message);
+        sendError(res, error.status, { ...error.details, code: error.code, message: error.message });
         return;
       }
       options.onUnexpectedError?.(error);
-      sendError(res, 500, 'internal', 'Internal server error');
+      sendError(res, 500, { code: 'internal', message: 'Internal server error' });
     });
   };
 }
@@ -254,11 +264,11 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.end(JSON.stringify(body));
 }
 
-function sendError(res: ServerResponse, status: number, code: ApiErrorCode, message: string): void {
+function sendError(res: ServerResponse, status: number, error: ApiErrorResponse['error']): void {
   if (res.headersSent) {
     res.end();
     return;
   }
-  const body: ApiErrorResponse = { error: { code, message } };
+  const body: ApiErrorResponse = { error };
   sendJson(res, status, body);
 }

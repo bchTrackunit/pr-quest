@@ -4,8 +4,19 @@ import { join } from 'node:path';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { Quest, ReviewRun, ServerEvent } from '../shared/api.ts';
-import { ReviewRunService, type ReviewRunServiceOptions } from './reviewRuns.ts';
+import type {
+  Quest,
+  ReviewProvider,
+  ReviewResult,
+  ReviewRun,
+  ServerEvent,
+} from '../shared/api.ts';
+import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL } from './claudeReview.ts';
+import {
+  ReviewRunService,
+  type ClaudeRunner,
+  type ReviewRunServiceOptions,
+} from './reviewRuns.ts';
 import { StateStore, type StoredRun } from './store.ts';
 
 vi.mock('@cursor/sdk', () => {
@@ -106,7 +117,7 @@ function service(overrides: Partial<ReviewRunServiceOptions> = {}): ReviewRunSer
     store,
     events: { broadcast: (event) => events.push(event) },
     game: { recordAgentReviewFinished },
-    apiKey: 'cursor-key',
+    cursorApiKey: () => 'cursor-key',
     log: (message) => logs.push(message),
     now: () => new Date('2026-10-30T10:00:00.000Z'),
     newId: () => `review-${++idCounter}`,
@@ -329,10 +340,170 @@ describe('ReviewRunService.start', () => {
     await runs.whenIdle();
   });
 
-  test('requires a Cursor API key', async () => {
-    await expect(service({ apiKey: undefined }).start(quest)).rejects.toMatchObject({
+  test('requires a Cursor API key and names the provider', async () => {
+    await expect(service({ cursorApiKey: () => undefined }).start(quest)).rejects.toMatchObject({
       code: 'missingConfig',
+      details: { provider: 'cursor' },
     });
+    expect(store.state.runs).toEqual([]);
+  });
+
+  test('reads the Cursor key for each review, so a key saved in Settings works right away', async () => {
+    fakeAgent();
+    let key: string | undefined;
+    const runs = service({ cursorApiKey: () => key });
+    await expect(runs.start(quest)).rejects.toMatchObject({ code: 'missingConfig' });
+
+    key = 'saved-key';
+    await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'saved-key' }));
+  });
+
+  test('uses the Cursor model chosen in the settings when the request names none', async () => {
+    fakeAgent();
+    const runs = service({
+      settings: () => ({ reviewProvider: 'cursor', models: { cursor: 'composer-2' } }),
+    });
+
+    const run = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(run).toMatchObject({ provider: 'cursor', model: 'composer-2' });
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: { id: 'composer-2' } }),
+    );
+  });
+});
+
+describe('ReviewRunService with Claude', () => {
+  const RESULT: ReviewResult = {
+    summary: 'Adds a cache.',
+    verdict: 'comment',
+    findings: [],
+    omitted: [{ file: 'yarn.lock', reason: 'lockfile' }],
+  };
+
+  function claudeService(
+    review: ClaudeRunner['review'] = async (_quest, _sha, _model, hooks) => {
+      await hooks?.onRequest?.();
+      return RESULT;
+    },
+    options: { hasKey?: boolean; models?: Partial<Record<ReviewProvider, string>> } = {},
+  ) {
+    const claude = { hasKey: () => options.hasKey ?? true, review: vi.fn(review) };
+    const runs = service({
+      settings: () => ({ reviewProvider: 'claude', models: options.models ?? {} }),
+      claude,
+    });
+    return { runs, claude };
+  }
+
+  test('goes from queued through running to finished, marked with provider and model', async () => {
+    const { runs, claude } = claudeService();
+
+    const run = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(run).toMatchObject({ provider: 'claude', model: DEFAULT_CLAUDE_MODEL, status: 'queued' });
+    expect(runs.get(run.id)?.run).toMatchObject({
+      status: 'finished',
+      finishedAt: '2026-10-30T10:00:00.000Z',
+      result: RESULT,
+    });
+    expect(runStatuses()).toEqual(['queued', 'running', 'finished']);
+    expect(claude.review).toHaveBeenCalledWith(
+      expect.objectContaining({ id: quest.id, headSha: HEAD_SHA, targetBranch: 'master' }),
+      HEAD_SHA,
+      DEFAULT_CLAUDE_MODEL,
+      expect.anything(),
+    );
+    expect(createMock).not.toHaveBeenCalled();
+    expect(recordAgentReviewFinished).toHaveBeenCalledOnce();
+  });
+
+  test('prefers the requested model over the one in the settings', async () => {
+    const { runs, claude } = claudeService(undefined, { models: { claude: 'claude-haiku-5-5' } });
+
+    const run = await runs.start(quest, { model: 'claude-opus-5-5' });
+    await runs.whenIdle();
+
+    expect(run.model).toBe('claude-opus-5-5');
+    expect(claude.review.mock.calls[0]?.[2]).toBe('claude-opus-5-5');
+  });
+
+  test('asks for the Anthropic key before queueing anything', async () => {
+    const { runs, claude } = claudeService(undefined, { hasKey: false });
+
+    await expect(runs.start(quest)).rejects.toMatchObject({
+      status: 400,
+      code: 'missingConfig',
+      details: { provider: 'claude' },
+    });
+    expect(store.state.runs).toEqual([]);
+    expect(claude.review).not.toHaveBeenCalled();
+  });
+
+  test('marks startupFailed with retryable when Claude could not start', async () => {
+    const { runs } = claudeService(async () => {
+      throw new ClaudeReviewError('startup', 'Anthropic is rate limiting', true);
+    });
+
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(runs.get(id)?.run).toMatchObject({
+      status: 'startupFailed',
+      error: { message: 'Anthropic is rate limiting', retryable: true },
+    });
+    expect(recordAgentReviewFinished).not.toHaveBeenCalled();
+  });
+
+  test('marks error without retryable when Claude answered with no usable review', async () => {
+    const { runs } = claudeService(async (_quest, _sha, _model, hooks) => {
+      await hooks?.onRequest?.();
+      throw new ClaudeReviewError('output', 'Claude ran out of output tokens');
+    });
+
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(runs.get(id)?.run).toMatchObject({
+      status: 'error',
+      error: { message: 'Claude ran out of output tokens' },
+    });
+    expect(runs.get(id)?.run.error).not.toHaveProperty('retryable');
+  });
+
+  test('fails a Claude run that a restart interrupted, without asking Cursor', async () => {
+    await store.update((state) => ({
+      ...state,
+      runs: [
+        {
+          run: {
+            id: 'review-old',
+            questId: quest.id,
+            quest: { title: quest.title, repo: quest.repo, number: 7, githubUrl: quest.githubUrl },
+            provider: 'claude',
+            model: DEFAULT_CLAUDE_MODEL,
+            status: 'running',
+            disposition: 'pending',
+            startedAt: '2026-10-30T09:00:00.000Z',
+          },
+          quest: { ...quest, headSha: HEAD_SHA },
+        },
+      ],
+    }));
+    const { runs } = claudeService();
+
+    await runs.resumeInterrupted();
+
+    expect(runs.get('review-old')?.run).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringMatching(/restarted while Claude/) },
+    });
+    expect(getRunMock).not.toHaveBeenCalled();
   });
 });
 
@@ -394,7 +565,7 @@ describe('ReviewRunService.resumeInterrupted', () => {
       ...state,
       runs: [stored({ agentId: 'bc-9', runId: 'run-9' })],
     }));
-    const runs = service({ apiKey: undefined });
+    const runs = service({ cursorApiKey: () => undefined });
 
     await runs.resumeInterrupted();
 

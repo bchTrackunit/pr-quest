@@ -468,6 +468,8 @@ export interface ApiErrorResponse {
   error: {
     code: ApiErrorCode;
     message: string;
+    /** With `missingConfig`: the review provider that needs a key, so the UI can open Settings. */
+    provider?: ReviewProvider;
   };
 }
 

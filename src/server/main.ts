@@ -40,7 +40,7 @@ async function main(): Promise<void> {
     store,
     events,
     game,
-    apiKey: config.cursorApiKey,
+    cursorApiKey: () => config.cursorApiKey,
     log: info,
   });
   const quests = new QuestService({

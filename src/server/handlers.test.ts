@@ -108,7 +108,13 @@ beforeEach(async () => {
       inlineCommentsDropped: false,
     })),
   };
-  const runs = new ReviewRunService({ store, events, game, apiKey: 'key', log: () => undefined });
+  const runs = new ReviewRunService({
+    store,
+    events,
+    game,
+    cursorApiKey: () => 'key',
+    log: () => undefined,
+  });
   const linear = new LinearReviewClient();
   const quests = new QuestService({
     github,

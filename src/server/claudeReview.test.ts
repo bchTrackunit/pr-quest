@@ -106,6 +106,23 @@ describe('ClaudeReviewer', () => {
     });
   });
 
+  test('reports when the diff has been read and the request goes to Claude', async () => {
+    const { reviewer, createMessage, fetchDiff } = setup();
+    const order: Array<string> = [];
+    fetchDiff.mockImplementationOnce(async () => {
+      order.push('diff');
+      return SOURCE_DIFF;
+    });
+    createMessage.mockImplementationOnce(async () => {
+      order.push('claude');
+      return toolMessage(REVIEW);
+    });
+
+    await reviewer.review(quest, HEAD, undefined, { onRequest: async () => void order.push('request') });
+
+    expect(order).toEqual(['diff', 'request', 'claude']);
+  });
+
   test('uses the chosen model', async () => {
     const { reviewer, params } = setup();
 
