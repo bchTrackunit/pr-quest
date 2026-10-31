@@ -2,10 +2,14 @@ import {
   API_ROUTES,
   buildApiPath,
   isApiErrorResponse,
+  type ApiKeyName,
   type ApproveRequest,
   type ApproveResponse,
+  type AuthStatusResponse,
+  type DeviceFlowResponse,
   type HealthResponse,
   type ListAchievementsResponse,
+  type ListModelsResponse,
   type ListQuestsResponse,
   type ListRunsResponse,
   type PlayerResponse,
@@ -13,10 +17,13 @@ import {
   type PostReviewResponse,
   type RequestBody,
   type ResponseBody,
+  type ReviewProvider,
   type RouteName,
   type RouteParams,
   type RunResponse,
+  type SettingsResponse,
   type StartReviewRequest,
+  type UpdateSettingsRequest,
 } from '../shared/api.ts';
 
 type JsonRouteName = Exclude<RouteName, 'events'>;
@@ -42,19 +49,19 @@ export interface ApiRequestOptions<TName extends JsonRouteName> {
 
 /**
  * Calls a JSON route from the contract. Rejects with `ApiRequestError` on non-2xx responses.
- * Every POST is JSON, even without a body: the server rejects other content types.
+ * Every POST, PUT and DELETE is JSON, even without a body: the server rejects other content types.
  */
 export async function apiRequest<TName extends JsonRouteName>(
   name: TName,
   options: ApiRequestOptions<TName>,
 ): Promise<ResponseBody<TName>> {
   const { method } = API_ROUTES[name];
-  const isPost = method === 'POST';
+  const isWrite = method !== 'GET';
   const search = options.query ? `?${new URLSearchParams(options.query).toString()}` : '';
   const response = await fetch(`${buildApiPath(name, options.params)}${search}`, {
     method,
-    headers: isPost ? { 'Content-Type': 'application/json' } : undefined,
-    body: isPost ? JSON.stringify(options.body ?? {}) : undefined,
+    headers: isWrite ? { 'Content-Type': 'application/json' } : undefined,
+    body: isWrite ? JSON.stringify(options.body ?? {}) : undefined,
     signal: options.signal,
   });
   const payload: unknown = await response.json().catch(() => undefined);
@@ -138,4 +145,49 @@ export function postRun(runId: string, body: PostReviewRequest = {}): Promise<Po
 
 export function discardRun(runId: string): Promise<RunResponse> {
   return apiRequest('discardRun', { params: { id: runId } });
+}
+
+export function fetchAuthStatus(signal?: AbortSignal): Promise<AuthStatusResponse> {
+  return apiRequest('authStatus', { params: {}, signal });
+}
+
+/** Starts, or restarts, "Sign in with GitHub". */
+export function startDeviceFlow(): Promise<DeviceFlowResponse> {
+  return apiRequest('startDeviceFlow', { params: {} });
+}
+
+export function fetchDeviceFlow(signal?: AbortSignal): Promise<DeviceFlowResponse> {
+  return apiRequest('getDeviceFlow', { params: {}, signal });
+}
+
+export function cancelDeviceFlow(): Promise<DeviceFlowResponse> {
+  return apiRequest('cancelDeviceFlow', { params: {} });
+}
+
+/** Forgets the OAuth token; a logged-in gh CLI's token still works afterwards. */
+export function signOut(): Promise<AuthStatusResponse> {
+  return apiRequest('signOut', { params: {} });
+}
+
+export function fetchSettings(signal?: AbortSignal): Promise<SettingsResponse> {
+  return apiRequest('getSettings', { params: {}, signal });
+}
+
+export function updateSettings(body: UpdateSettingsRequest): Promise<SettingsResponse> {
+  return apiRequest('updateSettings', { params: {}, body });
+}
+
+export function setApiKey(name: ApiKeyName, value: string): Promise<SettingsResponse> {
+  return apiRequest('setApiKey', { params: { name }, body: { value } });
+}
+
+export function removeApiKey(name: ApiKeyName): Promise<SettingsResponse> {
+  return apiRequest('removeApiKey', { params: { name } });
+}
+
+export function fetchModels(
+  provider: ReviewProvider,
+  signal?: AbortSignal,
+): Promise<ListModelsResponse> {
+  return apiRequest('listModels', { params: {}, query: { provider }, signal });
 }
