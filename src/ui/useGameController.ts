@@ -48,6 +48,8 @@ import { createStore, type Store } from './store.ts';
 export interface GameActions {
   /** The only path that forces a GitHub refetch; does nothing while GitHub rate limits us. */
   refreshQuests: () => void;
+  /** Reloads quests, runs and player from the server's cache, e.g. after the GitHub user changed. */
+  resync: () => void;
   sendReviewAgent: (questId: string) => void;
   openResult: (runId: string) => void;
   closeResult: () => void;
@@ -283,6 +285,10 @@ export function useGameController(): GameController {
           return;
         }
         loadQuests(undefined, { refresh: true });
+      },
+      resync: () => {
+        loadQuests();
+        loadSideData();
       },
       sendReviewAgent: (questId) => {
         unlockAudio();

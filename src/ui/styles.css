@@ -353,6 +353,52 @@ code {
   align-items: center;
 }
 
+.hud__account {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.hud__login {
+  font-weight: 700;
+}
+
+.hud__account-error {
+  font-size: 0.85rem;
+}
+
+.hud__settings {
+  min-width: 2.5rem;
+  justify-content: center;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--gold);
+  border-radius: var(--radius);
+  background: var(--bg-deep);
+  image-rendering: pixelated;
+}
+
+.avatar--initial {
+  color: var(--gold);
+  font-size: 0.7rem;
+}
+
+.badge--source {
+  color: var(--mana);
+}
+
+.badge--source-gh {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
 .xp__labels {
   display: flex;
   justify-content: space-between;
@@ -1029,6 +1075,44 @@ code {
   border-radius: var(--radius);
   background: rgb(163 22 42 / 25%);
   color: #ffd5d9;
+}
+
+/* ------------------------------------------------------------------ GitHub sign-in */
+
+.device-flow__status {
+  font-weight: 600;
+}
+
+.device-flow__status:empty {
+  display: none;
+}
+
+.device-flow__status--done {
+  color: var(--xp);
+}
+
+.device-flow__status--failed {
+  color: #ffc9ce;
+}
+
+.device-code {
+  justify-self: start;
+  padding: 0.9rem 1.2rem;
+  border: 3px dashed var(--gold);
+  border-radius: var(--radius);
+  background: var(--bg-deep);
+  box-shadow: inset 0 0 0 3px #3b2c08;
+  color: var(--gold);
+  font-size: clamp(1.2rem, 5vw, 1.9rem);
+  letter-spacing: 0.18em;
+  text-shadow: 3px 3px 0 #3b2c08;
+  user-select: all;
+}
+
+.device-flow__expiry {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------------ review result */

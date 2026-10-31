@@ -29,6 +29,7 @@ vi.mock('./apiClient.ts', async (importOriginal) => {
     approveQuest: vi.fn(),
     postRun: vi.fn(),
     discardRun: vi.fn(),
+    fetchAuthStatus: vi.fn(),
   };
 });
 
@@ -78,6 +79,11 @@ describe('App', () => {
     api.fetchRuns.mockRejectedValue(new ApiRequestError(501, 'notImplemented', 'Not implemented'));
     api.fetchPlayer.mockResolvedValue({ player: makePlayer() });
     api.fetchAchievements.mockResolvedValue({ achievements: makeAchievements() });
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'gh' },
+      device: { state: 'idle' },
+    });
   });
 
   afterEach(() => {
@@ -92,6 +98,7 @@ describe('App', () => {
     expect(screen.getByRole('img', { name: 'Level 3' })).toBeTruthy();
     expect(screen.getByText('Live')).toBeTruthy();
     expect(MockEventSource.latest().url).toBe('/api/events');
+    expect(await screen.findByText('gh CLI')).toBeTruthy();
   });
 
   test('never asks for notification permission on load, only from the HUD toggle', async () => {

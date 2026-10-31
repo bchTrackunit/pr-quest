@@ -1,17 +1,20 @@
 import { ApproveDialog } from './ApproveDialog.tsx';
 import { findQuest, type GameState } from './gameState.ts';
+import { GitHubAccountControl } from './GitHubAccountControl.tsx';
 import { PlayerHud } from './PlayerHud.tsx';
 import { QuestBoard } from './QuestBoard.tsx';
 import { ReviewResult } from './ReviewResult.tsx';
 import { useStoreState } from './store.ts';
 import { Toasts } from './Toasts.tsx';
 import { useGameController } from './useGameController.ts';
+import { useGitHubAccount } from './useGitHubAccount.ts';
 import { XpPopups } from './XpPopups.tsx';
 
 const selectState = (state: GameState): GameState => state;
 
 export const App = () => {
   const { store, actions } = useGameController();
+  const github = useGitHubAccount(actions.resync);
   const state = useStoreState(store, selectState);
   const openRun = state.openRunId ? state.runs[state.openRunId] : undefined;
   const approveQuest = findQuest(state, state.approveQuestId);
@@ -26,6 +29,7 @@ export const App = () => {
           <span aria-hidden="true">⚔️</span> PR Quest
         </h1>
         <PlayerHud
+          account={<GitHubAccountControl actions={github.actions} state={github.state} />}
           achievements={state.achievements}
           achievementsError={state.achievementsError}
           connection={state.connection}
