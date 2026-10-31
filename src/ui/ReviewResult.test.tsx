@@ -57,6 +57,25 @@ describe('ReviewResult', () => {
     expect(handlers.onPost).toHaveBeenCalledWith('requestChanges');
   });
 
+  test("the post event always starts at Comment, whatever the agent's verdict", async () => {
+    const user = userEvent.setup();
+    const handlers = renderResult(
+      makeRun({ status: 'finished', result: makeResult({ verdict: 'requestChanges' }) }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Post to PR' }));
+
+    const group = screen.getByRole('group', { name: 'Post to Trackunit/manager#101?' });
+    expect(within(group).getByRole('radio', { name: 'Comment' })).toHaveProperty('checked', true);
+    expect(within(group).getByRole('radio', { name: 'Request changes' })).toHaveProperty(
+      'checked',
+      false,
+    );
+    expect(group.textContent).toContain('The agent suggests requesting changes; that is advice.');
+    await user.click(within(group).getByRole('button', { name: 'Confirm post' }));
+    expect(handlers.onPost).toHaveBeenCalledWith('comment');
+  });
+
   test('the post confirmation counts only findings with a line as inline comments', async () => {
     const user = userEvent.setup();
     renderResult();

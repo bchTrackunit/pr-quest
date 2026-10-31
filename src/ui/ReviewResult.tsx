@@ -85,9 +85,8 @@ export const ReviewResult = ({
 }: ReviewResultProps) => {
   const { result } = run;
   const [isConfirmingPost, setIsConfirmingPost] = useState(false);
-  const [postEvent, setPostEvent] = useState<PostReviewEvent>(
-    result?.verdict === 'requestChanges' ? 'requestChanges' : 'comment',
-  );
+  /** Never seeded from the verdict: model output must not pick a non-COMMENT event. */
+  const [postEvent, setPostEvent] = useState<PostReviewEvent>('comment');
   const [pending, setPending] = useState<Pending>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const summary = quest ?? run.quest;
@@ -250,6 +249,11 @@ export const ReviewResult = ({
             />{' '}
             Request changes
           </label>
+          {result?.verdict === 'requestChanges' ? (
+            <p className="muted">
+              The agent suggests requesting changes; that is advice. Pick the event yourself.
+            </p>
+          ) : null}
           <div className="button-row button-row--end">
             <button
               className="button"
