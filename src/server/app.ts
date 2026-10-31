@@ -19,7 +19,7 @@ import { ReviewRunService } from './reviewRuns.ts';
 import type { RouteName } from '../shared/api.ts';
 import { ApiError, type EventsHandler, type RouteHandlers } from './router.ts';
 import { SecretStore } from './secrets.ts';
-import { SessionManager, type SessionServices } from './sessions.ts';
+import { SessionManager, type SessionContext, type SessionServices } from './sessions.ts';
 import { SettingsStore } from './settings.ts';
 import { StateStore } from './store.ts';
 import { migrateLegacyState, userStateDir } from './userState.ts';
@@ -69,26 +69,45 @@ export async function createApp(options: AppOptions): Promise<App> {
     oauthToken: async () => secrets.get('github'),
     ghToken: options.ghToken,
   });
-  const github = new GitHubClient(new GitHubApi({ token: () => tokens.token(), fetch: options.fetch }), {
-    onWarning: warn,
-  });
   const fetchViewer = (token: string) =>
     new GitHubClient(new GitHubApi({ token: async () => token, fetch: options.fetch })).fetchViewer();
   const linear = new LinearReviewClient({ apiKey: () => apiKeys.get('linear'), onWarning: warn });
   const claude = new ClaudeReviewer({
     apiKey: () => apiKeys.get('anthropic'),
-    github,
     createMessage: options.createMessage,
     log: info,
   });
-
-  const openUser = async ({ login }: { login: string }): Promise<UserServices> => {
+  /**
+   * One store per player for the life of the process: reopening their game after a sign-in change
+   * must not load a second copy that a run still finishing in the old session would overwrite.
+   */
+  const stores = new Map<string, Promise<StateStore>>();
+  const openStore = async (login: string, dir: string): Promise<StateStore> => {
     const { migrated } = await migrateLegacyState(config.stateDir, login);
     if (migrated.length > 0) {
       info(`Moved ${migrated.join(' and ')} into ${login}'s folder; the originals are kept as .bak files`);
     }
+    return StateStore.open(dir, { onWarning: warn });
+  };
+
+  const openUser = async ({ login, token }: SessionContext): Promise<UserServices> => {
+    const github = new GitHubClient(
+      new GitHubApi({
+        token,
+        fetch: options.fetch,
+        onUnauthorized: (rejected) => sessions.rejected(rejected),
+      }),
+      { onWarning: warn },
+    );
     const dir = userStateDir(config.stateDir, login);
-    const store = await StateStore.open(dir, { onWarning: warn });
+    let opening = stores.get(login);
+    const firstOpen = opening === undefined;
+    if (!opening) {
+      opening = openStore(login, dir);
+      stores.set(login, opening);
+      opening.catch(() => stores.delete(login));
+    }
+    const store = await opening;
     const events = new EventHub();
     const game = new GameService(store, events);
     const runs = new ReviewRunService({
@@ -97,7 +116,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       game,
       cursorApiKey: () => apiKeys.get('cursor'),
       settings: () => settings.get(),
-      claude,
+      claude: claude.forGitHub(github),
       log: info,
     });
     const quests = new QuestService({
@@ -110,7 +129,10 @@ export async function createApp(options: AppOptions): Promise<App> {
       cache: new QuestCache(dir, { onWarning: warn }),
     });
     await quests.restore();
-    await runs.resumeInterrupted();
+    if (firstOpen) {
+      // A reopened game's active runs are still followed by the session that started them.
+      await runs.resumeInterrupted();
+    }
     const stopPolling = quests.startPolling();
     return {
       login,
@@ -167,9 +189,11 @@ export async function createApp(options: AppOptions): Promise<App> {
         }
       },
       signOut: async () => {
+        const signedOut = sessions.peek()?.account;
         deviceFlow.cancel();
         await secrets.delete('github');
         sessions.reset();
+        return signedOut?.tokenSource === 'oauth' ? { signedOutLogin: signedOut.login } : {};
       },
     },
   });

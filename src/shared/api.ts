@@ -341,6 +341,11 @@ export interface AuthStatusResponse {
   /** Why the token didn't resolve to a user, e.g. GitHub rejected it. */
   error?: string;
   device: DeviceFlowStatus;
+  /**
+   * Only on the sign-out reply: the OAuth login that was signed out, when PR Quest now acts as a
+   * different account through the gh CLI's token (`account`).
+   */
+  fellBackFrom?: string;
 }
 
 export interface DeviceFlowResponse {

@@ -163,16 +163,29 @@ describe('GET /api/quests', () => {
     expect(response).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
   });
 
-  test('reports gh failures as upstreamFailed', async () => {
+  test('reports GitHub failures as upstreamFailed', async () => {
     github.fetchReviewRequests.mockRejectedValue(
-      new GitHubApiError('Bad credentials (HTTP 401)', { httpStatus: 401 }),
+      new GitHubApiError('Server Error (HTTP 500)', { httpStatus: 500 }),
     );
 
     const response = await send('GET', '/api/quests');
 
     expect(response).toEqual({
       status: 502,
-      body: { error: { code: 'upstreamFailed', message: 'Bad credentials (HTTP 401)' } },
+      body: { error: { code: 'upstreamFailed', message: 'Server Error (HTTP 500)' } },
+    });
+  });
+
+  test('asks the player to sign in again when GitHub rejects the token', async () => {
+    github.fetchReviewRequests.mockRejectedValue(
+      new GitHubApiError('Bad credentials (HTTP 401)', { httpStatus: 401 }),
+    );
+
+    const response = await send('GET', '/api/quests');
+
+    expect(response).toMatchObject({
+      status: 401,
+      body: { error: { code: 'notSignedIn', message: expect.stringMatching(/rejected/) } },
     });
   });
 

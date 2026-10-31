@@ -89,7 +89,6 @@ export class ClaudeReviewError extends Error {
 export interface ClaudeReviewerOptions {
   /** Read per review so a key saved in the settings takes effect right away. */
   apiKey: () => string | undefined;
-  github: Pick<GitHubClient, 'fetchDiff'>;
   createMessage?: CreateMessage;
   log: (message: string) => void;
   newNonce?: () => string;
@@ -99,6 +98,22 @@ export interface ClaudeReviewerOptions {
 export interface ClaudeReviewHooks {
   /** Called once the diff is ready, right before the request goes to Claude. */
   onRequest?: () => Promise<void>;
+}
+
+export interface ClaudeReviewRun extends ClaudeReviewHooks {
+  /** The GitHub client of the player who asked, so the diff is read with their token. */
+  github: Pick<GitHubClient, 'fetchDiff'>;
+}
+
+/** Claude reviews for one player, reading diffs through that player's GitHub client. */
+export interface ClaudeRunner {
+  hasKey: () => boolean;
+  review: (
+    quest: QuestSnapshot,
+    headSha: string,
+    model: string | undefined,
+    hooks?: ClaudeReviewHooks,
+  ) => Promise<ReviewResult>;
 }
 
 export const anthropicCreateMessage: CreateMessage = (apiKey, params) =>
@@ -120,11 +135,19 @@ export class ClaudeReviewer {
     return !!this.options.apiKey();
   }
 
+  public forGitHub(github: ClaudeReviewRun['github']): ClaudeRunner {
+    return {
+      hasKey: () => this.hasKey(),
+      review: (quest, headSha, model, hooks = {}) =>
+        this.review(quest, headSha, model, { ...hooks, github }),
+    };
+  }
+
   public async review(
     quest: QuestSnapshot,
     headSha: string,
     model: string | undefined,
-    hooks: ClaudeReviewHooks = {},
+    run: ClaudeReviewRun,
   ): Promise<ReviewResult> {
     const apiKey = this.options.apiKey();
     if (!apiKey) {
@@ -134,13 +157,13 @@ export class ClaudeReviewer {
         false,
       );
     }
-    const budgeted = await this.readDiff(quest, headSha);
+    const budgeted = await this.readDiff(run.github, quest, headSha);
     const modelId = model ?? DEFAULT_CLAUDE_MODEL;
     const nonce = this.newNonce();
     this.options.log(
       `Claude (${modelId}) is reviewing ${budgeted.files.length} files of ${quest.id} at ${headSha}; ${budgeted.omitted.length} left out`,
     );
-    await hooks.onRequest?.();
+    await run.onRequest?.();
     const message = await this.send(apiKey, {
       model: modelId,
       max_tokens: MAX_OUTPUT_TOKENS,
@@ -153,10 +176,14 @@ export class ClaudeReviewer {
     return budgeted.omitted.length > 0 ? { ...result, omitted: budgeted.omitted } : result;
   }
 
-  private async readDiff(quest: QuestSnapshot, headSha: string): Promise<BudgetedDiff> {
+  private async readDiff(
+    github: ClaudeReviewRun['github'],
+    quest: QuestSnapshot,
+    headSha: string,
+  ): Promise<BudgetedDiff> {
     let diff: string;
     try {
-      diff = await this.options.github.fetchDiff(
+      diff = await github.fetchDiff(
         { repo: quest.repo, number: quest.number },
         { base: quest.targetBranch, headSha },
       );

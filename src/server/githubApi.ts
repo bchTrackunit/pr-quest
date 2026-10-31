@@ -35,8 +35,10 @@ export class GitHubApiError extends Error {
 
 /** No GitHub token: the player hasn't signed in and `gh` isn't logged in either. */
 export class NotSignedInError extends GitHubApiError {
-  public constructor() {
-    super('Sign in with GitHub in Settings (or log in with `gh auth login`) to load your reviews');
+  public constructor(
+    message = 'Sign in with GitHub in Settings (or log in with `gh auth login`) to load your reviews',
+  ) {
+    super(message);
     this.name = 'NotSignedInError';
   }
 }
@@ -50,6 +52,8 @@ export interface GitHubRequestOptions {
 export interface GitHubApiOptions {
   /** The player's token, read per request so signing in or out takes effect right away. */
   token: () => Promise<string | undefined>;
+  /** Called with the token GitHub answered 401 for, e.g. one the player revoked. */
+  onUnauthorized?: (token: string) => void;
   fetch?: FetchLike;
   baseUrl?: string;
   now?: () => Date;
@@ -59,6 +63,7 @@ export interface GitHubApiOptions {
 /** GitHub's REST and GraphQL APIs over `fetch`, as the player. */
 export class GitHubApi {
   private readonly token: () => Promise<string | undefined>;
+  private readonly onUnauthorized: (token: string) => void;
   private readonly fetch: FetchLike;
   private readonly baseUrl: string;
   private readonly now: () => Date;
@@ -66,6 +71,7 @@ export class GitHubApi {
 
   public constructor(options: GitHubApiOptions) {
     this.token = options.token;
+    this.onUnauthorized = options.onUnauthorized ?? (() => undefined);
     this.fetch = options.fetch ?? ((url, init) => fetch(url, init));
     this.baseUrl = options.baseUrl ?? GITHUB_API_URL;
     this.now = options.now ?? (() => new Date());
@@ -125,8 +131,9 @@ export class GitHubApi {
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }
+    let response: Response;
     try {
-      return await this.fetch(`${this.baseUrl}${path}${search}`, {
+      response = await this.fetch(`${this.baseUrl}${path}${search}`, {
         method,
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -137,6 +144,10 @@ export class GitHubApi {
         `GitHub ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    if (response.status === 401) {
+      this.onUnauthorized(token);
+    }
+    return response;
   }
 
   /**

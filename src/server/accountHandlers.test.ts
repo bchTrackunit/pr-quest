@@ -82,7 +82,7 @@ function fakeServices(): AccountServices {
     auth: {
       clientIdConfigured: true,
       current: async () => ({ account: { login: 'Player', tokenSource: 'oauth' } }),
-      signOut: vi.fn(async () => undefined),
+      signOut: vi.fn(async (): Promise<{ signedOutLogin?: string }> => ({})),
     },
   };
 }
@@ -313,6 +313,31 @@ describe('auth', () => {
     expect(response.status).toBe(200);
     expect(services.auth.signOut).toHaveBeenCalledOnce();
     expect(response.body).toMatchObject({ clientIdConfigured: true });
+    expect(response.body).not.toHaveProperty('fellBackFrom');
+  });
+
+  test('sign-out says when PR Quest now acts as a different gh account', async () => {
+    vi.mocked(services.auth.signOut).mockResolvedValueOnce({ signedOutLogin: 'Other-Player' });
+    services.auth.current = async () => ({ account: { login: 'Player', tokenSource: 'gh' } });
+
+    const response = await send('POST', '/api/auth/sign-out');
+
+    expect(response.body).toMatchObject({
+      account: { login: 'Player', tokenSource: 'gh' },
+      fellBackFrom: 'Other-Player',
+    });
+  });
+
+  test.each([
+    ['the same login through gh', { login: 'player', tokenSource: 'gh' } as const],
+    ['no account at all', undefined],
+  ])('sign-out reports no fallback for %s', async (_case, account) => {
+    vi.mocked(services.auth.signOut).mockResolvedValueOnce({ signedOutLogin: 'Player' });
+    services.auth.current = async () => (account ? { account } : {});
+
+    const response = await send('POST', '/api/auth/sign-out');
+
+    expect(response.body).not.toHaveProperty('fellBackFrom');
   });
 });
 

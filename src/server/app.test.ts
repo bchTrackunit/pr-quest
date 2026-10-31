@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createApp, type App } from './app.ts';
 import type { AppConfig } from './config.ts';
 import { createRouter } from './router.ts';
+import { fixture } from './test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
   Agent: { create: vi.fn(), getRun: vi.fn() },
@@ -26,10 +27,18 @@ let ghToken: string | undefined;
 let logins: Record<string, string>;
 let logs: Array<string>;
 
-/** GitHub as seen through fetch: `/user` per token, and an empty review queue. */
+type Route = (url: URL, init: RequestInit, token: string) => Promise<Response | undefined>;
+let route: Route | undefined;
+
+/** GitHub as seen through fetch: `/user` per token, and an empty review queue unless `route` answers. */
 const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Response> => {
-  const { pathname } = new URL(url);
+  const parsed = new URL(url);
+  const { pathname } = parsed;
   const auth = new Headers(init.headers).get('authorization') ?? '';
+  const routed = await route?.(parsed, init, auth.replace(/^Bearer /, ''));
+  if (routed) {
+    return routed;
+  }
   if (pathname === '/user') {
     const login = logins[auth.replace(/^Bearer /, '')];
     return login
@@ -93,11 +102,49 @@ function send(method: string, path: string, body?: unknown): Promise<{ status: n
   });
 }
 
+const QUEST_ID = 'Trackunit/circleci-configuration#930';
+const QUEST_PULL = '/repos/Trackunit/circleci-configuration/pulls/930';
+const QUEST_HEAD = 'd77c66a89e0707ccc917203251d3a3a1efce4182';
+
+/** The recorded review queue: both searches and the batched PR details. */
+async function reviewQueue(url: URL): Promise<Response | undefined> {
+  if (url.pathname === '/search/issues') {
+    const direct = url.searchParams.get('q')?.includes('user-review-requested:@me');
+    return new Response(fixture(direct ? 'search-direct.json' : 'search-all.json'));
+  }
+  if (url.pathname === '/graphql') {
+    return new Response(fixture('graphql-batch.json'));
+  }
+  return undefined;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/** A forced refresh waits out the first poll, which publishes its quests before it has finished. */
+function settleQuests(): ReturnType<typeof send> {
+  return send('GET', '/api/quests?refresh=1');
+}
+
+async function saveOAuthToken(): Promise<void> {
+  await writeFile(
+    join(dir, 'secrets.json'),
+    JSON.stringify({ version: 1, secrets: { github: OAUTH_TOKEN } }),
+    { mode: 0o600 },
+  );
+}
+
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-app-'));
   ghToken = undefined;
   logins = { [GH_TOKEN]: 'BrianChristensen', [OAUTH_TOKEN]: 'Other-Player' };
   logs = [];
+  route = undefined;
   fakeGitHub.mockClear();
 });
 
@@ -160,9 +207,90 @@ describe('createApp', () => {
 
     expect(signedOut.body).toMatchObject({
       account: { login: 'BrianChristensen', tokenSource: 'gh' },
+      fellBackFrom: 'Other-Player',
     });
     expect(await readFile(join(dir, 'secrets.json'), 'utf8')).not.toContain(OAUTH_TOKEN);
     expect(signedOut.text).not.toContain(OAUTH_TOKEN);
+  });
+
+  test('refuses an approval that was in flight at sign-out instead of sending it as the gh account', async () => {
+    await saveOAuthToken();
+    ghToken = GH_TOKEN;
+    const headGate = deferred();
+    const headRequested = deferred();
+    const reviewTokens: Array<string> = [];
+    route = async (url, init, token) => {
+      const queue = await reviewQueue(url);
+      if (queue) {
+        return queue;
+      }
+      if (url.pathname === QUEST_PULL && init.method === 'GET') {
+        headRequested.resolve();
+        await headGate.promise;
+        return Response.json({ head: { sha: QUEST_HEAD } });
+      }
+      if (url.pathname === `${QUEST_PULL}/reviews`) {
+        reviewTokens.push(token);
+        return Response.json({ html_url: 'https://github.com/review' });
+      }
+      return undefined;
+    };
+    await start();
+    expect((await settleQuests()).text).toContain(QUEST_ID);
+
+    const approving = send('POST', `/api/quests/${encodeURIComponent(QUEST_ID)}/approve`, {
+      confirm: true,
+      headSha: QUEST_HEAD,
+    });
+    await headRequested.promise;
+    const signedOut = await send('POST', '/api/auth/sign-out');
+    headGate.resolve();
+    const approved = await approving;
+
+    expect(signedOut.body).toMatchObject({ account: { login: 'BrianChristensen' } });
+    expect(approved).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
+    expect(approved.text).toContain('@other-player');
+    expect(reviewTokens).toEqual([]);
+    const otherState = await readFile(join(dir, 'users', 'other-player', 'state.json'), 'utf8').catch(
+      () => '{}',
+    );
+    expect(otherState).not.toContain('"approvals": 1');
+  });
+
+  test('stops polling as the old account once the player signs out', async () => {
+    await saveOAuthToken();
+    ghToken = GH_TOKEN;
+    route = async (url) => reviewQueue(url);
+    await start();
+    await settleQuests();
+
+    fakeGitHub.mockClear();
+    await send('POST', '/api/auth/sign-out');
+    await send('GET', '/api/quests');
+
+    const tokens = fakeGitHub.mock.calls.map(([, init]) => new Headers(init.headers).get('authorization'));
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens).not.toContain(`Bearer ${OAUTH_TOKEN}`);
+  });
+
+  test('a sign-in GitHub has revoked shows as signed out with a reason', async () => {
+    await saveOAuthToken();
+    route = async (url) => reviewQueue(url);
+    await start();
+    expect((await send('GET', '/api/auth/status')).body).toMatchObject({
+      account: { login: 'Other-Player' },
+    });
+    await settleQuests();
+
+    delete logins[OAUTH_TOKEN];
+    route = async () => Response.json({ message: 'Bad credentials' }, { status: 401 });
+    const quests = await send('GET', '/api/quests?refresh=1');
+    route = undefined;
+    const status = await send('GET', '/api/auth/status');
+
+    expect(quests).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
+    expect(status.body).not.toHaveProperty('account');
+    expect(status.body).toMatchObject({ error: expect.stringMatching(/rejected the saved sign-in/) });
   });
 
   test('health and settings report a key saved in Settings without revealing it', async () => {

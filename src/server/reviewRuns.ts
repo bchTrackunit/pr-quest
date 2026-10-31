@@ -8,7 +8,7 @@ import type {
   ReviewRun,
   ReviewRunStatus,
 } from '../shared/api.ts';
-import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL, type ClaudeReviewer } from './claudeReview.ts';
+import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL, type ClaudeRunner } from './claudeReview.ts';
 import type { EventSink, GameService } from './game.ts';
 import { buildReviewPrompt, parseReviewResult } from './reviewResult.ts';
 import { ApiError } from './router.ts';
@@ -19,7 +19,7 @@ const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
 
-export type ClaudeRunner = Pick<ClaudeReviewer, 'hasKey' | 'review'>;
+export type { ClaudeRunner };
 
 export interface ReviewRunServiceOptions {
   store: StateStore;

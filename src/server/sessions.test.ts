@@ -3,7 +3,12 @@ import { describe, expect, test, vi } from 'vitest';
 import type { GitHubViewer } from './github.ts';
 import { GitHubApiError, NotSignedInError } from './githubApi.ts';
 import type { ResolvedToken } from './githubToken.ts';
-import { SessionManager, type SessionFactory } from './sessions.ts';
+import {
+  SessionEndedError,
+  SessionManager,
+  type SessionContext,
+  type SessionFactory,
+} from './sessions.ts';
 
 function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHubViewer> } = {}) {
   let token = initial.token;
@@ -17,12 +22,14 @@ function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHub
     return viewer;
   });
   const stops: Array<string> = [];
-  const create = vi.fn<SessionFactory>(async ({ login }) => ({
-    login,
-    stop: () => stops.push(login),
-  }));
+  const contexts = new Map<string, SessionContext>();
+  const create = vi.fn<SessionFactory>(async (context) => {
+    contexts.set(context.login, context);
+    return { login: context.login, stop: () => stops.push(context.login) };
+  });
+  const invalidate = vi.fn();
   const sessions = new SessionManager({
-    tokens: { resolve: async () => token, invalidate: vi.fn() },
+    tokens: { resolve: async () => token, invalidate },
     fetchViewer,
     create,
     log: () => undefined,
@@ -33,6 +40,14 @@ function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHub
     fetchViewer,
     create,
     stops,
+    invalidate,
+    contextOf: (login: string): SessionContext => {
+      const context = contexts.get(login);
+      if (!context) {
+        throw new Error(`no session was opened for ${login}`);
+      }
+      return context;
+    },
     setToken: (next: ResolvedToken | undefined) => {
       token = next;
     },
@@ -54,7 +69,7 @@ describe('SessionManager', () => {
       avatarUrl: 'https://a',
       tokenSource: 'gh',
     });
-    expect(create).toHaveBeenCalledWith({ login: 'alice' });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ login: 'alice' }));
   });
 
   test('reuses the session and the identity for the same token', async () => {
@@ -74,20 +89,128 @@ describe('SessionManager', () => {
     await expect(sessions.require()).rejects.toBeInstanceOf(NotSignedInError);
   });
 
-  test('keeps the session when the same user signs in with OAuth', async () => {
-    const { sessions, setToken, create, stops } = setup({
+  test("keeps the session and moves it to the new token when the same user's token changes", async () => {
+    const { sessions, setToken, create, stops, contextOf } = setup({
       token: { token: 'gho_a', source: 'gh' },
       viewers: { gho_a: { login: 'Alice' }, gho_oauth: { login: 'alice' } },
     });
     await sessions.current();
 
     setToken({ token: 'gho_oauth', source: 'oauth' });
-    sessions.reset();
     const session = await sessions.current();
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(stops).toEqual([]);
     expect(session?.account.tokenSource).toBe('oauth');
+    await expect(contextOf('alice').token()).resolves.toBe('gho_oauth');
+  });
+
+  test('reset closes the open session right away, even before the next lookup', async () => {
+    const { sessions, setToken, create, stops, invalidate } = setup({
+      token: { token: 'gho_a', source: 'gh' },
+      viewers: { gho_a: { login: 'alice' }, gho_oauth: { login: 'alice' } },
+    });
+    await sessions.current();
+
+    setToken({ token: 'gho_oauth', source: 'oauth' });
+    sessions.reset();
+    await Promise.resolve();
+
+    expect(stops).toEqual(['alice']);
+    expect(invalidate).toHaveBeenCalled();
+    expect(sessions.peek()).toBeUndefined();
+    await sessions.current();
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  test("hands the session the token it was opened with while that token is current", async () => {
+    const { sessions, contextOf } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+
+    await expect(contextOf('alice').token()).resolves.toBe('gho_a');
+  });
+
+  test("refuses the old session's calls once the token belongs to someone else, mid-flight", async () => {
+    const { sessions, setToken, contextOf } = setup({
+      token: { token: 'gho_a', source: 'gh' },
+      viewers: { gho_a: { login: 'alice' }, gho_b: { login: 'bob' } },
+    });
+    await sessions.current();
+    const alice = contextOf('alice');
+
+    setToken({ token: 'gho_b', source: 'gh' });
+
+    await expect(alice.token()).rejects.toBeInstanceOf(SessionEndedError);
+    await expect(alice.token()).rejects.toThrow(/@alice/);
+  });
+
+  test('refuses the old session\'s calls after sign-out, even when the token comes back', async () => {
+    const { sessions, contextOf } = setup({ token: { token: 'gho_a', source: 'oauth' } });
+    await sessions.current();
+    const alice = contextOf('alice');
+
+    sessions.reset();
+
+    await expect(alice.token()).rejects.toBeInstanceOf(SessionEndedError);
+    await sessions.current();
+    await expect(alice.token()).rejects.toBeInstanceOf(SessionEndedError);
+    await expect(contextOf('alice').token()).resolves.toBe('gho_a');
+  });
+
+  test('refuses when there is no token any more', async () => {
+    const { sessions, setToken, contextOf } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+
+    setToken(undefined);
+
+    await expect(contextOf('alice').token()).rejects.toBeInstanceOf(NotSignedInError);
+  });
+
+  test('a token GitHub rejected closes its session and reports it as signed out', async () => {
+    const { sessions, stops, invalidate, fetchViewer } = setup({
+      token: { token: 'gho_a', source: 'oauth' },
+    });
+    await sessions.current();
+    fetchViewer.mockRejectedValueOnce(new GitHubApiError('Bad credentials', { httpStatus: 401 }));
+
+    sessions.rejected('gho_a');
+    await Promise.resolve();
+
+    expect(stops).toEqual(['alice']);
+    expect(invalidate).toHaveBeenCalled();
+    const error: unknown = await sessions.current().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(NotSignedInError);
+    expect(error).toMatchObject({ message: expect.stringMatching(/rejected the saved sign-in/) });
+  });
+
+  test('ignores a rejection of a token that is not the open session\'s', async () => {
+    const { sessions, stops } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+
+    sessions.rejected('gho_old');
+    await Promise.resolve();
+
+    expect(stops).toEqual([]);
+  });
+
+  test('says which kind of token GitHub rejected', async () => {
+    const { sessions } = setup({ token: { token: 'gho_bad', source: 'gh' } });
+
+    await expect(sessions.current()).rejects.toThrow(/gh auth login/);
+    await expect(sessions.require()).rejects.toBeInstanceOf(NotSignedInError);
+  });
+
+  test('looks the token owner up again after ten minutes', async () => {
+    const { sessions, fetchViewer, advance } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+
+    advance(9 * 60_000);
+    await sessions.current();
+    expect(fetchViewer).toHaveBeenCalledTimes(1);
+
+    advance(60_001);
+    await sessions.current();
+    expect(fetchViewer).toHaveBeenCalledTimes(2);
   });
 
   test("stops the previous user's session when another user signs in", async () => {
@@ -119,12 +242,12 @@ describe('SessionManager', () => {
   test('remembers a failed identity lookup for 30 seconds, then retries', async () => {
     const { sessions, fetchViewer, advance } = setup({ token: { token: 'gho_bad', source: 'gh' } });
 
-    await expect(sessions.current()).rejects.toThrow('Bad credentials');
-    await expect(sessions.current()).rejects.toThrow('Bad credentials');
+    await expect(sessions.current()).rejects.toThrow(/rejected/);
+    await expect(sessions.current()).rejects.toThrow(/rejected/);
     expect(fetchViewer).toHaveBeenCalledTimes(1);
 
     advance(30_001);
-    await expect(sessions.current()).rejects.toThrow('Bad credentials');
+    await expect(sessions.current()).rejects.toThrow(/rejected/);
     expect(fetchViewer).toHaveBeenCalledTimes(2);
   });
 

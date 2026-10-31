@@ -49,8 +49,8 @@ export interface AccountServices {
     clientIdConfigured: boolean;
     /** The token owner, or why the token didn't resolve to one. */
     current: () => Promise<{ account?: GitHubAccount; error?: string }>;
-    /** Forgets the OAuth token and the cached identity. */
-    signOut: () => Promise<void>;
+    /** Forgets the OAuth token and the cached identity; names the OAuth account it signed out of. */
+    signOut: () => Promise<{ signedOutLogin?: string }>;
   };
 }
 
@@ -99,8 +99,17 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
 
     signOut: async ({ body }) => {
       parseBody(EmptyBodySchema, body);
-      await auth.signOut();
-      return authStatus();
+      const { signedOutLogin } = await auth.signOut();
+      const status = await authStatus();
+      const now = status.account;
+      if (
+        signedOutLogin &&
+        now?.tokenSource === 'gh' &&
+        now.login.toLowerCase() !== signedOutLogin.toLowerCase()
+      ) {
+        status.fellBackFrom = signedOutLogin;
+      }
+      return status;
     },
 
     getSettings: settingsResponse,

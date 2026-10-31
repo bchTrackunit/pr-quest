@@ -58,6 +58,13 @@ async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResul
     if (error instanceof NotSignedInError) {
       throw new ApiError(401, 'notSignedIn', error.message);
     }
+    if (error instanceof GitHubApiError && error.httpStatus === 401) {
+      throw new ApiError(
+        401,
+        'notSignedIn',
+        'GitHub rejected the sign-in (it may have been revoked). Sign in again in Settings.',
+      );
+    }
     if (error instanceof GitHubApiError) {
       throw new ApiError(502, 'upstreamFailed', error.message);
     }

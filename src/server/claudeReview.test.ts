@@ -63,9 +63,8 @@ function setup(
       return reply;
     },
   );
-  const reviewer = new ClaudeReviewer({
+  const shared = new ClaudeReviewer({
     apiKey: () => (options.apiKey === null ? undefined : (options.apiKey ?? 'sk-ant-test')),
-    github: { fetchDiff },
     createMessage,
     log: () => undefined,
     newNonce: () => 'n0nce',
@@ -77,10 +76,22 @@ function setup(
     }
     return call[1];
   };
-  return { reviewer, fetchDiff, createMessage, params };
+  return { shared, reviewer: shared.forGitHub({ fetchDiff }), fetchDiff, createMessage, params };
 }
 
 describe('ClaudeReviewer', () => {
+  test("reads each diff through the GitHub client of the player whose run it is", async () => {
+    const { shared } = setup();
+    const alice = vi.fn(async () => SOURCE_DIFF);
+    const bob = vi.fn(async () => SOURCE_DIFF);
+
+    await shared.forGitHub({ fetchDiff: alice }).review(quest, HEAD, undefined);
+    await shared.review(quest, HEAD, undefined, { github: { fetchDiff: bob } });
+
+    expect(alice).toHaveBeenCalledOnce();
+    expect(bob).toHaveBeenCalledOnce();
+  });
+
   test('reviews the diff pinned to the head commit', async () => {
     const { reviewer, fetchDiff } = setup();
 

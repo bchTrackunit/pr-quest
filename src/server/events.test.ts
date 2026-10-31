@@ -113,4 +113,15 @@ describe('EventHub', () => {
 
     expect(res.ended).toBe(true);
   });
+
+  test('a stream that connects after close ends right away, so the client reconnects', () => {
+    hub.close();
+
+    const { res } = connect(hub);
+    hub.broadcast(event);
+
+    expect(res.ended).toBe(true);
+    expect(res.chunks).toEqual(['retry: 3000\n\n']);
+    expect(hub.clientCount).toBe(0);
+  });
 });
