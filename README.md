@@ -316,13 +316,16 @@ With the Claude provider, the server reviews the PR's diff, never the repo:
   (`<target>...<headSha>`), which shows the same changes as the PR. If that fails, PR Quest uses
   the PR's own diff, but only while the PR's head is still that commit.
 - **Files are left out before the diff is sent.** Lockfiles (such as `yarn.lock` and
-  `package-lock.json`), generated files (`dist/`, `build/`, `vendor/`, snapshots, `*.min.js`,
-  source maps and similar) and binary files are dropped. The rest are kept in order while they fit
-  in about 420,000 characters (roughly 120k tokens). A file that doesn't fit is left out as too
+  `package-lock.json`), generated files (`dist/`, `build/` and `out/` at the repo root, `vendor/`
+  and `node_modules/` anywhere, snapshots, `*.min.js`, source maps and similar) and binary files
+  are dropped. The rest are kept in order while they fit in about 280,000 characters. If
+  Anthropic still says the prompt is too long, the run fails with that message and isn't retried. A file that doesn't fit is left out as too
   large, but smaller files after it still get in. If nothing is left, the review fails without
   calling Anthropic.
-- **Claude is told what it can't see.** The prompt lists the omitted files by name and reason,
-  and the result screen shows them under **Omitted files**.
+- **Claude is told what it can't see.** The prompt lists up to 200 omitted files by name and
+  reason, as escaped strings so a file name can't add lines to the prompt, then says how many more
+  there are. The result screen shows all of them under **Omitted files**, and a posted review
+  lists up to 50.
 - **PR content is treated as data.** The title, branches and diff sit between delimiters with a
   random nonce, and the system prompt says never to follow instructions inside them and to report
   attempts to steer the reviewer as a security finding.
@@ -346,7 +349,8 @@ reaches GitHub until you choose **Post to PR** and confirm. The confirmation alw
 picks it for you. That posts one GitHub review (comment or request changes) anchored to the same
 commit the agent reviewed, with inline comments for
 findings that have a line. If GitHub rejects the inline line numbers, it posts them in the review
-body instead.
+body instead. The footer names the provider and model that wrote the review, and `@user` or
+`@org/team` in the model's text is wrapped in backticks so posting never pings anyone.
 
 **Approve** is a separate action with its own confirmation dialog, which names the PR and the
 short head commit you're approving. The approval is pinned to that commit: the server reads the
@@ -367,8 +371,9 @@ The API acts as you, so it only accepts requests that come from PR Quest:
 - **Origin**, when the browser sends one, must be exactly the UI or API origin:
   `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_UI_PORT` and
   `PR_QUEST_PORT`. Pages on other localhost ports, such as another dev server, get `403`.
-- **`Sec-Fetch-Site`** on every POST, PUT and DELETE must be `same-origin` or `none`. Browsers
-  send `same-site` for other localhost ports, so this is checked as well as the origin.
+- **`Sec-Fetch-Site`**, when the browser sends it, must be `same-origin` or `none` on every
+  request, including GETs, so an image or script tag on another page can't trigger a call.
+  Browsers send `same-site` for other localhost ports, so this is checked as well as the origin.
 - **Every POST, PUT and DELETE must be `Content-Type: application/json`**, or the server answers
   `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
   never grants.
@@ -425,7 +430,9 @@ set in the environment or `.env.local` are never written to `secrets.json`.
 An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
 Quest starts without it. An unreadable `settings.json` is replaced with the defaults (Cursor
 reviews, default models) without a copy, and the next settings change overwrites it. An
-unreadable `quests.json` is ignored and replaced on the next successful fetch. Delete a user's folder to reset their progress. Board filters and presets live
+unreadable `quests.json` is ignored and replaced on the next successful fetch. A `secrets.json`
+or `settings.json` written by a newer PR Quest stops the server at startup with a message, so
+an older build never drops or overwrites it. Delete a user's folder to reset their progress. Board filters and presets live
 in the browser, as described in [Presets](#presets).
 
 ### Moving the old state into a user's folder
@@ -436,7 +443,10 @@ is renamed to `<file>.migrated-to-<login>-<UTC time>.bak`, for example
 `state.json.migrated-to-octocat-20261031T091500Z.bak`. Nothing reads the `.bak` files, so the
 old state can't be handed to a second user; delete them once you've checked your XP. A user who
 already has a `state.json` keeps it. An interrupted migration is finished on the next start, and
-the server logs which files it moved.
+the server logs which files it moved. The login that got the old state is recorded in
+`users/.legacy-owner`. If a `state.json` or `quests.json` shows up in `~/.pr-quest` again later,
+it is renamed to `<file>.orphaned-<UTC time>.bak` with a warning instead of being given to
+anyone.
 
 ## Security notes
 
@@ -482,8 +492,6 @@ the server logs which files it moved.
 - **"Approved by others" reads at most 100 latest reviews** per PR.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
-- **Posted reviews don't list the files Claude omitted.** The result screen shows them, but the
-  review posted to GitHub doesn't say which files Claude never saw.
 - **Switching GitHub users stops that user's running reviews.** Each signed-in session uses only
   its own token. If the active user changes while a review runs, for example through
   **Sign out** or `gh auth switch`, the rest of that run's GitHub calls, such as reading a Claude
