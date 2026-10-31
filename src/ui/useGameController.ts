@@ -35,6 +35,7 @@ import {
   upsertRun,
   upsertRuns,
   type GameState,
+  type QuestActionError,
   type Toast,
 } from './gameState.ts';
 import {
@@ -42,7 +43,7 @@ import {
   requestNotificationAccess,
   showBrowserNotification,
 } from './notifications.ts';
-import type { SettingsTarget } from './settingsModel.ts';
+import { settingsTargetFor, type SettingsTarget } from './settingsModel.ts';
 import { playLootSound, unlockAudio } from './sound.ts';
 import { createStore, type Store } from './store.ts';
 
@@ -215,7 +216,7 @@ export function useGameController(): GameController {
     const setQuestAction = (
       questId: string,
       action: 'review' | undefined,
-      error?: string,
+      error?: QuestActionError,
     ): void => {
       store.setState((state) => ({
         ...state,
@@ -301,7 +302,12 @@ export function useGameController(): GameController {
             store.setState((state) => upsertRun(state, response.run));
             setQuestAction(questId, undefined);
           })
-          .catch((reason: unknown) => setQuestAction(questId, undefined, describeError(reason)));
+          .catch((reason: unknown) =>
+            setQuestAction(questId, undefined, {
+              message: describeError(reason),
+              settings: settingsTargetFor(reason),
+            }),
+          );
       },
       openResult,
       closeResult: () => store.setState((state) => ({ ...state, openRunId: undefined })),

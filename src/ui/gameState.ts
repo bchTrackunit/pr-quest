@@ -41,6 +41,12 @@ export interface XpPopup {
 /** An in-flight request started from a quest card, so its buttons can show progress. */
 export type QuestAction = 'review' | 'approve';
 
+/** Why a quest card's action failed, and the settings that fix it when there are some. */
+export interface QuestActionError {
+  message: string;
+  settings?: SettingsTarget;
+}
+
 export interface GameState {
   quests: Array<Quest>;
   questsLoad: LoadState;
@@ -60,7 +66,7 @@ export interface GameState {
   xpPopups: Array<XpPopup>;
   connection: ConnectionStatus;
   questActions: Record<string, QuestAction>;
-  questActionErrors: Record<string, string>;
+  questActionErrors: Record<string, QuestActionError>;
   openRunId?: string;
   approveQuestId?: string;
   /** The settings popup is open at this section. */

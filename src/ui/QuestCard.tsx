@@ -2,8 +2,9 @@ import { useId } from 'react';
 
 import type { Quest, ReviewRun } from '../shared/api.ts';
 import { formatAge, formatNumber } from './format.ts';
-import { questLabel, type QuestAction } from './gameState.ts';
+import { questLabel, type QuestAction, type QuestActionError } from './gameState.ts';
 import { RunStatus } from './RunStatus.tsx';
+import type { SettingsTarget } from './settingsModel.ts';
 import { TierBadge } from './TierBadge.tsx';
 
 export interface QuestCardProps {
@@ -11,10 +12,12 @@ export interface QuestCardProps {
   now: number;
   run?: ReviewRun;
   pendingAction?: QuestAction;
-  actionError?: string;
+  actionError?: QuestActionError;
   onClickSendAgent: (questId: string) => void;
   onClickOpenResult: (runId: string) => void;
   onClickApprove: (questId: string) => void;
+  /** Offered when the action failed for want of a setting, e.g. a missing API key. */
+  onClickOpenSettings?: (target: SettingsTarget) => void;
 }
 
 /** `owner/repo#123` that wraps after the slash instead of inside the PR number. */
@@ -34,6 +37,7 @@ export const QuestCard = ({
   onClickSendAgent,
   onClickOpenResult,
   onClickApprove,
+  onClickOpenSettings = undefined,
 }: QuestCardProps) => {
   const titleId = useId();
   const draftNoteId = useId();
@@ -119,9 +123,22 @@ export const QuestCard = ({
       ) : null}
 
       {actionError ? (
-        <p className="form-error" role="alert">
-          Could not send the agent: {actionError}
-        </p>
+        <div className="form-error quest__error" role="alert">
+          <p>Could not send the agent: {actionError.message}</p>
+          {actionError.settings && onClickOpenSettings ? (
+            <button
+              className="button button--small"
+              onClick={() => {
+                if (actionError.settings) {
+                  onClickOpenSettings(actionError.settings);
+                }
+              }}
+              type="button"
+            >
+              <span aria-hidden="true">⚙️</span> Open settings
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       <div className="button-row">

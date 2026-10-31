@@ -53,6 +53,7 @@ export const App = () => {
           loadState={state.questsLoad}
           onClickApprove={actions.requestApprove}
           onClickOpenResult={actions.openResult}
+          onClickOpenSettings={actions.openSettings}
           onClickRefresh={actions.refreshQuests}
           onClickSendAgent={actions.sendReviewAgent}
           questActionErrors={state.questActionErrors}

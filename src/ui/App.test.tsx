@@ -30,6 +30,8 @@ vi.mock('./apiClient.ts', async (importOriginal) => {
     postRun: vi.fn(),
     discardRun: vi.fn(),
     fetchAuthStatus: vi.fn(),
+    fetchSettings: vi.fn(),
+    fetchModels: vi.fn(),
   };
 });
 
@@ -84,6 +86,16 @@ describe('App', () => {
       account: { login: 'octocat', tokenSource: 'gh' },
       device: { state: 'idle' },
     });
+    api.fetchSettings.mockResolvedValue({
+      reviewProvider: 'claude',
+      models: {},
+      keys: {
+        cursor: { set: true, source: 'env', last4: 'c0de' },
+        anthropic: { set: false },
+        linear: { set: false },
+      },
+    });
+    api.fetchModels.mockResolvedValue({ provider: 'claude', models: [], source: 'fallback' });
   });
 
   afterEach(() => {
@@ -136,6 +148,59 @@ describe('App', () => {
 
     await user.click(within(toasts).getByRole('button', { name: 'View loot' }));
     expect(screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' })).toBeTruthy();
+  });
+
+  test('a missingConfig review error opens the settings at the missing key', async () => {
+    const user = userEvent.setup();
+    api.startReview.mockRejectedValue(
+      new ApiRequestError(
+        400,
+        'missingConfig',
+        'Claude reviews need an Anthropic API key. Add it in Settings.',
+        'claude',
+      ),
+    );
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    const error = await screen.findByRole('alert');
+    expect(error.textContent).toContain('Claude reviews need an Anthropic API key');
+
+    await user.click(within(error).getByRole('button', { name: /Open settings/ }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: 'API keys' }));
+    const row = await within(dialog).findByRole('listitem', { name: 'Claude (Anthropic)' });
+    expect(within(row).getByText(/Needed for Claude reviews/)).toBeTruthy();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement?.textContent).toContain('Open settings');
+  });
+
+  test('other review errors offer no settings shortcut', async () => {
+    const user = userEvent.setup();
+    api.startReview.mockRejectedValue(new ApiRequestError(409, 'conflict', 'Refresh the board'));
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+
+    const error = await screen.findByRole('alert');
+    expect(error.textContent).toContain('Refresh the board');
+    expect(within(error).queryByRole('button')).toBeNull();
+  });
+
+  test('the HUD gear opens the settings at the GitHub account', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole('heading', { name: 'GitHub account' }),
+    );
+    expect(within(dialog).getByText('Using the GitHub CLI login (gh fallback)')).toBeTruthy();
   });
 
   test('clicking the browser notification opens the result', async () => {

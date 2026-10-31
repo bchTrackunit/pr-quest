@@ -67,6 +67,29 @@ describe('apiRequest', () => {
 
     await expect(discardRun('run-1')).rejects.toEqual(new ApiRequestError(409, 'conflict', 'Busy'));
   });
+
+  test('keeps the provider a missingConfig error names, and ignores unknown ones', async () => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        { error: { code: 'missingConfig', message: 'Need a key', provider: 'claude' } },
+        { status: 400 },
+      ),
+    );
+    await expect(startReview('o/r#1')).rejects.toMatchObject({
+      code: 'missingConfig',
+      provider: 'claude',
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        { error: { code: 'missingConfig', message: 'Need a key', provider: 'skynet' } },
+        { status: 400 },
+      ),
+    );
+    const error: unknown = await startReview('o/r#1').catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toHaveProperty('provider', undefined);
+  });
 });
 
 describe('auth and settings routes', () => {
