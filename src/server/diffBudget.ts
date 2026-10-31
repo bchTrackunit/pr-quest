@@ -25,7 +25,8 @@ const LOCKFILES = new Set([
 ]);
 
 const GENERATED_PATTERNS: ReadonlyArray<RegExp> = [
-  /(^|\/)(dist|build|out|vendor|node_modules|__generated__|generated)\//,
+  /^(dist|build|out)\//,
+  /(^|\/)(vendor|node_modules|__generated__|generated)\//,
   /(^|\/)__snapshots__\//,
   /\.min\.(js|css|mjs)$/,
   /\.(map|snap)$/,
@@ -127,16 +128,39 @@ function stripPrefix(path: string, prefix: string): string {
   return unquoted.startsWith(prefix) ? unquoted.slice(prefix.length) : unquoted;
 }
 
-/** Git quotes paths with unusual characters in C style. */
+const C_ESCAPES: Readonly<Record<string, number>> = {
+  a: 0x07,
+  b: 0x08,
+  t: 0x09,
+  n: 0x0a,
+  v: 0x0b,
+  f: 0x0c,
+  r: 0x0d,
+  '"': 0x22,
+  '\\': 0x5c,
+};
+
+/**
+ * Git quotes paths with unusual characters in C style, writing each non-ASCII byte as an octal
+ * `\NNN` escape, so the bytes are collected and decoded as UTF-8.
+ */
 function unquote(path: string): string {
   const trimmed = path.trim();
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const value: unknown = JSON.parse(trimmed);
-      return typeof value === 'string' ? value : trimmed.slice(1, -1);
-    } catch {
-      return trimmed.slice(1, -1);
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) {
+    return trimmed;
+  }
+  const encoder = new TextEncoder();
+  const bytes: Array<number> = [];
+  const tokens = trimmed.slice(1, -1).matchAll(/\\([0-3][0-7]{2}|[\s\S])|([^\\]+)/g);
+  for (const [, escape, text] of tokens) {
+    if (text !== undefined) {
+      bytes.push(...encoder.encode(text));
+    } else if (escape !== undefined && escape.length === 3) {
+      bytes.push(Number.parseInt(escape, 8));
+    } else if (escape !== undefined) {
+      const known = C_ESCAPES[escape];
+      bytes.push(...(known === undefined ? encoder.encode(`\\${escape}`) : [known]));
     }
   }
-  return trimmed;
+  return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
 }

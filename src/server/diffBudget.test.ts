@@ -29,6 +29,34 @@ describe('splitDiff', () => {
   test('ignores text before the first file', () => {
     expect(splitDiff(`garbage\n${fileDiff('a.ts')}`).map((file) => file.path)).toEqual(['a.ts']);
   });
+
+  test('unquotes a path git quoted for a space and a quote', () => {
+    const quoted =
+      'diff --git "a/my \\"file\\".ts" "b/my \\"file\\".ts"\n--- "a/my \\"file\\".ts"\n+++ "b/my \\"file\\".ts"\n@@ -1 +1 @@\n-a\n+b\n';
+
+    expect(splitDiff(quoted)[0]?.path).toBe('my "file".ts');
+  });
+
+  test('decodes a newline and a tab in a quoted path', () => {
+    const quoted =
+      'diff --git "a/x\\ny\\tz.ts" "b/x\\ny\\tz.ts"\n--- "a/x\\ny\\tz.ts"\n+++ "b/x\\ny\\tz.ts"\n@@ -1 +1 @@\n-a\n+b\n';
+
+    expect(splitDiff(quoted)[0]?.path).toBe('x\ny\tz.ts');
+  });
+
+  test("decodes git's octal escapes of non-ASCII paths as UTF-8", () => {
+    const quoted =
+      'diff --git "a/caf\\303\\251/\\346\\227\\245.ts" "b/caf\\303\\251/\\346\\227\\245.ts"\n--- "a/caf\\303\\251/\\346\\227\\245.ts"\n+++ "b/caf\\303\\251/\\346\\227\\245.ts"\n@@ -1 +1 @@\n-a\n+b\n';
+
+    expect(splitDiff(quoted)[0]?.path).toBe('café/日.ts');
+  });
+
+  test('decodes a quoted rename target', () => {
+    const renamed =
+      'diff --git a/a.ts "b/\\303\\251.ts"\nsimilarity index 100%\nrename from a.ts\nrename to "\\303\\251.ts"\n';
+
+    expect(splitDiff(renamed)[0]?.path).toBe('é.ts');
+  });
 });
 
 describe('budgetDiff', () => {
@@ -60,6 +88,23 @@ describe('budgetDiff', () => {
     expect(budgeted.omitted).toEqual([{ file: path, reason }]);
     expect(budgeted.text).toBe(fileDiff('src/a.ts'));
   });
+
+  test.each([
+    'src/build/plan.ts',
+    'packages/out/index.ts',
+    'apps/web/dist/main.ts',
+  ])('reviews %s, because only a root dist, build or out folder is generated', (path) => {
+    expect(budgetDiff(fileDiff(path), { maxChars: 10_000 }).omitted).toEqual([]);
+  });
+
+  test.each(['build/app.js', 'out/index.js', 'web/node_modules/x/index.js', 'lib/vendor/y.go'])(
+    'still leaves out %s as generated',
+    (path) => {
+      expect(budgetDiff(fileDiff(path), { maxChars: 10_000 }).omitted).toEqual([
+        { file: path, reason: 'generated' },
+      ]);
+    },
+  );
 
   test('leaves out binary files', () => {
     const binary = 'diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n';
