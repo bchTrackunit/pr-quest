@@ -110,11 +110,14 @@ export class GitHubApi {
   public async graphql(query: string, variables: Record<string, unknown>): Promise<string> {
     const response = await this.send('POST', '/graphql', { body: { query, variables } });
     const text = await response.text();
-    const rateLimit = this.rateLimitOf(response) ?? graphqlRateLimit(text);
-    if (!response.ok || (rateLimit && /RATE_LIMITED/.test(text))) {
+    const limited = graphqlRateLimit(text);
+    if (!response.ok || limited) {
       throw new GitHubApiError(
         `GitHub GraphQL failed${response.ok ? '' : ` (HTTP ${response.status})`}: ${messageOf(text)}`,
-        withRateLimit({ httpStatus: response.status, body: text }, rateLimit),
+        withRateLimit(
+          { httpStatus: response.status, body: text },
+          this.rateLimitOf(response) ?? limited,
+        ),
       );
     }
     return text;
@@ -160,11 +163,16 @@ export class GitHubApi {
 
   /**
    * An exhausted quota answers with `x-ratelimit-remaining: 0` and its reset; a secondary limit
-   * may send `retry-after`. Plain 403s carry neither, so they stay permission errors.
+   * may send `retry-after` on a 403 or 429. Plain 403s carry neither, so they stay permission
+   * errors, and a 503's `retry-after` is an outage, not a rate limit.
    */
   private rateLimitOf(response: Response): RateLimitHint | undefined {
     const retryAfter = Number(response.headers.get('retry-after'));
-    if (response.headers.has('retry-after') && Number.isFinite(retryAfter)) {
+    if (
+      (response.status === 403 || response.status === 429) &&
+      response.headers.has('retry-after') &&
+      Number.isFinite(retryAfter)
+    ) {
       return { kind: 'secondary', resetAt: new Date(this.now().getTime() + retryAfter * 1000) };
     }
     if (response.headers.get('x-ratelimit-remaining') !== '0') {
@@ -184,8 +192,23 @@ function withRateLimit(
   return rateLimit ? { ...details, rateLimit } : details;
 }
 
+/** Only a top-level GraphQL error of type `RATE_LIMITED` counts, never a string in the data. */
 function graphqlRateLimit(text: string): RateLimitHint | undefined {
-  return /"type"\s*:\s*"RATE_LIMITED"/.test(text) ? { kind: 'primary' } : undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const errors: unknown =
+    typeof value === 'object' && value && 'errors' in value ? value.errors : undefined;
+  const limited =
+    Array.isArray(errors) &&
+    errors.some(
+      (error: unknown) =>
+        typeof error === 'object' && error && 'type' in error && error.type === 'RATE_LIMITED',
+    );
+  return limited ? { kind: 'primary' } : undefined;
 }
 
 /** GitHub's `message`, or the first GraphQL error, or the start of the body. */

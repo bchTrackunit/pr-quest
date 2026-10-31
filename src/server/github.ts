@@ -462,13 +462,9 @@ export class GitHubClient {
         `Comparing ${base}...${headSha.slice(0, 7)} failed, using the PR diff: ${errorMessage(error)}`,
       );
     }
+    await this.assertHead(ref, headSha);
     const diff = await this.api.request('GET', pullPath(ref), { accept: DIFF_MEDIA_TYPE });
-    const currentHead = await this.fetchHeadSha(ref);
-    if (currentHead !== headSha.toLowerCase()) {
-      throw new GitHubApiError(
-        `${formatQuestId(ref.repo, ref.number)} moved on to ${currentHead.slice(0, 7)} while its diff was read; refresh and send the review again`,
-      );
-    }
+    await this.assertHead(ref, headSha);
     return diff;
   }
 
@@ -500,6 +496,15 @@ export class GitHubClient {
         url: await this.postReview(ref, renderReview(draft, { inline: false })),
         inlineCommentsDropped: true,
       };
+    }
+  }
+
+  private async assertHead(ref: QuestRef, headSha: string): Promise<void> {
+    const currentHead = await this.fetchHeadSha(ref);
+    if (currentHead !== headSha.toLowerCase()) {
+      throw new GitHubApiError(
+        `${formatQuestId(ref.repo, ref.number)} moved on to ${currentHead.slice(0, 7)} while its diff was read; refresh and send the review again`,
+      );
     }
   }
 

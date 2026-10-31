@@ -141,6 +141,30 @@ describe('GitHubApi.request', () => {
     });
   });
 
+  test.each([429, 403])('reads Retry-After on an HTTP %i as a secondary limit', async (status) => {
+    const fetchMock = vi.fn<FetchLike>(async () =>
+      respond(status, { message: 'Slow down' }, { 'retry-after': '30' }),
+    );
+
+    const error = await api(fetchMock)
+      .request('GET', '/search/issues')
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ rateLimit: { kind: 'secondary' } });
+  });
+
+  test('does not read Retry-After on a 503 as a rate limit', async () => {
+    const fetchMock = vi.fn<FetchLike>(async () =>
+      respond(503, { message: 'Service Unavailable' }, { 'retry-after': '120' }),
+    );
+
+    const error = await api(fetchMock)
+      .request('GET', '/search/issues')
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ httpStatus: 503, rateLimit: undefined });
+  });
+
   test('reports which token GitHub rejected with a 401', async () => {
     const onUnauthorized = vi.fn();
     const fetchMock = vi.fn<FetchLike>(async () => respond(401, { message: 'Bad credentials' }));
@@ -214,5 +238,28 @@ describe('GitHubApi.graphql', () => {
       message: expect.stringContaining('API rate limit exceeded'),
       rateLimit: { kind: 'primary', resetAt: new Date(reset * 1000) },
     });
+  });
+
+  test('returns a good response that used the last point and mentions RATE_LIMITED', async () => {
+    const body = { data: { pr0: { headRefName: 'fix/"type":"RATE_LIMITED"' } } };
+    const fetchMock = vi.fn<FetchLike>(async () =>
+      respond(200, body, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1798632000' }),
+    );
+
+    const text = await api(fetchMock).graphql('query { viewer { login } }', {});
+
+    expect(JSON.parse(text)).toEqual(body);
+  });
+
+  test('turns a RATE_LIMITED error without rate-limit headers into a primary limit', async () => {
+    const fetchMock = vi.fn<FetchLike>(async () =>
+      respond(200, { errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded.' }] }),
+    );
+
+    const error = await api(fetchMock)
+      .graphql('query { viewer { login } }', {})
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ rateLimit: { kind: 'primary' } });
   });
 });

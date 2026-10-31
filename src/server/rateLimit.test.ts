@@ -152,6 +152,16 @@ describe('nextBackoff', () => {
     expect(backoff.limitedUntil).toEqual(new Date('2026-10-30T14:00:32.000Z'));
   });
 
+  test('never waits more than an hour, whatever the reset says', () => {
+    const backoff = nextBackoff({
+      kind: 'secondary',
+      now: NOW,
+      resetAt: new Date(NOW.getTime() + 999_999_999_000),
+    });
+
+    expect(backoff.limitedUntil).toEqual(new Date(NOW.getTime() + 60 * 60_000));
+  });
+
   test('backs off exponentially for secondary limits and unknown resets', () => {
     const first = nextBackoff({ kind: 'secondary', now: NOW });
     const second = nextBackoff({ kind: 'secondary', now: NOW, previous: first });

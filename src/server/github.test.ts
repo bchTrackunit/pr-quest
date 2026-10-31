@@ -561,9 +561,45 @@ describe('GitHubClient.fetchDiff', () => {
     expect(diff).toBe(DIFF);
     expect(github.calls.map((call) => [call.path, call.accept])).toEqual([
       [`/repos/o/r/compare/main...${HEAD}`, 'application/vnd.github.diff'],
+      ['/repos/o/r/pulls/5', 'application/vnd.github+json'],
       ['/repos/o/r/pulls/5', 'application/vnd.github.diff'],
       ['/repos/o/r/pulls/5', 'application/vnd.github+json'],
     ]);
+  });
+
+  test('does not read the fallback diff when the PR already moved on', async () => {
+    const github = fakeGitHub((call) => {
+      if (call.path.includes('/compare/')) {
+        return json({ message: 'Not Found' }, 404);
+      }
+      return call.accept === 'application/vnd.github.diff'
+        ? ok(DIFF)
+        : json({ head: { sha: '1111111111111111111111111111111111111111' } });
+    });
+
+    await expect(github.client().fetchDiff(ref, { base: 'main', headSha: HEAD })).rejects.toThrow(
+      /moved on to 1111111/,
+    );
+    expect(github.calls.map((call) => [call.path, call.accept])).toEqual([
+      [`/repos/o/r/compare/main...${HEAD}`, 'application/vnd.github.diff'],
+      ['/repos/o/r/pulls/5', 'application/vnd.github+json'],
+    ]);
+  });
+
+  test('refuses the fallback diff when the PR moves on while it is read', async () => {
+    const heads = [HEAD, '2222222222222222222222222222222222222222'];
+    const github = fakeGitHub((call) => {
+      if (call.path.includes('/compare/')) {
+        return json({ message: 'Not Found' }, 404);
+      }
+      return call.accept === 'application/vnd.github.diff'
+        ? ok(DIFF)
+        : json({ head: { sha: heads.shift() ?? HEAD } });
+    });
+
+    await expect(github.client().fetchDiff(ref, { base: 'main', headSha: HEAD })).rejects.toThrow(
+      /moved on to 2222222/,
+    );
   });
 
   test('refuses the fallback diff once the PR has moved on', async () => {

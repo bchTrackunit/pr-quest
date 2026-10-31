@@ -7,6 +7,8 @@ export const BACKOFF_BASE_MS = 60_000;
 export const BACKOFF_MAX_MS = 10 * 60_000;
 /** Waits a little past GitHub's reset time so the first retry doesn't land a moment too early. */
 const RESET_MARGIN_MS = 2000;
+/** GitHub's quotas reset hourly, so a longer wait means a bad header, not a real limit. */
+export const MAX_RESET_WAIT_MS = 60 * 60_000;
 
 const SECONDARY_PATTERN = /secondary rate limit|abuse detection|abuse mechanism/i;
 const PRIMARY_PATTERN = /rate limit exceeded|rate_limited/i;
@@ -114,5 +116,9 @@ export function nextBackoff(input: {
     resetMs !== undefined && resetMs > nowMs
       ? resetMs + RESET_MARGIN_MS
       : nowMs + backoffDelayMs(attempt);
-  return { kind: input.kind, limitedUntil: new Date(limitedUntilMs), attempt };
+  return {
+    kind: input.kind,
+    limitedUntil: new Date(Math.min(limitedUntilMs, nowMs + MAX_RESET_WAIT_MS)),
+    attempt,
+  };
 }
