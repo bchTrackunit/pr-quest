@@ -1,7 +1,10 @@
 import type { OmittedFile } from '../shared/api.ts';
 
-/** About 3.5 characters per token for code, so this keeps a diff near 120k tokens. */
-export const DEFAULT_DIFF_BUDGET_CHARS = 420_000;
+/**
+ * Dense, whitespace-heavy or non-ASCII code can take a token per 1.5-2 characters, so even then
+ * this keeps a diff under about 160k tokens and inside a 200k-token context.
+ */
+export const DEFAULT_DIFF_BUDGET_CHARS = 280_000;
 
 const LOCKFILES = new Set([
   'bun.lockb',

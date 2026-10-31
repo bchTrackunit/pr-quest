@@ -3,9 +3,11 @@ import Anthropic, {
   APIConnectionError,
   APIError,
   AuthenticationError,
+  BadRequestError,
   NotFoundError,
   PermissionDeniedError,
   RateLimitError,
+  type ClientOptions,
 } from '@anthropic-ai/sdk';
 import type {
   Message,
@@ -14,9 +16,11 @@ import type {
 } from '@anthropic-ai/sdk/resources/messages';
 
 import type { ReviewResult } from '../shared/api.ts';
+import { ANTHROPIC_API_URL } from './config.ts';
 import { budgetDiff, DEFAULT_DIFF_BUDGET_CHARS, type BudgetedDiff } from './diffBudget.ts';
 import type { GitHubClient } from './github.ts';
-import { GitHubApiError } from './githubApi.ts';
+import { GitHubApiError, GitHubNetworkError } from './githubApi.ts';
+import { isRateLimitError } from './rateLimit.ts';
 import { REVIEW_GUIDELINES, ReviewResultSchema } from './reviewResult.ts';
 import type { QuestSnapshot } from './store.ts';
 
@@ -24,6 +28,11 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5';
 const MAX_OUTPUT_TOKENS = 16_000;
 const REQUEST_TIMEOUT_MS = 10 * 60_000;
 const REVIEW_TOOL_NAME = 'submit_review';
+/** The rest are still returned in the result, so the player sees every file Claude skipped. */
+const MAX_OMITTED_IN_PROMPT = 200;
+const MAX_OMITTED_NAME_LENGTH = 300;
+/** Read by the SDK when a client is built; PR Quest only sends the saved key to Anthropic. */
+const IGNORED_ENV = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS'];
 
 const SEVERITIES = ['critical', 'major', 'minor', 'nit'];
 
@@ -116,8 +125,33 @@ export interface ClaudeRunner {
   ) => Promise<ReviewResult>;
 }
 
+/** The SDK reads the environment only in its constructor, so hiding it there is enough. */
+export function anthropicClient(
+  apiKey: string,
+  options: Pick<ClientOptions, 'fetch'> = {},
+): Anthropic {
+  const saved = IGNORED_ENV.map((name) => [name, process.env[name]] as const);
+  for (const [name] of saved) {
+    delete process.env[name];
+  }
+  try {
+    return new Anthropic({
+      ...options,
+      apiKey,
+      baseURL: ANTHROPIC_API_URL,
+      timeout: REQUEST_TIMEOUT_MS,
+    });
+  } finally {
+    for (const [name, value] of saved) {
+      if (value !== undefined) {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
 export const anthropicCreateMessage: CreateMessage = (apiKey, params) =>
-  new Anthropic({ apiKey, timeout: REQUEST_TIMEOUT_MS }).messages.create(params);
+  anthropicClient(apiKey).messages.create(params);
 
 /** Reviews a PR by sending its diff, pinned to the head commit, to Claude's Messages API. */
 export class ClaudeReviewer {
@@ -188,11 +222,10 @@ export class ClaudeReviewer {
         { base: quest.targetBranch, headSha },
       );
     } catch (error) {
-      const retryable = error instanceof GitHubApiError ? !!error.rateLimit : undefined;
       throw new ClaudeReviewError(
         'startup',
         `Could not read the diff from GitHub: ${errorMessage(error)}`,
-        retryable,
+        isTransientGitHubError(error),
       );
     }
     const budgeted = budgetDiff(diff, {
@@ -219,6 +252,14 @@ export class ClaudeReviewer {
   }
 }
 
+/** Rate limits, GitHub outages and dropped connections pass; a retry can't fix anything else. */
+function isTransientGitHubError(error: unknown): boolean {
+  if (isRateLimitError(error) || error instanceof GitHubNetworkError) {
+    return true;
+  }
+  return error instanceof GitHubApiError && (error.httpStatus ?? 0) >= 500;
+}
+
 function toStartupError(error: unknown, model: string): ClaudeReviewError {
   if (error instanceof AuthenticationError) {
     return new ClaudeReviewError(
@@ -243,6 +284,13 @@ function toStartupError(error: unknown, model: string): ClaudeReviewError {
   }
   if (error instanceof RateLimitError) {
     return new ClaudeReviewError('startup', `Anthropic is rate limiting: ${error.message}`, true);
+  }
+  if (error instanceof BadRequestError && /prompt is too long/i.test(error.message)) {
+    return new ClaudeReviewError(
+      'startup',
+      `The diff is too large for ${model}. Pick a model with a larger context window in Settings.`,
+      false,
+    );
   }
   if (error instanceof APIConnectionError) {
     return new ClaudeReviewError('startup', `Could not reach Anthropic: ${error.message}`, true);
@@ -304,12 +352,15 @@ function buildUserMessage(
   budgeted: BudgetedDiff,
   nonce: string,
 ): string {
+  const listed = budgeted.omitted.slice(0, MAX_OMITTED_IN_PROMPT);
+  const unlisted = budgeted.omitted.length - listed.length;
   const omitted =
     budgeted.omitted.length === 0
       ? ['Files left out of the diff: none']
       : [
           'Files left out of the diff (you cannot see them):',
-          ...budgeted.omitted.map(({ file, reason }) => `- ${file} (${reason})`),
+          ...listed.map(({ file, reason }) => `- ${JSON.stringify(shorten(file))} (${reason})`),
+          ...(unlisted > 0 ? [`- and ${unlisted} more`] : []),
         ];
   return [
     `Pull request: ${quest.id}`,
@@ -322,6 +373,12 @@ function buildUserMessage(
     budgeted.text,
     `DIFF-${nonce}>>>`,
   ].join('\n');
+}
+
+function shorten(file: string): string {
+  return file.length > MAX_OMITTED_NAME_LENGTH
+    ? `${file.slice(0, MAX_OMITTED_NAME_LENGTH)}…`
+    : file;
 }
 
 function errorMessage(error: unknown): string {

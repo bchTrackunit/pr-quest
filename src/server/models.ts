@@ -7,9 +7,10 @@ import type {
   ModelOption,
   ReviewProvider,
 } from '../shared/api.ts';
+import { ANTHROPIC_API_URL } from './config.ts';
 import type { FetchLike } from './githubApi.ts';
 
-const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models?limit=1000';
+const ANTHROPIC_MODELS_URL = `${ANTHROPIC_API_URL}/v1/models?limit=1000`;
 const ANTHROPIC_VERSION = '2023-06-01';
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_ERROR_LENGTH = 300;

@@ -9,6 +9,12 @@ export const SERVER_HOST = '127.0.0.1';
 export const DEFAULT_SERVER_PORT = 4317;
 export const DEFAULT_UI_PORT = 4318;
 
+/**
+ * Every Anthropic call (reviews and the model list) goes here. `ANTHROPIC_BASE_URL` is ignored, so
+ * a gateway set up for another tool never receives the key or a private diff.
+ */
+export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
+
 export const DEFAULT_ENV_FILE_PATH = fileURLToPath(new URL('../../.env.local', import.meta.url));
 
 /**

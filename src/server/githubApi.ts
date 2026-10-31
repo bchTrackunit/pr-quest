@@ -33,6 +33,14 @@ export class GitHubApiError extends Error {
   }
 }
 
+/** GitHub never answered: the connection failed or timed out. */
+export class GitHubNetworkError extends GitHubApiError {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'GitHubNetworkError';
+  }
+}
+
 /** No GitHub token: the player hasn't signed in and `gh` isn't logged in either. */
 export class NotSignedInError extends GitHubApiError {
   public constructor(
@@ -140,7 +148,7 @@ export class GitHubApi {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      throw new GitHubApiError(
+      throw new GitHubNetworkError(
         `GitHub ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }

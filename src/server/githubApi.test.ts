@@ -1,6 +1,12 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import { GitHubApi, GitHubApiError, NotSignedInError, type FetchLike } from './githubApi.ts';
+import {
+  GitHubApi,
+  GitHubApiError,
+  GitHubNetworkError,
+  NotSignedInError,
+  type FetchLike,
+} from './githubApi.ts';
 
 const NOW = new Date('2026-10-30T14:00:00.000Z');
 
@@ -92,7 +98,7 @@ describe('GitHubApi.request', () => {
       .request('GET', '/user')
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).toBeInstanceOf(GitHubNetworkError);
     expect(JSON.stringify(error)).not.toContain('gho_secret');
     expect(String(error)).toContain('fetch failed');
   });
