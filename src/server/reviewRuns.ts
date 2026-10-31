@@ -130,34 +130,6 @@ export class ReviewRunService {
     return stored.run;
   }
 
-  /** Checks the provider's key up front, so a missing one is refused before anything is queued. */
-  private launcherFor(
-    provider: ReviewProvider,
-  ): (stored: StoredRun, headSha: string, model: string | undefined) => Promise<void> {
-    if (provider === 'claude') {
-      const claude = this.claude;
-      if (!claude?.hasKey()) {
-        throw new ApiError(
-          400,
-          'missingConfig',
-          'Claude reviews need an Anthropic API key. Add it in Settings.',
-          { provider },
-        );
-      }
-      return (stored, headSha, model) => this.executeClaude(claude, stored, headSha, model);
-    }
-    const apiKey = this.cursorApiKey();
-    if (!apiKey) {
-      throw new ApiError(
-        400,
-        'missingConfig',
-        'Cursor reviews need a Cursor API key. Add it in Settings.',
-        { provider },
-      );
-    }
-    return (stored, headSha, model) => this.execute(stored, headSha, apiKey, model);
-  }
-
   /** After a restart: reattach to runs that were still going, or fail the ones that never started. */
   public async resumeInterrupted(): Promise<void> {
     const interrupted = this.store.state.runs.filter((entry) => isActive(entry.run));
@@ -231,6 +203,34 @@ export class ReviewRunService {
       throw new ApiError(409, 'conflict', `This review was already ${run.disposition}`);
     }
     return this.patch(id, { disposition: 'discarded' });
+  }
+
+  /** Checks the provider's key up front, so a missing one is refused before anything is queued. */
+  private launcherFor(
+    provider: ReviewProvider,
+  ): (stored: StoredRun, headSha: string, model: string | undefined) => Promise<void> {
+    if (provider === 'claude') {
+      const claude = this.claude;
+      if (!claude?.hasKey()) {
+        throw new ApiError(
+          400,
+          'missingConfig',
+          'Claude reviews need an Anthropic API key. Add it in Settings.',
+          { provider },
+        );
+      }
+      return (stored, headSha, model) => this.executeClaude(claude, stored, headSha, model);
+    }
+    const apiKey = this.cursorApiKey();
+    if (!apiKey) {
+      throw new ApiError(
+        400,
+        'missingConfig',
+        'Cursor reviews need a Cursor API key. Add it in Settings.',
+        { provider },
+      );
+    }
+    return (stored, headSha, model) => this.execute(stored, headSha, apiKey, model);
   }
 
   private requireRun(id: string): StoredRun {

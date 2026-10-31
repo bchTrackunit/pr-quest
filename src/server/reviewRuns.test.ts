@@ -350,11 +350,11 @@ describe('ReviewRunService.start', () => {
 
   test('reads the Cursor key for each review, so a key saved in Settings works right away', async () => {
     fakeAgent();
-    let key: string | undefined;
-    const runs = service({ cursorApiKey: () => key });
+    const saved: { key?: string } = {};
+    const runs = service({ cursorApiKey: () => saved.key });
     await expect(runs.start(quest)).rejects.toMatchObject({ code: 'missingConfig' });
 
-    key = 'saved-key';
+    saved.key = 'saved-key';
     await runs.start(quest);
     await runs.whenIdle();
 
