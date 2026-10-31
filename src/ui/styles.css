@@ -1281,6 +1281,27 @@ code {
   font-weight: 700;
 }
 
+.result__reviewer {
+  margin-top: -0.5rem;
+  font-size: 0.9rem;
+}
+
+.result__omitted {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 2px dashed var(--warning);
+  border-radius: var(--radius);
+}
+
+.omitted-files {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
 .result__summary {
   display: grid;
   gap: 0.5rem;

@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import type {
   FindingSeverity,
+  OmittedFileReason,
   PostReviewEvent,
   Quest,
   ReviewRun,
@@ -10,6 +11,7 @@ import type {
 import { describeError } from './apiClient.ts';
 import { groupFindings, questLabel } from './gameState.ts';
 import { Modal } from './Modal.tsx';
+import { PROVIDER_LABELS } from './settingsModel.ts';
 
 export interface ReviewResultProps {
   run: ReviewRun;
@@ -33,7 +35,25 @@ const SEVERITY_META: Record<FindingSeverity, { label: string; icon: string }> = 
   nit: { label: 'Nit', icon: '🪶' },
 };
 
+const OMITTED_REASON_LABELS: Record<OmittedFileReason, string> = {
+  lockfile: 'lockfile',
+  generated: 'generated',
+  binary: 'binary',
+  tooLarge: 'too large',
+};
+
 type Pending = 'post' | 'discard' | undefined;
+
+/** "Reviewed by Claude · claude-opus-5"; runs saved before providers existed may lack both. */
+function describeReviewer(run: ReviewRun): string | undefined {
+  const provider = Object.hasOwn(PROVIDER_LABELS, run.provider)
+    ? PROVIDER_LABELS[run.provider]
+    : undefined;
+  if (!provider && !run.model) {
+    return undefined;
+  }
+  return [provider ? `Reviewed by ${provider}` : 'Reviewed', run.model].filter(Boolean).join(' · ');
+}
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -87,6 +107,8 @@ export const ReviewResult = ({
   };
 
   const verdict = result ? VERDICT_META[result.verdict] : undefined;
+  const reviewer = describeReviewer(run);
+  const omitted = result?.omitted ?? [];
 
   return (
     <Modal
@@ -96,6 +118,7 @@ export const ReviewResult = ({
       title={`Loot from ${label}`}
     >
       <p className="result__quest">{summary.title}</p>
+      {reviewer ? <p className="muted result__reviewer">{reviewer}</p> : null}
       {result && verdict ? (
         <>
           <section aria-labelledby="result-summary" className="result__summary">
@@ -151,6 +174,31 @@ export const ReviewResult = ({
               ))
             )}
           </section>
+
+          {omitted.length > 0 ? (
+            <section aria-labelledby="result-omitted" className="result__omitted">
+              <h3 className="pixel" id="result-omitted">
+                Omitted files <span className="count">{omitted.length}</span>
+              </h3>
+              <p className="muted">
+                The reviewer never saw these files, so they have no findings. Check them yourself.
+              </p>
+              <ul className="omitted-files">
+                {omitted.map((entry) => (
+                  <li key={entry.file}>
+                    <code>{entry.file}</code>{' '}
+                    <span className="muted">
+                      (
+                      {Object.hasOwn(OMITTED_REASON_LABELS, entry.reason)
+                        ? OMITTED_REASON_LABELS[entry.reason]
+                        : entry.reason}
+                      )
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </>
       ) : (
         <p className="form-error" role="alert">
