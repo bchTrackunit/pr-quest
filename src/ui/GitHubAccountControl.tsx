@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 
 import type { GitHubAccount } from '../shared/api.ts';
 import { DeviceCodePanel } from './DeviceCodePanel.tsx';
@@ -41,11 +41,16 @@ export const TokenSourceBadge = ({ account }: { account: GitHubAccount }) => (
 export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlProps) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const setupHintId = useId();
+  const accountRef = useRef<HTMLDivElement>(null);
   const { account, device } = state;
 
   if (state.load === 'loading' || state.load === 'unavailable') {
     return null;
   }
+
+  /** Signing in replaces the button that opened the dialog, so focus goes to the account. */
+  const accountFocusTarget = (): HTMLElement | null =>
+    accountRef.current?.querySelector<HTMLElement>('button:not([disabled])') ?? accountRef.current;
 
   const openSignIn = (): void => {
     const canRestart = device.state !== 'pending' && state.pending !== 'start';
@@ -65,7 +70,7 @@ export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlPro
     }
     if (account) {
       return (
-        <div className="hud__account">
+        <div className="hud__account" ref={accountRef} tabIndex={-1}>
           <AccountAvatar account={account} />
           <span className="hud__login">
             <span className="visually-hidden">Signed in to GitHub as </span>@{account.login}
@@ -85,7 +90,7 @@ export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlPro
       );
     }
     return (
-      <div className="hud__account">
+      <div className="hud__account" ref={accountRef} tabIndex={-1}>
         <button
           aria-describedby={state.clientIdConfigured ? undefined : setupHintId}
           className="button button--primary"
@@ -113,12 +118,18 @@ export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlPro
     <>
       {renderAccount()}
       {isDialogOpen ? (
-        <Modal onClickClose={() => setIsDialogOpen(false)} title="Sign in with GitHub">
+        <Modal
+          onClickClose={() => setIsDialogOpen(false)}
+          returnFocusTo={accountFocusTarget}
+          title="Sign in with GitHub"
+        >
           <DeviceCodePanel actions={actions} state={state} />
           {device.state === 'complete' ? (
             <div className="button-row button-row--end">
               <button
+                autoFocus
                 className="button button--success"
+                data-autofocus
                 onClick={() => setIsDialogOpen(false)}
                 type="button"
               >

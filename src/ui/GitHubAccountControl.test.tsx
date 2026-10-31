@@ -118,6 +118,65 @@ describe('GitHubAccountControl', () => {
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
   });
 
+  test('focuses Done when sign-in completes, and returns focus to the account on close', async () => {
+    const user = setupUser();
+    renderControl();
+    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
+    within(dialog)
+      .getByRole('button', { name: /Copy code/ })
+      .focus();
+
+    api.fetchDeviceFlow.mockResolvedValue({ device: { state: 'complete' } });
+    api.fetchAuthStatus.mockResolvedValue(
+      authStatus({ account: OCTOCAT, device: { state: 'complete' } }),
+    );
+    await poll();
+
+    const done = await within(dialog).findByRole('button', { name: 'Done' });
+    expect(document.activeElement).toBe(done);
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Sign out' }));
+  });
+
+  test('Escape still closes the dialog after Cancel and Try again replace the focused button', async () => {
+    const user = setupUser();
+    renderControl();
+    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
+    await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await within(dialog).findByRole('button', { name: 'Sign in with GitHub' });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    api.fetchDeviceFlow.mockResolvedValue({ device: { state: 'expired' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Sign in with GitHub' }));
+    await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
+    await poll();
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  test('unmounting while a code is pending stops polling', async () => {
+    const user = setupUser();
+    renderControl();
+    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await screen.findByLabelText('Sign-in code WDJB-MJHT');
+
+    cleanup();
+    await poll();
+    await poll();
+
+    expect(api.fetchDeviceFlow).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['expired', 'The code expired before it was entered.'],
     ['denied', 'Sign-in was denied on GitHub.'],
