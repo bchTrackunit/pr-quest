@@ -484,10 +484,10 @@ the server logs which files it moved.
   PR Quest's built-in guess; with a key, it comes from Cursor.
 - **Posted reviews don't list the files Claude omitted.** The result screen shows them, but the
   review posted to GitHub doesn't say which files Claude never saw.
-- **Switching GitHub users during a review is racy.** GitHub calls use whoever the current token
-  is. If the active user changes while a review runs, for example through **Sign out** or
-  `gh auth switch`, the rest of that run's GitHub calls, such as reading a Claude diff, use the
-  new user's token.
+- **Switching GitHub users stops that user's running reviews.** Each signed-in session uses only
+  its own token. If the active user changes while a review runs, for example through
+  **Sign out** or `gh auth switch`, the rest of that run's GitHub calls, such as reading a Claude
+  diff, fail instead of going out as the new user.
 - **Sign out doesn't revoke the token** on GitHub; see [Security notes](#security-notes).
 - **Posted agent runs match no Agent filter.** Once findings are posted, the agent state no
   longer applies, so selecting any Agent state hides that PR.
