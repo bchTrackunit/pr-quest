@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
+import { z } from 'zod';
 
-import { DeviceFlow, GITHUB_OAUTH_SCOPES } from './deviceFlow.ts';
+import { DeviceFlow, GITHUB_OAUTH_SCOPES, type TokenContext } from './deviceFlow.ts';
 
 const CODE_RESPONSE = {
   device_code: 'dev-secret-code',
@@ -34,7 +35,7 @@ function setup(pollReplies: Array<unknown>, clientId: string | null = 'Iv1.clien
     }
     throw new Error(`unexpected ${href}`);
   });
-  const onToken = vi.fn(async (_token: string) => undefined);
+  const onToken = vi.fn(async (_token: string, _context?: TokenContext) => undefined);
   const flow = new DeviceFlow({
     clientId: clientId ?? undefined,
     fetch: fetchMock,
@@ -86,7 +87,7 @@ describe('DeviceFlow', () => {
       device_code: 'dev-secret-code',
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
     });
-    expect(onToken).toHaveBeenCalledWith('gho_new');
+    expect(onToken).toHaveBeenCalledWith('gho_new', { isCurrent: expect.any(Function) });
     expect(flow.status()).toEqual({ state: 'complete' });
   });
 
@@ -167,5 +168,104 @@ describe('DeviceFlow', () => {
 
     await expect(flow.start()).rejects.toMatchObject({ status: 409, code: 'missingConfig' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('a second start replaces the first code, whose poll loop stops', async () => {
+    let codes = 0;
+    const polled: Array<string> = [];
+    const flow = new DeviceFlow({
+      clientId: 'Iv1.client',
+      onToken: async () => undefined,
+      log: () => undefined,
+      sleep: async () => undefined,
+      fetch: async (url, init) => {
+        const body = z.object({ device_code: z.string().optional() }).parse(JSON.parse(String(init.body)));
+        if (url.endsWith('/login/device/code')) {
+          codes++;
+          return json({ ...CODE_RESPONSE, device_code: `dev-${codes}`, user_code: `CODE-${codes}` });
+        }
+        polled.push(body.device_code ?? '');
+        return json({ error: 'access_denied' });
+      },
+    });
+
+    const [, second] = await Promise.all([flow.start(), flow.start()]);
+    await flow.settled();
+
+    expect(second.userCode).toBe('CODE-2');
+    expect(polled).toEqual(['dev-2']);
+    expect(flow.status().state).toBe('denied');
+  });
+
+  test('tells onToken the sign-in was cancelled while the token was being checked', async () => {
+    const { flow, onToken } = setup([{ access_token: 'gho_new' }]);
+    let isCurrent: (() => boolean) | undefined;
+    onToken.mockImplementationOnce(async (_token, context) => {
+      flow.cancel();
+      isCurrent = context?.isCurrent;
+    });
+
+    await flow.start();
+    await flow.settled();
+
+    expect(isCurrent?.()).toBe(false);
+    expect(flow.status()).toEqual({ state: 'idle' });
+  });
+
+  test('a restart that fails goes back to idle and answers 502', async () => {
+    let calls = 0;
+    const flow = new DeviceFlow({
+      clientId: 'Iv1.client',
+      onToken: async () => undefined,
+      log: () => undefined,
+      sleep: () => new Promise(() => undefined),
+      fetch: async () => {
+        calls++;
+        if (calls > 1) {
+          throw new TypeError('fetch failed');
+        }
+        return json(CODE_RESPONSE);
+      },
+    });
+    await flow.start();
+
+    await expect(flow.start()).rejects.toMatchObject({ status: 502, code: 'upstreamFailed' });
+    expect(flow.status()).toEqual({ state: 'idle' });
+  });
+
+  test('a reply without a code goes back to idle and answers 502', async () => {
+    const flow = new DeviceFlow({
+      clientId: 'Iv1.client',
+      onToken: async () => undefined,
+      log: () => undefined,
+      fetch: async () => json({ error: 'unauthorized_client', error_description: 'Bad client' }, 400),
+    });
+
+    await expect(flow.start()).rejects.toMatchObject({
+      status: 502,
+      code: 'upstreamFailed',
+      message: "GitHub didn't start the sign-in: Bad client",
+    });
+    expect(flow.status()).toEqual({ state: 'idle' });
+  });
+
+  test('acknowledging a completed sign-in goes back to idle', async () => {
+    const { flow } = setup([{ access_token: 'gho_new' }]);
+    await flow.start();
+    await flow.settled();
+
+    flow.acknowledgeComplete();
+
+    expect(flow.status()).toEqual({ state: 'idle' });
+  });
+
+  test('acknowledging leaves a sign-in that is still pending alone', async () => {
+    const { flow } = setup([]);
+    await flow.start();
+
+    flow.acknowledgeComplete();
+
+    expect(flow.status().state).toBe('pending');
+    flow.cancel();
   });
 });

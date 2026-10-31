@@ -33,11 +33,19 @@ const ErrorReplySchema = z.object({
   message: z.string().optional(),
 });
 
+export interface TokenContext {
+  /** False once the sign-in was cancelled or restarted; the token must not be saved then. */
+  isCurrent: () => boolean;
+}
+
 export interface DeviceFlowOptions {
   /** The OAuth App's client ID; the flow can't start without one. */
   clientId: string | undefined;
-  /** Saves the new token. A rejection fails the sign-in with its message. */
-  onToken: (token: string) => Promise<void>;
+  /**
+   * Saves the new token. A rejection fails the sign-in with its message. Check `isCurrent()` right
+   * before saving: a cancel or sign-out can land while the token is being checked.
+   */
+  onToken: (token: string, context: TokenContext) => Promise<void>;
   log: (message: string) => void;
   fetch?: FetchLike;
   baseUrl?: string;
@@ -76,30 +84,30 @@ export class DeviceFlow {
       );
     }
     const generation = ++this.generation;
-    const reply = await this.post('/login/device/code', {
-      client_id: clientId,
-      scope: GITHUB_OAUTH_SCOPES,
-    });
-    const code = DeviceCodeSchema.safeParse(reply);
-    if (!code.success) {
-      throw new ApiError(
-        502,
-        'upstreamFailed',
-        `GitHub didn't start the sign-in: ${describeError(reply) ?? 'unexpected reply'}`,
-      );
+    let code: z.infer<typeof DeviceCodeSchema>;
+    try {
+      code = await this.requestCode(clientId);
+    } catch (error) {
+      // The previous code's poll loop has already stopped, so its status would never change.
+      if (generation === this.generation) {
+        this.current = { state: 'idle' };
+      }
+      throw error instanceof ApiError
+        ? error
+        : new ApiError(502, 'upstreamFailed', `GitHub didn't start the sign-in: ${errorMessage(error)}`);
     }
     if (generation !== this.generation) {
       return this.current;
     }
-    const expiresAtMs = this.now() + code.data.expires_in * 1000;
+    const expiresAtMs = this.now() + code.expires_in * 1000;
     this.current = {
       state: 'pending',
-      userCode: code.data.user_code,
-      verificationUri: code.data.verification_uri,
+      userCode: code.user_code,
+      verificationUri: code.verification_uri,
       expiresAt: new Date(expiresAtMs).toISOString(),
     };
-    this.polling = this.poll(generation, clientId, code.data.device_code, {
-      intervalMs: (code.data.interval ?? 5) * 1000,
+    this.polling = this.poll(generation, clientId, code.device_code, {
+      intervalMs: (code.interval ?? 5) * 1000,
       expiresAtMs,
     });
     return this.current;
@@ -112,6 +120,13 @@ export class DeviceFlow {
   public cancel(): void {
     this.generation++;
     this.current = { state: 'idle' };
+  }
+
+  /** Once the signed-in account has been reported, a finished sign-in goes back to idle. */
+  public acknowledgeComplete(): void {
+    if (this.current.state === 'complete') {
+      this.current = { state: 'idle' };
+    }
   }
 
   /** Resolves once the current poll loop has stopped; for tests. */
@@ -174,9 +189,25 @@ export class DeviceFlow {
     }
   }
 
+  private async requestCode(clientId: string): Promise<z.infer<typeof DeviceCodeSchema>> {
+    const reply = await this.post('/login/device/code', {
+      client_id: clientId,
+      scope: GITHUB_OAUTH_SCOPES,
+    });
+    const code = DeviceCodeSchema.safeParse(reply);
+    if (!code.success) {
+      throw new ApiError(
+        502,
+        'upstreamFailed',
+        `GitHub didn't start the sign-in: ${describeError(reply) ?? 'unexpected reply'}`,
+      );
+    }
+    return code.data;
+  }
+
   private async complete(generation: number, token: string): Promise<void> {
     try {
-      await this.options.onToken(token);
+      await this.options.onToken(token, { isCurrent: () => generation === this.generation });
       if (generation === this.generation) {
         this.current = { state: 'complete' };
       }

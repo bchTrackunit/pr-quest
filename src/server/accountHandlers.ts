@@ -44,7 +44,7 @@ export interface AccountServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
   settings: Pick<SettingsStore, 'get' | 'update'>;
   models: Pick<ModelCatalog, 'list'>;
-  deviceFlow: Pick<DeviceFlow, 'start' | 'status' | 'cancel'>;
+  deviceFlow: Pick<DeviceFlow, 'start' | 'status' | 'cancel' | 'acknowledgeComplete'>;
   auth: {
     clientIdConfigured: boolean;
     /** The token owner, or why the token didn't resolve to one. */
@@ -69,11 +69,15 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
 
   const authStatus = async (): Promise<AuthStatusResponse> => {
     const { account, error } = await auth.current();
+    const device = deviceFlow.status();
+    if (account) {
+      deviceFlow.acknowledgeComplete();
+    }
     return {
       clientIdConfigured: auth.clientIdConfigured,
       ...(account ? { account } : {}),
       ...(error ? { error } : {}),
-      device: deviceFlow.status(),
+      device,
     };
   };
 

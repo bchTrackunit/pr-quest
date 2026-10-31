@@ -135,8 +135,11 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   const deviceFlow = new DeviceFlow({
     clientId: config.githubClientId,
-    onToken: async (token) => {
+    onToken: async (token, { isCurrent }) => {
       await fetchViewer(token);
+      if (!isCurrent()) {
+        return;
+      }
       await secrets.set('github', token);
       sessions.reset();
     },

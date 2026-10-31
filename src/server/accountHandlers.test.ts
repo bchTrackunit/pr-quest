@@ -24,6 +24,7 @@ let port: number;
 let secrets: Map<SecretName, string>;
 let settings: AppSettings;
 let services: AccountServices;
+let device: DeviceFlowStatus;
 
 function fakeServices(): AccountServices {
   const apiKeys = new ApiKeys({
@@ -34,7 +35,7 @@ function fakeServices(): AccountServices {
       delete: async (name) => void secrets.delete(name),
     },
   });
-  const device: DeviceFlowStatus = {
+  device = {
     state: 'pending',
     userCode: 'ABCD-1234',
     verificationUri: 'https://github.com/login/device',
@@ -72,6 +73,11 @@ function fakeServices(): AccountServices {
       start: vi.fn(async () => device),
       status: () => device,
       cancel: vi.fn(),
+      acknowledgeComplete: vi.fn(() => {
+        if (device.state === 'complete') {
+          device = { state: 'idle' };
+        }
+      }),
     },
     auth: {
       clientIdConfigured: true,
@@ -260,6 +266,25 @@ describe('auth', () => {
       account: { login: 'Player', tokenSource: 'oauth' },
       device: expect.objectContaining({ state: 'pending', userCode: 'ABCD-1234' }),
     });
+  });
+
+  test('reports a finished sign-in once with the account, then goes back to idle', async () => {
+    device = { state: 'complete' };
+
+    const first = await send('GET', '/api/auth/status');
+    const second = await send('GET', '/api/auth/status');
+
+    expect(first.body).toMatchObject({ account: { login: 'Player' }, device: { state: 'complete' } });
+    expect(second.body).toMatchObject({ account: { login: 'Player' }, device: { state: 'idle' } });
+  });
+
+  test('keeps reporting a finished sign-in while the account is not known yet', async () => {
+    device = { state: 'complete' };
+    services.auth.current = async () => ({ error: 'GitHub is down' });
+
+    await send('GET', '/api/auth/status');
+
+    expect(services.deviceFlow.acknowledgeComplete).not.toHaveBeenCalled();
   });
 
   test('POST /api/auth/device starts the sign-in', async () => {
