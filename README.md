@@ -46,7 +46,9 @@ token. It also accepts browser requests only from its own UI and API origins, as
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
 `4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). They can go in `.env.local` or the
 environment. Environment variables take precedence over the file, and setting one to an empty
-value turns it off, so `CURSOR_API_KEY= yarn start` runs without the key.
+value ignores both, so the default applies. For an API key, the default is the key saved in
+Settings: `CURSOR_API_KEY= yarn start` drops the key from the environment and `.env.local`, but a
+Cursor key saved in Settings still applies. Remove it in Settings to run without one.
 
 ## Sign in with GitHub
 
@@ -63,8 +65,9 @@ reach your machine from outside. It does need a GitHub OAuth App, which you crea
    **Settings → Developer settings → OAuth Apps**.
 2. Fill in the form:
    - **Application name**: for example `PR Quest (local)`. GitHub shows it when you authorize.
-   - **Homepage URL**: `http://127.0.0.1:4418`. GitHub only displays it.
-   - **Authorization callback URL**: anything, for example `http://127.0.0.1:4418`. The form
+   - **Homepage URL**: `http://127.0.0.1:4318`, the default UI port. If you set
+     `PR_QUEST_UI_PORT`, use your port instead. GitHub only displays it.
+   - **Authorization callback URL**: anything, for example `http://127.0.0.1:4318`. The form
      requires one, but the device flow never uses it.
    - **Enable Device Flow**: checked. Without it, GitHub refuses to issue codes.
 3. Choose **Register application** and copy the **Client ID**. You don't need a client secret;
@@ -94,6 +97,10 @@ PR Quest asks for `repo read:org`:
   [How it works](#how-it-works).
 - `read:org` to see which team a review request came through.
 
+`repo` is broader than PR Quest needs. A GitHub App would be a better fit later: its
+user-to-server tokens can be limited to pull requests, repository contents (read) and
+organization members (read), and they expire after 8 hours.
+
 ### Organizations with OAuth App access restrictions
 
 Organizations such as Trackunit can restrict which OAuth Apps may access their data. Until an
@@ -111,7 +118,8 @@ if you signed in before the approval, **Sign out** to get the organization's PRs
 Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth token`). It reads
 the token again at most every 5 minutes, so `gh auth switch` can take that long to show up. When
 you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
-Quest goes back to the gh token if there is one. The HUD shows who PR Quest acts as and where the
+Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
+account, PR Quest says so after you sign out. The HUD shows who PR Quest acts as and where the
 token came from: **OAuth** or **gh CLI**.
 
 ## Settings
@@ -122,15 +130,22 @@ The ⚙️ button in the HUD opens the settings popup. It has three sections:
 - **Review provider**: who reviews your quests, and with which model.
 - **API keys**: set, replace or remove the Cursor, Claude (Anthropic) and Linear keys.
 
-The popup traps focus and closes on `Escape` or ✕. A "Send review agent" error caused by a
-missing key offers **Open settings**, which opens the popup with that key's input focused.
+The popup traps focus and closes on `Escape` or ✕, also after the focused button goes away, for
+example when you sign out. While a change is being saved, it stays open and takes one change at a
+time. A "Send review agent" error caused by a missing key offers **Open settings**, which opens
+the popup with that key's input focused.
 
 **API keys** show only whether each key is set, its last four characters (for keys of 12
 characters or more) and its source: `settings` when it was saved from the popup, `env` when it
 comes from the environment or `.env.local`. Environment keys win over saved ones and are
 read-only in the popup; change them in `.env.local` and restart. Saved keys apply to the next
 request without a restart. Removing a key asks for confirmation first. The key values themselves
-never leave the server.
+never leave the server. The key inputs ask 1Password, LastPass and Bitwarden not to save them; a
+browser's built-in password manager may still offer to.
+
+Keys belong to this computer, not to a GitHub account: every GitHub account that signs in here
+uses the same saved keys, and signing out doesn't remove them. The review provider and models are
+shared the same way.
 
 ### Review providers and models
 
@@ -326,8 +341,10 @@ as advice. The diff, title and branch names are sent to Anthropic under your API
 **What PR Quest itself does.** PR Quest never turns agent output into an approval. The verdict is
 shown as advice only, the post endpoint accepts only `comment` and `requestChanges`, and the only
 approve path is the **Approve** dialog. Findings appear on a result screen first, and nothing
-reaches GitHub until you choose **Post to PR** and confirm. That posts one GitHub review (comment
-or request changes) anchored to the same commit the agent reviewed, with inline comments for
+reaches GitHub until you choose **Post to PR** and confirm. The confirmation always starts at
+**Comment**; when the agent suggests requesting changes, it says so next to the choice but never
+picks it for you. That posts one GitHub review (comment or request changes) anchored to the same
+commit the agent reviewed, with inline comments for
 findings that have a line. If GitHub rejects the inline line numbers, it posts them in the review
 body instead.
 
@@ -350,10 +367,11 @@ The API acts as you, so it only accepts requests that come from PR Quest:
 - **Origin**, when the browser sends one, must be exactly the UI or API origin:
   `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_UI_PORT` and
   `PR_QUEST_PORT`. Pages on other localhost ports, such as another dev server, get `403`.
-- **`Sec-Fetch-Site`** on a POST must be `same-origin` or `none`. Browsers send `same-site` for
-  other localhost ports, so this is checked as well as the origin.
-- **Every POST must be `Content-Type: application/json`**, or the server answers `415`. A browser
-  can't send JSON to another origin without a CORS preflight, which the server never grants.
+- **`Sec-Fetch-Site`** on every POST, PUT and DELETE must be `same-origin` or `none`. Browsers
+  send `same-site` for other localhost ports, so this is checked as well as the origin.
+- **Every POST, PUT and DELETE must be `Content-Type: application/json`**, or the server answers
+  `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
+  never grants.
 
 ## XP and achievements
 
@@ -405,8 +423,9 @@ the current token is. Signing in as someone else opens their own folder, startin
 set in the environment or `.env.local` are never written to `secrets.json`.
 
 An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
-Quest starts without it. An unreadable `quests.json` is ignored and replaced on the next
-successful fetch. Delete a user's folder to reset their progress. Board filters and presets live
+Quest starts without it. An unreadable `settings.json` is replaced with the defaults (Cursor
+reviews, default models) without a copy, and the next settings change overwrites it. An
+unreadable `quests.json` is ignored and replaced on the next successful fetch. Delete a user's folder to reset their progress. Board filters and presets live
 in the browser, as described in [Presets](#presets).
 
 ### Moving the old state into a user's folder
@@ -422,7 +441,7 @@ the server logs which files it moved.
 ## Security notes
 
 - **Loopback only.** The server listens on `127.0.0.1` and checks Host, Origin, `Sec-Fetch-Site`
-  and the content type of every POST, as described in
+  and the content type of every POST, PUT and DELETE, as described in
   [Local server protections](#local-server-protections).
 - **Secrets stay in the server process.** The UI only learns whether a key is set, its source and
   its last four characters. No route returns a key or the GitHub token, and the server doesn't
@@ -432,8 +451,12 @@ the server logs which files it moved.
   `0700` directory, not encrypted or kept in the macOS keychain. Backups of your home folder
   include it.
 - **The OAuth token is broad.** The `repo` scope grants access to every repo you can access (see
-  [Scopes](#scopes)). **Sign out** deletes the token from `secrets.json` but doesn't revoke it on
-  GitHub; revoke it under **Settings → Applications → Authorized OAuth Apps** when you're done.
+  [Scopes](#scopes)); moving to a GitHub App with narrower, expiring tokens is a possible
+  improvement. **Sign out** deletes the token from `secrets.json` but doesn't revoke it on
+  GitHub; revoke it at <https://github.com/settings/applications> (**Authorized OAuth Apps**)
+  when you're done.
+- **API keys are per computer.** Every GitHub account that signs in on this machine uses the
+  keys saved in Settings, and signing out leaves them in place.
 - **Sign-in needs no secret.** The device flow uses only the client ID; the device code stays in
   the server, and no callback reaches your machine.
 - **Reviewers see PR content.** The Cursor agent runs in Cursor's cloud with access to the repo
