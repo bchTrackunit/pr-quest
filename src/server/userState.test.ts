@@ -103,6 +103,90 @@ describe('migrateLegacyState', () => {
     ]);
   });
 
+  test('records which login received the shared state', async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+
+    await migrateLegacyState(dir, 'Player', { now: () => NOW });
+
+    expect(await readFile(join(dir, 'users', '.legacy-owner'), 'utf8')).toBe('player\n');
+    expect((await stat(join(dir, 'users', '.legacy-owner'))).mode & 0o777).toBe(0o600);
+  });
+
+  test('hands the shared state to only one of two users who arrive at once', async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+    await writeFile(join(dir, 'quests.json'), LEGACY_QUESTS);
+
+    const results = await Promise.all([
+      migrateLegacyState(dir, 'alice', { now: () => NOW }),
+      migrateLegacyState(dir, 'bob', { now: () => NOW }),
+    ]);
+
+    expect(results.map((result) => result.migrated.length)).toEqual([2, 0]);
+    await expect(stat(join(dir, 'users', 'bob', 'state.json'))).rejects.toThrow();
+  });
+
+  test('sets aside a shared state that reappears instead of giving it to another user', async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+    await writeFile(join(dir, 'state.json'), '{"from":"an older build"}');
+    const warnings: Array<string> = [];
+
+    const result = await migrateLegacyState(dir, 'someone-else', {
+      now: () => NOW,
+      onWarning: (message) => warnings.push(message),
+    });
+
+    expect(result).toEqual({ migrated: [] });
+    await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
+    await expect(stat(join(dir, 'state.json'))).rejects.toThrow();
+    expect(
+      await readFile(join(dir, 'state.json.orphaned-20261030T140000Z.bak'), 'utf8'),
+    ).toBe('{"from":"an older build"}');
+    expect(warnings).toEqual([expect.stringContaining('state.json.orphaned-20261030T140000Z.bak')]);
+  });
+
+  test("sets aside a reappearing shared state for its owner too, keeping the owner's state", async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+    await writeFile(join(dir, 'state.json'), '{"from":"an older build"}');
+
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+
+    expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
+    await expect(stat(join(dir, 'state.json'))).rejects.toThrow();
+    await expect(stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak'))).resolves.toBeDefined();
+  });
+
+  test('knows the owner from the backups of a migration that ran before owners were recorded', async () => {
+    await mkdir(join(dir, 'users', 'player'), { recursive: true });
+    await writeFile(join(dir, 'users', 'player', 'state.json'), LEGACY_STATE);
+    await writeFile(join(dir, 'state.json.migrated-to-player-20261029T100000Z.bak'), LEGACY_STATE);
+    await writeFile(join(dir, 'state.json'), '{"from":"an older build"}');
+
+    await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
+
+    await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
+    await expect(stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak'))).resolves.toBeDefined();
+    expect(await readFile(join(dir, 'users', '.legacy-owner'), 'utf8')).toBe('player\n');
+  });
+
+  test('numbers a second orphaned copy instead of overwriting the first', async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+    await writeFile(join(dir, 'state.json'), '{"first":true}');
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+    await writeFile(join(dir, 'state.json'), '{"second":true}');
+
+    await migrateLegacyState(dir, 'player', { now: () => NOW });
+
+    expect(await readFile(join(dir, 'state.json.orphaned-20261030T140000Z.bak'), 'utf8')).toBe(
+      '{"first":true}',
+    );
+    expect(await readFile(join(dir, 'state.json.orphaned-20261030T140000Z-1.bak'), 'utf8')).toBe(
+      '{"second":true}',
+    );
+  });
+
   test('never leaves the quest cache behind for another user once the state has moved', async () => {
     const userDir = join(dir, 'users', 'player');
     await mkdir(userDir, { recursive: true });

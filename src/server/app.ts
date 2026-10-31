@@ -83,7 +83,7 @@ export async function createApp(options: AppOptions): Promise<App> {
    */
   const stores = new Map<string, Promise<StateStore>>();
   const openStore = async (login: string, dir: string): Promise<StateStore> => {
-    const { migrated } = await migrateLegacyState(config.stateDir, login);
+    const { migrated } = await migrateLegacyState(config.stateDir, login, { onWarning: warn });
     if (migrated.length > 0) {
       info(`Moved ${migrated.join(' and ')} into ${login}'s folder; the originals are kept as .bak files`);
     }
