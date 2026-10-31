@@ -164,8 +164,14 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
     }
   };
 
+  const isBusy = pending !== undefined;
+
+  /**
+   * Ignored while another write runs, so responses can't land out of order and a failed write
+   * can't roll back to a snapshot that predates the other one.
+   */
   const saveSettings = (body: UpdateSettingsRequest, done: string, operation: string): void => {
-    if (!settings) {
+    if (!settings || isBusy) {
       return;
     }
     const optimistic: SettingsResponse = {
@@ -218,8 +224,6 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
       () => removeApiKey(name),
       `Removed the ${KEY_META[name].label} key.`,
     ).then(() => forgetModelsFor(name));
-
-  const isBusy = pending !== undefined;
 
   const renderGitHub = () => {
     const { state, actions } = github;
@@ -325,7 +329,9 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
       <div className="stack">
         <label className="field" htmlFor={modelId}>
           <span className="field__label">{label} model</span>
+          {/* aria-disabled rather than disabled, so a keyboard player keeps focus here. */}
           <select
+            aria-disabled={isBusy || undefined}
             className="field__input"
             id={modelId}
             onChange={(event) => chooseModel(forProvider, event.target.value)}
@@ -363,6 +369,7 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
           {REVIEW_PROVIDERS.map((option) => (
             <label className="radio" key={option}>
               <input
+                aria-disabled={isBusy || undefined}
                 checked={provider === option}
                 name={`${baseId}-provider`}
                 onChange={() =>
@@ -442,6 +449,9 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
 
       <section aria-labelledby={`${baseId}-keys`} className="settings__section">
         <SectionHeading id={`${baseId}-keys`} section="keys" target={target} />
+        <p className="muted settings__note">
+          Keys are stored on this computer and shared by every GitHub account that signs in here.
+        </p>
         {renderSettingsState(false) ??
           (settings ? (
             <ul className="key-list">

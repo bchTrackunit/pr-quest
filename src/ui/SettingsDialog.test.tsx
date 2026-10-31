@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -121,6 +121,64 @@ describe('SettingsDialog', () => {
     expect(within(saved).getByText('••••7f3e')).toBeTruthy();
     expect(within(saved).getByText('settings')).toBeTruthy();
     expect(within(saved).getByLabelText<HTMLInputElement>('Replace the Cursor key').value).toBe('');
+    expect(document.body.innerHTML).not.toContain('crsr_secret_7f3e');
+  });
+
+  test('tells password managers to leave key inputs alone', async () => {
+    renderDialog({ section: 'keys' });
+
+    const input = within(await screen.findByRole('listitem', { name: 'Cursor' })).getByLabelText(
+      'Cursor key',
+    );
+    expect(input.getAttribute('autocomplete')).toBe('off');
+    expect(input.hasAttribute('data-1p-ignore')).toBe(true);
+    expect(input.getAttribute('data-lpignore')).toBe('true');
+    expect(input.hasAttribute('data-bwignore')).toBe(true);
+  });
+
+  test('says the keys belong to this computer, not the GitHub account', async () => {
+    renderDialog({ section: 'keys' });
+
+    const section = screen.getByRole('region', { name: 'API keys' });
+    expect(section.textContent).toContain(
+      'Keys are stored on this computer and shared by every GitHub account that signs in here.',
+    );
+  });
+
+  test('a highlighted key input does not take focus the player already moved', async () => {
+    let resolve: (value: SettingsResponse) => void = () => undefined;
+    api.fetchSettings.mockReturnValue(
+      new Promise((resolver) => {
+        resolve = resolver;
+      }),
+    );
+    renderDialog({ section: 'keys', key: 'cursor' });
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+
+    resolve(makeSettings());
+
+    await screen.findByRole('listitem', { name: 'Cursor' });
+    expect(document.activeElement).toBe(close);
+  });
+
+  test('Escape still closes the dialog after a failed key removal', async () => {
+    const user = userEvent.setup();
+    api.removeApiKey.mockRejectedValue(new ApiRequestError(500, 'internal', 'Disk full'));
+    const { onClickClose } = renderDialog({ section: 'keys' });
+
+    const row = await screen.findByRole('listitem', { name: 'Linear' });
+    await user.click(within(row).getByRole('button', { name: 'Remove the Linear key' }));
+    const confirm = within(within(row).getByRole('group')).getByRole('button', {
+      name: 'Remove the Linear key',
+    });
+    await user.click(confirm);
+
+    expect((await screen.findByRole('alert')).textContent).toBe("Couldn't save: Disk full");
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(onClickClose).toHaveBeenCalledTimes(1);
   });
 
   test('does not send an empty key', async () => {
@@ -295,6 +353,34 @@ describe('SettingsDialog', () => {
     expect(await screen.findByText('Claude reviews use claude-opus-5.')).toBeTruthy();
   });
 
+  test('sends one settings write at a time', async () => {
+    const user = userEvent.setup();
+    let resolve: (value: SettingsResponse) => void = () => undefined;
+    api.updateSettings.mockReturnValue(
+      new Promise((resolver) => {
+        resolve = resolver;
+      }),
+    );
+    renderDialog({ section: 'provider' });
+    const select = await screen.findByRole('combobox', { name: 'Cursor model' });
+
+    await user.selectOptions(select, 'gpt-5.6');
+    expect(api.updateSettings).toHaveBeenCalledTimes(1);
+    expect(select.getAttribute('aria-disabled')).toBe('true');
+    const claude = screen.getByRole('radio', { name: 'Claude' });
+    expect(claude.getAttribute('aria-disabled')).toBe('true');
+
+    await user.click(claude);
+    await user.selectOptions(select, '');
+    expect(api.updateSettings).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('radio', { name: 'Cursor' })).toHaveProperty('checked', true);
+
+    resolve(makeSettings({ models: { cursor: 'gpt-5.6' } }));
+    expect(await screen.findByText('Cursor reviews use gpt-5.6.')).toBeTruthy();
+    expect(select.getAttribute('aria-disabled')).toBeNull();
+    expect(select).toHaveProperty('value', 'gpt-5.6');
+  });
+
   test('going back to the default model sends null', async () => {
     const user = userEvent.setup();
     api.fetchSettings.mockResolvedValue(makeSettings({ models: { cursor: 'gpt-5.6' } }));
@@ -392,6 +478,34 @@ describe('SettingsDialog', () => {
 
     await user.click(within(section).getByRole('button', { name: 'Sign out' }));
     expect(github.actions.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  test('Escape still closes the dialog after signing out replaces the Sign out button', async () => {
+    const user = userEvent.setup();
+    const account = { login: 'octocat', tokenSource: 'oauth' } as const;
+    const github = makeGitHub({ account });
+    const onClickClose = vi.fn();
+    const { rerender } = render(
+      <SettingsDialog github={github} onClickClose={onClickClose} target={{ section: 'github' }} />,
+    );
+    const rerenderWith = (state: Partial<GitHubAccountState>) =>
+      rerender(
+        <SettingsDialog
+          github={makeGitHub(state)}
+          onClickClose={onClickClose}
+          target={{ section: 'github' }}
+        />,
+      );
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    rerenderWith({ account, pending: 'signOut' });
+    rerenderWith({});
+
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).queryByRole('button', { name: 'Sign out' })).toBeNull();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    await user.keyboard('{Escape}');
+    expect(onClickClose).toHaveBeenCalledTimes(1);
   });
 
   test('offers sign-in on top of the gh CLI fallback', async () => {

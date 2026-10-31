@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import type { ApiKeyName, ApiKeyStatus } from '../shared/api.ts';
+import { isDialogFocusUnclaimed } from './Modal.tsx';
 import { KEY_META } from './settingsModel.ts';
 
 export interface ApiKeyRowProps {
@@ -44,21 +45,29 @@ export const ApiKeyRow = ({
   const isEnv = status.source === 'env';
   const inputRef = useRef<HTMLInputElement>(null);
   const removeRef = useRef<HTMLButtonElement>(null);
+  const confirmRemoveRef = useRef<HTMLButtonElement>(null);
   /**
    * Buttons are disabled while a request runs and the confirmation unmounts when it ends, both of
    * which drop focus to the body, outside the modal. This says where focus goes after the render.
+   * `highlight` only applies while the player hasn't moved focus, since the rows mount late.
    */
-  const focusAfterRender = useRef<'input' | 'remove' | undefined>(
-    isHighlighted ? 'input' : undefined,
+  const focusAfterRender = useRef<'highlight' | 'input' | 'remove' | 'confirm' | undefined>(
+    isHighlighted ? 'highlight' : undefined,
   );
 
   useEffect(() => {
+    // A disabled button can't take focus; wait for the render that enables it again.
+    if (isDisabled) {
+      return;
+    }
     const target = focusAfterRender.current;
     focusAfterRender.current = undefined;
-    if (target === 'input') {
+    if (target === 'highlight' ? isDialogFocusUnclaimed() : target === 'input') {
       inputRef.current?.focus();
     } else if (target === 'remove') {
       removeRef.current?.focus();
+    } else if (target === 'confirm') {
+      confirmRemoveRef.current?.focus();
     }
   });
 
@@ -83,6 +92,7 @@ export const ApiKeyRow = ({
   };
 
   const confirmRemove = (): void => {
+    focusAfterRender.current = 'confirm';
     onRemove(name)
       .then(() => {
         focusAfterRender.current = 'input';
@@ -128,10 +138,14 @@ export const ApiKeyRow = ({
             <span className="field__label">
               {status.set ? `Replace the ${meta.label} key` : `${meta.label} key`}
             </span>
+            {/* The ignore attributes stop 1Password, LastPass and Bitwarden offering to save it. */}
             <input
               aria-describedby={validation ? hintId : undefined}
               autoComplete="off"
               className="field__input"
+              data-1p-ignore=""
+              data-bwignore=""
+              data-lpignore="true"
               id={inputId}
               name="value"
               ref={inputRef}
@@ -186,6 +200,7 @@ export const ApiKeyRow = ({
               className="button button--danger"
               disabled={isDisabled}
               onClick={confirmRemove}
+              ref={confirmRemoveRef}
               type="button"
             >
               Remove the {meta.label} key
