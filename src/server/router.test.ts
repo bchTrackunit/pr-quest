@@ -1,5 +1,5 @@
 import { createServer, request, type Server } from 'node:http';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { createHandlers } from './handlers.ts';
 import {
@@ -206,6 +206,45 @@ describe('router', () => {
     });
 
     expect(response.status).toBe(501);
+  });
+
+  test.each(['same-site', 'cross-site'])(
+    'rejects a GET with Sec-Fetch-Site: %s before any handler runs',
+    async (site) => {
+      const health = vi.fn(() => ({
+        ok: true as const,
+        config: { linearApiKey: false, cursorApiKey: false, anthropicApiKey: false },
+      }));
+      const port = await startServer({ health });
+
+      const response = await send(port, 'GET', '/api/health', { 'Sec-Fetch-Site': site });
+
+      expect(response).toEqual({
+        status: 403,
+        body: { error: { code: 'forbidden', message: 'Cross-site requests are not allowed' } },
+      });
+      expect(health).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ['Sec-Fetch-Site: same-origin', { 'Sec-Fetch-Site': 'same-origin' }],
+    ['Sec-Fetch-Site: none', { 'Sec-Fetch-Site': 'none' }],
+    ['no Sec-Fetch-Site', {}],
+  ])('accepts a GET with %s', async (_label, headers) => {
+    const port = await startServer(createHandlers(config));
+
+    const response = await send(port, 'GET', '/api/health', headers);
+
+    expect(response.status).toBe(200);
+  });
+
+  test('rejects a GET from Origin: null', async () => {
+    const port = await startServer(createHandlers(config));
+
+    const response = await send(port, 'GET', '/api/health', { Origin: 'null' });
+
+    expect(response.status).toBe(403);
   });
 
   test.each([

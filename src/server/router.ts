@@ -188,7 +188,9 @@ function decodeParam(value: string): string {
 /**
  * Binding to 127.0.0.1 alone does not stop a web page from reaching the server. The Host check
  * stops DNS rebinding. The exact-origin and `Sec-Fetch-Site` checks stop pages on other origins,
- * including other localhost ports, which browsers count as same-site.
+ * including other localhost ports, which browsers count as same-site. `Sec-Fetch-Site` applies to
+ * every method, because an `<img>` or `<script>` GET carries no Origin yet can still open a
+ * session or spend the player's API quota.
  */
 function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<string>): void {
   if (!isLoopbackHost(req.headers.host)) {
@@ -199,12 +201,7 @@ function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<
     throw new ApiError(403, 'forbidden', 'Cross-origin requests are not allowed');
   }
   const site = req.headers['sec-fetch-site'];
-  if (
-    isStateChanging(req.method) &&
-    site !== undefined &&
-    site !== 'same-origin' &&
-    site !== 'none'
-  ) {
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') {
     throw new ApiError(403, 'forbidden', 'Cross-site requests are not allowed');
   }
 }
