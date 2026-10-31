@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { ServerEvent } from '../shared/api.ts';
+import type { ReviewRun, ServerEvent } from '../shared/api.ts';
 import type { AppConfig } from './config.ts';
 import type { EventHub } from './events.ts';
 import type { GameService } from './game.ts';
@@ -156,7 +156,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       const request = parseBody(PostReviewSchema, body);
       const { stored, release } = runs.claimForPosting(params.id);
       try {
-        const draft = buildDraft(stored.run.result, stored.quest.headSha, request);
+        const draft = buildDraft(stored.run, stored.quest.headSha, request);
         const ref = requireQuestRef(stored.quest.id);
         const submitted = await upstream(() => github.submitReview(ref, draft));
         const run = await runs.markPosted(stored.run.id, submitted.url);
@@ -192,10 +192,11 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
 }
 
 function buildDraft(
-  result: NonNullable<ReturnType<ReviewRunService['get']>>['run']['result'],
+  run: ReviewRun,
   headSha: string | undefined,
   request: z.infer<typeof PostReviewSchema>,
 ): ReviewDraft {
+  const { result } = run;
   if (!result) {
     throw new ApiError(409, 'conflict', 'This review has no result to post');
   }
@@ -214,7 +215,14 @@ function buildDraft(
     summary: result.summary,
     verdict: result.verdict,
     findings,
+    provider: run.provider,
   };
+  if (run.model) {
+    draft.model = run.model;
+  }
+  if (result.omitted && result.omitted.length > 0) {
+    draft.omitted = result.omitted;
+  }
   if (headSha) {
     draft.commitId = headSha;
   }

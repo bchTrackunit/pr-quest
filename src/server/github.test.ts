@@ -601,6 +601,7 @@ describe('GitHubClient.submitReview', () => {
     event: 'comment',
     summary: 'Looks fine.',
     verdict: 'comment',
+    provider: 'cursor',
     commitId: 'abc123',
     findings: [
       { file: 'src/a.ts', line: 3, severity: 'major', body: 'Null check missing.' },

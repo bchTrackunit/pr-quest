@@ -374,6 +374,7 @@ describe('runs', () => {
         event: 'requestChanges',
         summary: 'Two issues.',
         verdict: 'requestChanges',
+        provider: 'cursor',
         commitId: '0123456789abcdef0123456789abcdef01234567',
         findings: [{ file: 'src/b.ts', severity: 'nit', body: 'Style.' }],
       },
@@ -417,6 +418,25 @@ describe('runs', () => {
     expect(github.submitReview.mock.calls[0]?.[0]).toEqual({
       repo: { owner: 'Trackunit', name: 'state-of-code' },
       number: 24,
+    });
+  });
+
+  test('names the provider and model and lists the omitted files in the posted draft', async () => {
+    const run = await finishedRun();
+    const stored = services.runs.get(run.id);
+    if (!stored?.run.result) {
+      throw new Error('run missing');
+    }
+    stored.run.provider = 'claude';
+    stored.run.model = 'claude-opus-5-5';
+    stored.run.result.omitted = [{ file: 'yarn.lock', reason: 'lockfile' }];
+
+    await send('POST', `/api/runs/${run.id}/post`, {});
+
+    expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
+      provider: 'claude',
+      model: 'claude-opus-5-5',
+      omitted: [{ file: 'yarn.lock', reason: 'lockfile' }],
     });
   });
 
