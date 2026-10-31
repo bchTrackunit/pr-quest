@@ -5,6 +5,7 @@ import type { ReviewProvider } from '../shared/api.ts';
 import {
   ensurePrivateDir,
   readIfExists,
+  refuseNewerVersion,
   safeJson,
   writePrivateJson,
   WriteQueue,
@@ -60,7 +61,9 @@ export class SettingsStore {
     if (text === undefined) {
       return new SettingsStore(file, DEFAULT_SETTINGS);
     }
-    const parsed = SettingsFileSchema.safeParse(safeJson(text));
+    const json = safeJson(text);
+    refuseNewerVersion(json, 1, file);
+    const parsed = SettingsFileSchema.safeParse(json);
     if (!parsed.success) {
       options.onWarning?.('The settings file was unreadable; using the defaults');
       return new SettingsStore(file, DEFAULT_SETTINGS);

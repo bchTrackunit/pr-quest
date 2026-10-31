@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -11,11 +11,36 @@ export async function ensurePrivateDir(dir: string): Promise<void> {
   await chmod(dir, PRIVATE_DIR_MODE);
 }
 
-/** Writes JSON through a temp file and a rename, so readers never see a half-written file. */
+/**
+ * Writes JSON through a synced temp file and a rename, so readers never see a half-written file and
+ * a power loss can't leave an empty one. A failed write removes the temp copy.
+ */
 export async function writePrivateJson(file: string, value: unknown): Promise<void> {
   const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: PRIVATE_FILE_MODE });
-  await rename(temp, file);
+  try {
+    const handle = await open(temp, 'wx', PRIVATE_FILE_MODE);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
+}
+
+/** Throws when `parsed` carries a `version` above `supported`: a newer build wrote it. */
+export function refuseNewerVersion(parsed: unknown, supported: number, file: string): void {
+  const version =
+    typeof parsed === 'object' && parsed !== null && 'version' in parsed ? parsed.version : undefined;
+  if (typeof version === 'number' && version > supported) {
+    throw new Error(
+      `${file} was written by a newer version of PR Quest (file version ${version}, this build reads version ${supported}). Update PR Quest, or move the file away to start fresh.`,
+    );
+  }
 }
 
 /** The file's text, or `undefined` when it doesn't exist. */

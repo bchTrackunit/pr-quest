@@ -55,4 +55,13 @@ describe('SettingsStore', () => {
     expect(settings.get().reviewProvider).toBe('cursor');
     expect(onWarning).toHaveBeenCalled();
   });
+
+  test('refuses a file from a newer PR Quest instead of overwriting it later', async () => {
+    const text = JSON.stringify({ version: 3, reviewProvider: 'claude', models: {} });
+    await writeFile(join(dir, 'settings.json'), text);
+
+    await expect(SettingsStore.open(dir)).rejects.toThrow(/newer version of PR Quest.*version 3/);
+
+    expect(await readFile(join(dir, 'settings.json'), 'utf8')).toBe(text);
+  });
 });

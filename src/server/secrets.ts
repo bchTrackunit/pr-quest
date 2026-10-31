@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   ensurePrivateDir,
   readIfExists,
+  refuseNewerVersion,
   safeJson,
   writePrivateJson,
   WriteQueue,
@@ -80,7 +81,9 @@ async function readSecrets(file: string, onWarning: (message: string) => void): 
     return {};
   }
   await chmod(file, 0o600);
-  const parsed = SecretsFileSchema.safeParse(safeJson(text));
+  const json = safeJson(text);
+  refuseNewerVersion(json, 1, file);
+  const parsed = SecretsFileSchema.safeParse(json);
   if (parsed.success) {
     return parsed.data.secrets;
   }

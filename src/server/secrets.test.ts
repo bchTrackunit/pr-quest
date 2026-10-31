@@ -83,4 +83,14 @@ describe('SecretStore', () => {
     );
     expect(onWarning).toHaveBeenCalledWith(expect.not.stringContaining('sk-leak'));
   });
+
+  test('refuses a file from a newer PR Quest instead of dropping its keys', async () => {
+    const text = JSON.stringify({ version: 2, secrets: { github: 'gho_x' }, extra: true });
+    await writeFile(join(dir, 'secrets.json'), text);
+
+    await expect(SecretStore.open(dir)).rejects.toThrow(/newer version of PR Quest.*version 2/);
+
+    expect(await readdir(dir)).toEqual(['secrets.json']);
+    expect(await readFile(join(dir, 'secrets.json'), 'utf8')).toBe(text);
+  });
 });
