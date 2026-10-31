@@ -529,6 +529,72 @@ describe('GitHubClient.fetchHeadSha', () => {
   });
 });
 
+describe('GitHubClient.fetchDiff', () => {
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';
+  const DIFF = 'diff --git a/a.ts b/a.ts\n';
+
+  test('compares the target branch with the pinned head commit', async () => {
+    const github = fakeGitHub(() => ok(DIFF));
+
+    const diff = await github.client().fetchDiff(ref, { base: 'release/1.0', headSha: HEAD });
+
+    expect(diff).toBe(DIFF);
+    expect(github.calls).toHaveLength(1);
+    expect(github.calls[0]).toMatchObject({
+      method: 'GET',
+      path: `/repos/o/r/compare/release/1.0...${HEAD}`,
+      accept: 'application/vnd.github.diff',
+    });
+  });
+
+  test("falls back to the PR's diff while the head is still the pinned commit", async () => {
+    const github = fakeGitHub((call) => {
+      if (call.path.includes('/compare/')) {
+        return json({ message: 'Not Found' }, 404);
+      }
+      return call.accept === 'application/vnd.github.diff' ? ok(DIFF) : json({ head: { sha: HEAD } });
+    });
+
+    const diff = await github.client().fetchDiff(ref, { base: 'main', headSha: HEAD });
+
+    expect(diff).toBe(DIFF);
+    expect(github.calls.map((call) => [call.path, call.accept])).toEqual([
+      [`/repos/o/r/compare/main...${HEAD}`, 'application/vnd.github.diff'],
+      ['/repos/o/r/pulls/5', 'application/vnd.github.diff'],
+      ['/repos/o/r/pulls/5', 'application/vnd.github+json'],
+    ]);
+  });
+
+  test('refuses the fallback diff once the PR has moved on', async () => {
+    const github = fakeGitHub((call) => {
+      if (call.path.includes('/compare/')) {
+        return json({ message: 'Not Found' }, 404);
+      }
+      return call.accept === 'application/vnd.github.diff'
+        ? ok(DIFF)
+        : json({ head: { sha: '1111111111111111111111111111111111111111' } });
+    });
+
+    await expect(github.client().fetchDiff(ref, { base: 'main', headSha: HEAD })).rejects.toThrow(
+      /moved on to 1111111/,
+    );
+  });
+
+  test('does not fall back when GitHub is rate limiting', async () => {
+    const github = fakeGitHub(() => ({
+      status: 403,
+      body: JSON.stringify({ message: 'API rate limit exceeded' }),
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1798632000' },
+    }));
+
+    await expect(
+      github.client().fetchDiff(ref, { base: 'main', headSha: HEAD }),
+    ).rejects.toMatchObject({ rateLimit: { kind: 'primary' } });
+    expect(github.calls).toHaveLength(1);
+  });
+});
+
 describe('GitHubClient.submitReview', () => {
   const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
   const draft: ReviewDraft = {

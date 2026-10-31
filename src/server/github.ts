@@ -12,6 +12,7 @@ const SEARCH_DIRECT_QUERY = 'is:pr is:open user-review-requested:@me';
 const SEARCH_LIMIT = '100';
 const VIEW_CONCURRENCY = 4;
 const REPO_URL_PATTERN = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)$/;
+const DIFF_MEDIA_TYPE = 'application/vnd.github.diff';
 /** PRs per GraphQL query; GitHub's cost limits leave plenty of room at this size. */
 export const DETAILS_BATCH_SIZE = 25;
 const BATCH_CONCURRENCY = 2;
@@ -435,6 +436,40 @@ export class GitHubClient {
   public async fetchHeadSha(ref: QuestRef): Promise<string> {
     const text = await this.api.request('GET', pullPath(ref));
     return parseJson(text, PullRequestHeadSchema, 'pull request').head.sha.toLowerCase();
+  }
+
+  /**
+   * The unified diff of `headSha` against its merge base with `base`, the same changes the PR
+   * shows. If the compare API can't answer, the PR's own diff is used, but only while the PR's
+   * head is still `headSha`, so findings never point at lines from a different commit.
+   */
+  public async fetchDiff(
+    ref: QuestRef,
+    { base, headSha }: { base: string; headSha: string },
+  ): Promise<string> {
+    const basePath = base.split('/').map(encodeURIComponent).join('/');
+    try {
+      return await this.api.request(
+        'GET',
+        `${repoPath(ref.repo)}/compare/${basePath}...${encodeURIComponent(headSha)}`,
+        { accept: DIFF_MEDIA_TYPE },
+      );
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        throw error;
+      }
+      this.onWarning(
+        `Comparing ${base}...${headSha.slice(0, 7)} failed, using the PR diff: ${errorMessage(error)}`,
+      );
+    }
+    const diff = await this.api.request('GET', pullPath(ref), { accept: DIFF_MEDIA_TYPE });
+    const currentHead = await this.fetchHeadSha(ref);
+    if (currentHead !== headSha.toLowerCase()) {
+      throw new GitHubApiError(
+        `${formatQuestId(ref.repo, ref.number)} moved on to ${currentHead.slice(0, 7)} while its diff was read; refresh and send the review again`,
+      );
+    }
+    return diff;
   }
 
   public async approve(ref: QuestRef, { commitId, body }: ApproveOptions): Promise<void> {

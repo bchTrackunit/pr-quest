@@ -151,6 +151,15 @@ export type ReviewTarget = Pick<
   'id' | 'title' | 'number' | 'githubUrl' | 'sourceBranch' | 'targetBranch'
 >;
 
+/** What to look for and how to grade it; shared by the Cursor and Claude reviewers. */
+export const REVIEW_GUIDELINES: ReadonlyArray<string> = [
+  'Look for, in priority order: correctness bugs, security problems (injection, secrets, authz), data loss,',
+  'error handling gaps, performance problems, missing or weak tests, and maintainability issues.',
+  'Severity: critical = must fix before merge (bug, security, data loss); major = should fix;',
+  'minor = worth improving; nit = style or taste. Skip praise and do not repeat linter output.',
+  'Use the line number in the new version of the file; omit `line` for file-level findings.',
+];
+
 /**
  * Cloud agents reject `systemPrompt` and tool restrictions, so the reviewer role and its limits
  * live in the prompt; `autoCreatePR: false` is the only hard guard. `headSha` is the commit the
@@ -176,11 +185,7 @@ export function buildReviewPrompt(target: ReviewTarget, headSha: string): string
     '- Never approve the pull request and never post comments; the human decides what to post.',
     '- Do not modify files. If you run commands, they must be read-only.',
     '',
-    'Look for, in priority order: correctness bugs, security problems (injection, secrets, authz), data loss,',
-    'error handling gaps, performance problems, missing or weak tests, and maintainability issues.',
-    'Severity: critical = must fix before merge (bug, security, data loss); major = should fix;',
-    'minor = worth improving; nit = style or taste. Skip praise and do not repeat linter output.',
-    'Use the line number in the new version of the file; omit `line` for file-level findings.',
+    ...REVIEW_GUIDELINES,
     '',
     'Finish with only this JSON object in a ```json fence, and nothing after it:',
     '```json',
