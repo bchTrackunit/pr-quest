@@ -89,6 +89,11 @@ export class ReviewRunService {
     )?.run.id;
   }
 
+  /** Throws `missingConfig` naming the provider when the selected provider has no key. */
+  public assertReady(): void {
+    this.launcherFor(this.settings().reviewProvider);
+  }
+
   public async start(quest: Quest, options: StartReviewOptions = {}): Promise<ReviewRun> {
     const settings = this.settings();
     const provider = settings.reviewProvider;

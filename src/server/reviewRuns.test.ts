@@ -433,6 +433,17 @@ describe('ReviewRunService with Claude', () => {
     expect(claude.review.mock.calls[0]?.[2]).toBe('claude-opus-5-5');
   });
 
+  test('assertReady checks the selected provider without starting anything', () => {
+    const missing = claudeService(undefined, { hasKey: false });
+    const ready = claudeService();
+
+    expect(() => missing.runs.assertReady()).toThrow(
+      expect.objectContaining({ code: 'missingConfig', details: { provider: 'claude' } }),
+    );
+    expect(() => ready.runs.assertReady()).not.toThrow();
+    expect(store.state.runs).toEqual([]);
+  });
+
   test('asks for the Anthropic key before queueing anything', async () => {
     const { runs, claude } = claudeService(undefined, { hasKey: false });
 

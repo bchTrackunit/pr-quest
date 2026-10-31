@@ -91,6 +91,20 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
     this.options.tokens.invalidate();
   }
 
+  /** Stops the open session's background work, e.g. on shutdown. */
+  public close(): void {
+    const open = this.open;
+    if (!open) {
+      return;
+    }
+    this.open = undefined;
+    this.latest = undefined;
+    void open.services.then(
+      (services) => services.stop(),
+      () => undefined,
+    );
+  }
+
   private identify(token: string): Promise<GitHubViewer> {
     const cached = this.identities.get(token);
     if (cached && (cached.expiresAt === undefined || this.now() < cached.expiresAt)) {
@@ -119,18 +133,5 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
       }
     });
     return services;
-  }
-
-  private close(): void {
-    const open = this.open;
-    if (!open) {
-      return;
-    }
-    this.open = undefined;
-    this.latest = undefined;
-    void open.services.then(
-      (services) => services.stop(),
-      () => undefined,
-    );
   }
 }

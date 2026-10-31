@@ -128,6 +128,17 @@ describe('SessionManager', () => {
     expect(fetchViewer).toHaveBeenCalledTimes(2);
   });
 
+  test('close stops the open session, as on shutdown', async () => {
+    const { sessions, stops } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+
+    sessions.close();
+    await Promise.resolve();
+
+    expect(stops).toEqual(['alice']);
+    expect(sessions.peek()).toBeUndefined();
+  });
+
   test('peek returns the open session without any lookups', async () => {
     const { sessions } = setup({ token: { token: 'gho_a', source: 'gh' } });
 

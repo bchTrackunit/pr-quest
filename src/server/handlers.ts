@@ -99,6 +99,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
     startReview: async ({ params, body }) => {
       requireQuestRef(params.id);
       const { model } = parseBody(StartReviewSchema, body);
+      runs.assertReady();
       const quest = await findQuest(params.id);
       return { run: await runs.start(quest, { model }) };
     },
