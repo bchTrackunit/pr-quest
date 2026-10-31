@@ -197,6 +197,46 @@ describe('DeviceFlow', () => {
     expect(flow.status().state).toBe('denied');
   });
 
+  test("drops a token for the first code that arrives after a restart, and keeps polling the second", async () => {
+    let codes = 0;
+    let releaseFirstPoll: (() => void) | undefined;
+    const polled: Array<string> = [];
+    const onToken = vi.fn(async (_token: string) => undefined);
+    const flow = new DeviceFlow({
+      clientId: 'Iv1.client',
+      onToken,
+      log: () => undefined,
+      sleep: async () => undefined,
+      fetch: async (url, init) => {
+        const body = z.object({ device_code: z.string().optional() }).parse(JSON.parse(String(init.body)));
+        if (url.endsWith('/login/device/code')) {
+          codes++;
+          return json({ ...CODE_RESPONSE, device_code: `dev-${codes}`, user_code: `CODE-${codes}` });
+        }
+        polled.push(body.device_code ?? '');
+        if (body.device_code === 'dev-1') {
+          await new Promise<void>((resolve) => {
+            releaseFirstPoll = resolve;
+          });
+          return json({ access_token: 'gho_first' });
+        }
+        return json({ access_token: 'gho_second' });
+      },
+    });
+
+    await flow.start();
+    await vi.waitFor(() => expect(releaseFirstPoll).toBeDefined());
+    const first = flow.settled();
+    await flow.start();
+    await flow.settled();
+    releaseFirstPoll?.();
+    await first;
+
+    expect(polled).toEqual(['dev-1', 'dev-2']);
+    expect(onToken.mock.calls.map(([token]) => token)).toEqual(['gho_second']);
+    expect(flow.status()).toEqual({ state: 'complete' });
+  });
+
   test('tells onToken the sign-in was cancelled while the token was being checked', async () => {
     const { flow, onToken } = setup([{ access_token: 'gho_new' }]);
     let isCurrent: (() => boolean) | undefined;
