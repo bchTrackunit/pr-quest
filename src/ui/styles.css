@@ -1115,6 +1115,159 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
+/* ------------------------------------------------------------------ settings */
+
+.settings__status {
+  min-height: 1.5em;
+  color: var(--xp);
+  font-weight: 600;
+}
+
+.settings__section {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-deep);
+}
+
+.settings__heading {
+  color: var(--gold);
+  font-size: 0.75rem;
+}
+
+.settings__heading:focus {
+  outline: none;
+}
+
+.settings__heading:focus-visible {
+  outline: 3px solid var(--focus);
+}
+
+.settings__account {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.settings__providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings__providers legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+
+.settings__model-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.settings__note {
+  grid-column: 1 / -1;
+  font-size: 0.9rem;
+}
+
+.notice--warning {
+  border-color: var(--warning);
+  background: rgb(255 179 71 / 12%);
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--mana);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: #9cc4ff;
+}
+
+.key-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.key-row {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+}
+
+.key-row--highlight {
+  border-color: var(--warning);
+  box-shadow: 0 0 12px rgb(255 179 71 / 30%);
+}
+
+.key-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+}
+
+.key-row__name {
+  font-size: 1rem;
+}
+
+.key-row__value {
+  color: var(--gold);
+  letter-spacing: 0.08em;
+}
+
+.key-row__needed {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.key-row__form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.key-row__confirm {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--danger);
+  border-radius: var(--radius);
+  background: rgb(163 22 42 / 18%);
+}
+
+.badge--key-settings {
+  color: var(--xp);
+}
+
+.badge--key-env {
+  color: var(--warning);
+}
+
+@media (max-width: 600px) {
+  .settings__model-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ------------------------------------------------------------------ review result */
 
 .result__quest {

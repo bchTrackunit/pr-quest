@@ -4,6 +4,7 @@ import { GitHubAccountControl } from './GitHubAccountControl.tsx';
 import { PlayerHud } from './PlayerHud.tsx';
 import { QuestBoard } from './QuestBoard.tsx';
 import { ReviewResult } from './ReviewResult.tsx';
+import { SettingsDialog } from './SettingsDialog.tsx';
 import { useStoreState } from './store.ts';
 import { Toasts } from './Toasts.tsx';
 import { useGameController } from './useGameController.ts';
@@ -36,6 +37,7 @@ export const App = () => {
           notificationAccess={state.notificationAccess}
           notificationsEnabled={state.notificationsEnabled}
           onClickNotifications={actions.toggleNotifications}
+          onClickSettings={() => actions.openSettings()}
           onClickSound={actions.toggleSound}
           player={state.player}
           playerError={state.playerError}
@@ -83,6 +85,14 @@ export const App = () => {
             actions.confirmApprove(approveQuest.id, headSha, comment)
           }
           quest={approveQuest}
+        />
+      ) : null}
+
+      {state.settings ? (
+        <SettingsDialog
+          github={github}
+          onClickClose={actions.closeSettings}
+          target={state.settings}
         />
       ) : null}
 

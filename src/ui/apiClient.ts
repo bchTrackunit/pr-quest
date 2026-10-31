@@ -31,13 +31,20 @@ type JsonRouteName = Exclude<RouteName, 'events'>;
 export class ApiRequestError extends Error {
   public readonly status: number;
   public readonly code: string;
+  /** With `missingConfig`: the review provider that needs a key. */
+  public readonly provider?: ReviewProvider;
 
-  public constructor(status: number, code: string, message: string) {
+  public constructor(status: number, code: string, message: string, provider?: ReviewProvider) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
+    this.provider = provider;
   }
+}
+
+function isReviewProvider(value: unknown): value is ReviewProvider {
+  return value === 'cursor' || value === 'claude';
 }
 
 export interface ApiRequestOptions<TName extends JsonRouteName> {
@@ -67,7 +74,13 @@ export async function apiRequest<TName extends JsonRouteName>(
   const payload: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     if (isApiErrorResponse(payload)) {
-      throw new ApiRequestError(response.status, payload.error.code, payload.error.message);
+      const { code, message, provider } = payload.error;
+      throw new ApiRequestError(
+        response.status,
+        code,
+        message,
+        isReviewProvider(provider) ? provider : undefined,
+      );
     }
     throw new ApiRequestError(response.status, 'internal', `Request failed: ${response.status}`);
   }

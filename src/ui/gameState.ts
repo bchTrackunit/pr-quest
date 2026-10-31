@@ -13,6 +13,7 @@ import type {
   XpReason,
 } from '../shared/api.ts';
 import type { NotificationAccess } from './notifications.ts';
+import type { SettingsTarget } from './settingsModel.ts';
 
 export type LoadState = 'loading' | 'ready' | 'error';
 
@@ -62,6 +63,8 @@ export interface GameState {
   questActionErrors: Record<string, string>;
   openRunId?: string;
   approveQuestId?: string;
+  /** The settings popup is open at this section. */
+  settings?: SettingsTarget;
   soundEnabled: boolean;
   notificationsEnabled: boolean;
   notificationAccess: NotificationAccess;

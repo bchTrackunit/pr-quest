@@ -11,6 +11,8 @@ import { useNow } from './useNow.ts';
 export interface DeviceCodePanelProps {
   state: GitHubAccountState;
   actions: GitHubAccountActions;
+  /** Lets a modal opening on this panel focus the copy button first. */
+  autoFocus?: boolean;
 }
 
 const DEFAULT_VERIFICATION_URI = 'https://github.com/login/device';
@@ -51,7 +53,7 @@ const ExpiryCountdown = ({ expiresAt }: { expiresAt: string }) => {
 };
 
 /** The device flow from start to finish: the code to enter on GitHub, its progress and retries. */
-export const DeviceCodePanel = ({ state, actions }: DeviceCodePanelProps) => {
+export const DeviceCodePanel = ({ state, actions, autoFocus = true }: DeviceCodePanelProps) => {
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const { device, pending } = state;
   const isStarting = pending === 'start';
@@ -119,7 +121,7 @@ export const DeviceCodePanel = ({ state, actions }: DeviceCodePanelProps) => {
           <div className="button-row">
             <button
               className="button"
-              data-autofocus
+              data-autofocus={autoFocus ? '' : undefined}
               onClick={() => copyCode(device.userCode ?? '')}
               type="button"
             >

@@ -42,6 +42,7 @@ import {
   requestNotificationAccess,
   showBrowserNotification,
 } from './notifications.ts';
+import type { SettingsTarget } from './settingsModel.ts';
 import { playLootSound, unlockAudio } from './sound.ts';
 import { createStore, type Store } from './store.ts';
 
@@ -62,6 +63,8 @@ export interface GameActions {
   confirmApprove: (questId: string, headSha: string, comment: string) => Promise<void>;
   postFindings: (runId: string, event: PostReviewEvent) => Promise<void>;
   discardFindings: (runId: string) => Promise<void>;
+  openSettings: (target?: SettingsTarget) => void;
+  closeSettings: () => void;
   dismissToast: (toastId: string) => void;
   dismissXpPopup: (popupId: string) => void;
   toggleNotifications: () => void;
@@ -349,6 +352,9 @@ export function useGameController(): GameController {
         const response = await discardRun(runId);
         store.setState((state) => ({ ...upsertRun(state, response.run), openRunId: undefined }));
       },
+      openSettings: (target = { section: 'github' }) =>
+        store.setState((state) => ({ ...state, settings: target })),
+      closeSettings: () => store.setState((state) => ({ ...state, settings: undefined })),
       dismissToast: (toastId) =>
         store.setState((state) => ({
           ...state,
