@@ -169,9 +169,9 @@ describe('App', () => {
     await user.click(within(error).getByRole('button', { name: /Open settings/ }));
 
     const dialog = screen.getByRole('dialog', { name: 'Settings' });
-    expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: 'API keys' }));
     const row = await within(dialog).findByRole('listitem', { name: 'Claude (Anthropic)' });
     expect(within(row).getByText(/Needed for Claude reviews/)).toBeTruthy();
+    expect(document.activeElement).toBe(within(row).getByLabelText('Claude (Anthropic) key'));
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();

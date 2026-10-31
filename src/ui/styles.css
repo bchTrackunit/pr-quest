@@ -1129,6 +1129,11 @@ code {
   font-weight: 600;
 }
 
+/* Out of the grid while empty, but still rendered so screen readers keep the live region. */
+.settings__status:empty {
+  position: absolute;
+}
+
 .settings__section {
   display: grid;
   gap: 0.75rem;

@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import type { ApiKeyName, ApiKeyStatus } from '../shared/api.ts';
 import { KEY_META } from './settingsModel.ts';
@@ -10,7 +10,7 @@ export interface ApiKeyRowProps {
   inputId: string;
   /** Another request is in flight; the row's buttons wait for it. */
   isDisabled: boolean;
-  /** Points at the row because a review needs this key. */
+  /** Points at the row because a review needs this key, and focuses its input. */
   isHighlighted?: boolean;
   onSave: (name: ApiKeyName, value: string) => Promise<void>;
   onRemove: (name: ApiKeyName) => Promise<void>;
@@ -42,6 +42,25 @@ export const ApiKeyRow = ({
   const headingId = useId();
   const hintId = useId();
   const isEnv = status.source === 'env';
+  const inputRef = useRef<HTMLInputElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
+  /**
+   * Buttons are disabled while a request runs and the confirmation unmounts when it ends, both of
+   * which drop focus to the body, outside the modal. This says where focus goes after the render.
+   */
+  const focusAfterRender = useRef<'input' | 'remove' | undefined>(
+    isHighlighted ? 'input' : undefined,
+  );
+
+  useEffect(() => {
+    const target = focusAfterRender.current;
+    focusAfterRender.current = undefined;
+    if (target === 'input') {
+      inputRef.current?.focus();
+    } else if (target === 'remove') {
+      removeRef.current?.focus();
+    }
+  });
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -54,6 +73,21 @@ export const ApiKeyRow = ({
     setValidation(undefined);
     onSave(name, value.trim())
       .then(() => form.reset())
+      .catch(() => undefined)
+      .finally(() => inputRef.current?.focus());
+  };
+
+  const keepKey = (): void => {
+    focusAfterRender.current = 'remove';
+    setIsConfirmingRemove(false);
+  };
+
+  const confirmRemove = (): void => {
+    onRemove(name)
+      .then(() => {
+        focusAfterRender.current = 'input';
+        setIsConfirmingRemove(false);
+      })
       .catch(() => undefined);
   };
 
@@ -100,6 +134,7 @@ export const ApiKeyRow = ({
               className="field__input"
               id={inputId}
               name="value"
+              ref={inputRef}
               spellCheck={false}
               type="password"
             />
@@ -119,6 +154,7 @@ export const ApiKeyRow = ({
                 className="button button--danger"
                 disabled={isDisabled}
                 onClick={() => setIsConfirmingRemove(true)}
+                ref={removeRef}
                 type="button"
               >
                 Remove
@@ -141,7 +177,7 @@ export const ApiKeyRow = ({
               autoFocus
               className="button"
               disabled={isDisabled}
-              onClick={() => setIsConfirmingRemove(false)}
+              onClick={keepKey}
               type="button"
             >
               Keep it
@@ -149,11 +185,7 @@ export const ApiKeyRow = ({
             <button
               className="button button--danger"
               disabled={isDisabled}
-              onClick={() => {
-                onRemove(name)
-                  .then(() => setIsConfirmingRemove(false))
-                  .catch(() => undefined);
-              }}
+              onClick={confirmRemove}
               type="button"
             >
               Remove the {meta.label} key

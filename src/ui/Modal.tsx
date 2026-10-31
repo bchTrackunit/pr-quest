@@ -51,10 +51,11 @@ export const Modal = ({
       event.preventDefault();
       return;
     }
-    if (event.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === panelRef.current)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault();
       first.focus();
     }

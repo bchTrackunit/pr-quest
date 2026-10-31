@@ -34,8 +34,8 @@ const AnthropicModelsSchema = z.object({
 
 const KEY_NAMES: Record<ReviewProvider, ApiKeyName> = { cursor: 'cursor', claude: 'anthropic' };
 const KEY_LABELS: Record<ReviewProvider, string> = {
-  cursor: 'a Cursor API key',
-  claude: 'an Anthropic API key',
+  cursor: 'Cursor API key',
+  claude: 'Anthropic API key',
 };
 const FALLBACKS: Record<ReviewProvider, ReadonlyArray<ModelOption>> = {
   cursor: CURSOR_FALLBACK_MODELS,
@@ -64,7 +64,7 @@ export class ModelCatalog {
   public async list(provider: ReviewProvider): Promise<ListModelsResponse> {
     const key = this.apiKey(KEY_NAMES[provider]);
     if (!key) {
-      return fallback(provider, `Add ${KEY_LABELS[provider]} in Settings to see every model`);
+      return fallback(provider, `no ${KEY_LABELS[provider]} yet`);
     }
     try {
       const models =

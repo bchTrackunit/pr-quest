@@ -193,15 +193,31 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
     );
   };
 
+  /** A provider's model list depends on its key, so a changed key reloads it. */
+  const forgetModelsFor = (name: ApiKeyName): void =>
+    setModels((current) => {
+      const next = { ...current };
+      for (const option of REVIEW_PROVIDERS) {
+        if (PROVIDER_KEYS[option] === name) {
+          delete next[option];
+        }
+      }
+      return next;
+    });
+
   const saveKey = (name: ApiKeyName, value: string): Promise<void> =>
-    save(`key:${name}`, () => setApiKey(name, value), `Saved the ${KEY_META[name].label} key.`);
+    save(
+      `key:${name}`,
+      () => setApiKey(name, value),
+      `Saved the ${KEY_META[name].label} key.`,
+    ).then(() => forgetModelsFor(name));
 
   const removeKey = (name: ApiKeyName): Promise<void> =>
     save(
       `remove:${name}`,
       () => removeApiKey(name),
       `Removed the ${KEY_META[name].label} key.`,
-    );
+    ).then(() => forgetModelsFor(name));
 
   const isBusy = pending !== undefined;
 

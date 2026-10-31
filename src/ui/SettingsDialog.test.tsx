@@ -193,6 +193,67 @@ describe('SettingsDialog', () => {
     expect(within(keyRow('Linear')).getByText('Not set')).toBeTruthy();
   });
 
+  test('keeps focus in the row when the remove confirmation goes away', async () => {
+    const user = userEvent.setup();
+    api.removeApiKey.mockResolvedValue(
+      makeSettings({ keys: { ...makeSettings().keys, linear: { set: false } } }),
+    );
+    renderDialog({ section: 'keys' });
+
+    const row = await screen.findByRole('listitem', { name: 'Linear' });
+    await user.click(within(row).getByRole('button', { name: 'Remove the Linear key' }));
+    await user.click(within(row).getByRole('button', { name: 'Keep it' }));
+    expect(document.activeElement).toBe(
+      within(row).getByRole('button', { name: 'Remove the Linear key' }),
+    );
+
+    await user.click(within(row).getByRole('button', { name: 'Remove the Linear key' }));
+    await user.click(
+      within(within(row).getByRole('group')).getByRole('button', { name: 'Remove the Linear key' }),
+    );
+    await screen.findByText('Removed the Linear key.');
+    expect(document.activeElement).toBe(within(keyRow('Linear')).getByLabelText('Linear key'));
+  });
+
+  test('keeps focus on the key input after saving with the button', async () => {
+    const user = userEvent.setup();
+    api.setApiKey.mockResolvedValue(
+      makeSettings({
+        keys: { ...makeSettings().keys, cursor: { set: true, source: 'settings', last4: '7f3e' } },
+      }),
+    );
+    renderDialog({ section: 'keys' });
+
+    const row = await screen.findByRole('listitem', { name: 'Cursor' });
+    await user.type(within(row).getByLabelText('Cursor key'), 'crsr_secret_7f3e');
+    await user.click(within(row).getByRole('button', { name: 'Save key for Cursor' }));
+
+    await screen.findByText('Saved the Cursor key.');
+    expect(document.activeElement).toBe(
+      within(keyRow('Cursor')).getByLabelText('Replace the Cursor key'),
+    );
+  });
+
+  test("reloads the provider's models after its key changes", async () => {
+    const user = userEvent.setup();
+    api.setApiKey.mockResolvedValue(
+      makeSettings({
+        keys: { ...makeSettings().keys, cursor: { set: true, source: 'settings', last4: '7f3e' } },
+      }),
+    );
+    renderDialog({ section: 'keys' });
+
+    await screen.findByRole('combobox', { name: 'Cursor model' });
+    expect(api.fetchModels).toHaveBeenCalledTimes(1);
+    const row = keyRow('Cursor');
+    await user.type(within(row).getByLabelText('Cursor key'), 'crsr_secret_7f3e');
+    await user.click(within(row).getByRole('button', { name: 'Save key for Cursor' }));
+
+    await screen.findByText('Saved the Cursor key.');
+    await screen.findByRole('combobox', { name: 'Cursor model' });
+    expect(api.fetchModels).toHaveBeenCalledTimes(2);
+  });
+
   test('shows env keys as read-only with a hint to edit .env.local', async () => {
     renderDialog({ section: 'keys' });
 
@@ -306,6 +367,7 @@ describe('SettingsDialog', () => {
     const row = await screen.findByRole('listitem', { name: 'Cursor' });
     expect(within(row).getByText(/Needed for Cursor reviews/)).toBeTruthy();
     expect(row.className).toContain('key-row--highlight');
+    expect(document.activeElement).toBe(within(row).getByLabelText('Cursor key'));
   });
 
   test('says so when the server has no settings routes yet', async () => {
