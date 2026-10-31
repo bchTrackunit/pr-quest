@@ -52,7 +52,12 @@ function makeModels(overrides: Partial<ListModelsResponse> = {}): ListModelsResp
 function makeGitHub(state: Partial<GitHubAccountState> = {}): GitHubAccountController {
   return {
     state: { load: 'ready', clientIdConfigured: true, device: { state: 'idle' }, ...state },
-    actions: { startSignIn: vi.fn(), cancelSignIn: vi.fn(), signOut: vi.fn() },
+    actions: {
+      startSignIn: vi.fn(),
+      cancelSignIn: vi.fn(),
+      signOut: vi.fn(),
+      dismissFallback: vi.fn(),
+    },
   };
 }
 
@@ -506,6 +511,22 @@ describe('SettingsDialog', () => {
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     await user.keyboard('{Escape}');
     expect(onClickClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows the gh fallback notice after signing out', async () => {
+    const user = userEvent.setup();
+    const { github } = renderDialog(
+      { section: 'github' },
+      makeGitHub({
+        account: { login: 'hubot', tokenSource: 'gh' },
+        fallback: { from: 'octocat', to: 'hubot' },
+      }),
+    );
+
+    const section = screen.getByRole('region', { name: 'GitHub account' });
+    expect(within(section).getByText(/Signed out of @octocat\. PR Quest now acts as @hubot/));
+    await user.click(within(section).getByRole('button', { name: 'Dismiss' }));
+    expect(github.actions.dismissFallback).toHaveBeenCalledTimes(1);
   });
 
   test('offers sign-in on top of the gh CLI fallback', async () => {

@@ -19,7 +19,7 @@ import {
 } from './apiClient.ts';
 import { ApiKeyRow } from './ApiKeyRow.tsx';
 import { DeviceCodePanel } from './DeviceCodePanel.tsx';
-import { AccountAvatar, TokenSourceBadge } from './GitHubAccountControl.tsx';
+import { AccountAvatar, FallbackNotice, TokenSourceBadge } from './GitHubAccountControl.tsx';
 import { Modal } from './Modal.tsx';
 import {
   KEY_META,
@@ -240,6 +240,7 @@ export const SettingsDialog = ({ target, github, onClickClose }: SettingsDialogP
         {state.load === 'error' ? (
           <p className="form-error">GitHub account unknown: {state.loadError}</p>
         ) : null}
+        <FallbackNotice actions={actions} state={state} />
         {account ? (
           <div className="settings__account">
             <AccountAvatar account={account} />

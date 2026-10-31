@@ -33,6 +33,8 @@ export interface GitHubAccountState {
   actionError?: string;
   /** The last status poll failed; polling carries on. */
   pollError?: string;
+  /** Signing out left PR Quest acting as a different account through the gh CLI's token. */
+  fallback?: { from: string; to: string };
 }
 
 export interface GitHubAccountActions {
@@ -40,6 +42,7 @@ export interface GitHubAccountActions {
   startSignIn: () => void;
   cancelSignIn: () => void;
   signOut: () => void;
+  dismissFallback: () => void;
 }
 
 export interface GitHubAccountController {
@@ -85,6 +88,26 @@ function withStatus(state: GitHubAccountState, status: AuthStatusResponse): GitH
     accountError: status.error,
     device: status.device,
   };
+}
+
+/**
+ * After signing out, the gh CLI's token can belong to someone else. Servers that report it say
+ * who was signed out in `fellBackFrom`; otherwise the login shown before signing out is used.
+ */
+function fallbackAfterSignOut(
+  previous: GitHubAccount | undefined,
+  status: AuthStatusResponse,
+): GitHubAccountState['fallback'] {
+  const reported =
+    'fellBackFrom' in status && typeof status.fellBackFrom === 'string'
+      ? status.fellBackFrom
+      : undefined;
+  const from = reported ?? previous?.login;
+  const to = status.account;
+  if (!from || to?.tokenSource !== 'gh' || to.login.toLowerCase() === from.toLowerCase()) {
+    return undefined;
+  }
+  return { from, to: to.login };
 }
 
 /**
@@ -163,7 +186,12 @@ export function useGitHubAccount(onAccountChanged: () => void): GitHubAccountCon
   const actions = useMemo<GitHubAccountActions>(
     () => ({
       startSignIn: () => {
-        setState((current) => ({ ...current, pending: 'start', actionError: undefined }));
+        setState((current) => ({
+          ...current,
+          pending: 'start',
+          actionError: undefined,
+          fallback: undefined,
+        }));
         startDeviceFlow()
           .then((response) =>
             setState((current) => ({
@@ -203,7 +231,11 @@ export function useGitHubAccount(onAccountChanged: () => void): GitHubAccountCon
         setState((current) => ({ ...current, pending: 'signOut', actionError: undefined }));
         signOut()
           .then((status) => {
-            setState((current) => ({ ...withStatus(current, status), pending: undefined }));
+            setState((current) => ({
+              ...withStatus(current, status),
+              pending: undefined,
+              fallback: fallbackAfterSignOut(current.account, status),
+            }));
             setAccountChanges((count) => count + 1);
           })
           .catch((reason: unknown) =>
@@ -214,6 +246,7 @@ export function useGitHubAccount(onAccountChanged: () => void): GitHubAccountCon
             })),
           );
       },
+      dismissFallback: () => setState((current) => ({ ...current, fallback: undefined })),
     }),
     [],
   );

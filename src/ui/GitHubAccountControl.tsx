@@ -37,6 +37,21 @@ export const TokenSourceBadge = ({ account }: { account: GitHubAccount }) => (
   </span>
 );
 
+/** Tells the player that signing out switched PR Quest to another account's gh CLI token. */
+export const FallbackNotice = ({ state, actions }: GitHubAccountControlProps) =>
+  state.fallback ? (
+    <div className="notice notice--warning fallback-notice" role="status">
+      <p>
+        Signed out of @{state.fallback.from}. PR Quest now acts as @{state.fallback.to} through
+        your GitHub CLI login. Run <code>gh auth switch</code> or <code>gh auth logout</code> to
+        change that.
+      </p>
+      <button className="button button--small" onClick={actions.dismissFallback} type="button">
+        Dismiss
+      </button>
+    </div>
+  ) : null;
+
 /** The HUD's GitHub corner: who PR Quest acts as, "Sign in with GitHub" and signing out. */
 export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlProps) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -117,6 +132,7 @@ export const GitHubAccountControl = ({ state, actions }: GitHubAccountControlPro
   return (
     <>
       {renderAccount()}
+      <FallbackNotice actions={actions} state={state} />
       {isDialogOpen ? (
         <Modal
           onClickClose={() => setIsDialogOpen(false)}

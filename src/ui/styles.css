@@ -368,6 +368,19 @@ code {
   font-size: 0.85rem;
 }
 
+.fallback-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.fallback-notice p {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
 .hud__settings {
   min-width: 2.5rem;
   justify-content: center;

@@ -330,6 +330,50 @@ describe('GitHubAccountControl', () => {
     expect(onAccountChanged).toHaveBeenCalledTimes(1);
   });
 
+  test('says so when signing out falls back to a different gh CLI account', async () => {
+    const user = setupUser();
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ account: OCTOCAT }));
+    const reply = {
+      ...authStatus({ account: { login: 'hubot', tokenSource: 'gh' } }),
+      fellBackFrom: 'octocat',
+    };
+    api.signOut.mockResolvedValue(reply);
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ account: { ...OCTOCAT, login: 'mona' } }));
+    renderControl();
+
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+
+    const notice = await screen.findByText(/now acts as @hubot/);
+    expect(notice.textContent).toBe(
+      'Signed out of @octocat. PR Quest now acts as @hubot through your GitHub CLI login. Run gh auth switch or gh auth logout to change that.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/now acts as @hubot/)).toBeNull();
+  });
+
+  test('spots the gh fallback even when the server does not report it', async () => {
+    const user = setupUser();
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ account: OCTOCAT }));
+    api.signOut.mockResolvedValue(authStatus({ account: { login: 'hubot', tokenSource: 'gh' } }));
+    renderControl();
+
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByText(/Signed out of @octocat\. PR Quest now acts as @hubot/));
+  });
+
+  test('says nothing when the gh CLI account is the one that signed out', async () => {
+    const user = setupUser();
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ account: OCTOCAT }));
+    api.signOut.mockResolvedValue(authStatus({ account: { login: 'Octocat', tokenSource: 'gh' } }));
+    renderControl();
+
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByText('gh CLI')).toBeTruthy();
+    expect(screen.queryByText(/now acts as/)).toBeNull();
+  });
+
   test('hides itself when the server has no auth routes yet', async () => {
     api.fetchAuthStatus.mockRejectedValue(
       new ApiRequestError(501, 'notImplemented', 'Not implemented'),
