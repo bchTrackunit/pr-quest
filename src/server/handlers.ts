@@ -11,6 +11,7 @@ import { parseQuestId, type QuestRef } from './quests.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
 import type { ReviewRunService } from './reviewRuns.ts';
 import { ApiError, type RouteHandlers } from './router.ts';
+import { ModelIdSchema, parseBody } from './validation.ts';
 
 const MAX_COMMENT_LENGTH = 65_536;
 
@@ -22,15 +23,7 @@ export interface AppServices {
   events: EventHub;
 }
 
-const StartReviewSchema = z.object({
-  model: z
-    .string()
-    .trim()
-    .min(1)
-    .max(200)
-    .regex(/^[\w.:/-]+$/, 'Model ids may only contain letters, digits and . : / - _')
-    .optional(),
-});
+const StartReviewSchema = z.object({ model: ModelIdSchema.optional() });
 
 const ApproveSchema = z.object({
   confirm: z.literal(true, { error: 'Set confirm: true after the player confirms the approval' }),
@@ -45,16 +38,6 @@ const PostReviewSchema = z.object({
   event: z.enum(['comment', 'requestChanges']).optional(),
   findingIndexes: z.array(z.number().int().nonnegative()).max(1000).optional(),
 });
-
-function parseBody<TBody>(schema: z.ZodType<TBody>, body: unknown): TBody {
-  const parsed = schema.safeParse(body ?? {});
-  if (!parsed.success) {
-    const issue = parsed.error.issues.at(0);
-    const where = issue && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
-    throw new ApiError(400, 'badRequest', `${where}${issue?.message ?? 'Invalid request body'}`);
-  }
-  return parsed.data;
-}
 
 function requireQuestRef(id: string): QuestRef {
   const ref = parseQuestId(id);
