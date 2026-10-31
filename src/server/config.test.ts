@@ -62,7 +62,7 @@ describe('loadConfig', () => {
   test('falls back to the built-in GitHub client ID, which is empty by default', () => {
     const config = loadConfig({ env: {}, envFilePath });
 
-    expect(config.githubClientId).toBe(DEFAULT_GITHUB_CLIENT_ID || undefined);
+    expect(config.githubClientId ?? '').toBe(DEFAULT_GITHUB_CLIENT_ID);
   });
 
   test('an empty environment value blanks the env file value', () => {

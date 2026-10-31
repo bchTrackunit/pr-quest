@@ -51,12 +51,16 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     linearApiKey: read('LINEAR_API_KEY'),
     cursorApiKey: read('CURSOR_API_KEY'),
     anthropicApiKey: read('ANTHROPIC_API_KEY'),
-    githubClientId: read('PR_QUEST_GITHUB_CLIENT_ID') ?? (DEFAULT_GITHUB_CLIENT_ID || undefined),
+    githubClientId: read('PR_QUEST_GITHUB_CLIENT_ID') ?? nonEmpty(DEFAULT_GITHUB_CLIENT_ID),
     host: SERVER_HOST,
     port: parsePort(read('PR_QUEST_PORT'), DEFAULT_SERVER_PORT, 'PR_QUEST_PORT'),
     uiPort: parsePort(read('PR_QUEST_UI_PORT'), DEFAULT_UI_PORT, 'PR_QUEST_UI_PORT'),
     stateDir: read('PR_QUEST_STATE_DIR') ?? join(homedir(), '.pr-quest'),
   };
+}
+
+function nonEmpty(value: string): string | undefined {
+  return value || undefined;
 }
 
 function parsePort(value: string | undefined, fallback: number, name: string): number {
