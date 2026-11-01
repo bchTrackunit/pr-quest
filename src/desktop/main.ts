@@ -2,8 +2,6 @@ import { app, BrowserWindow, dialog, Menu, safeStorage, session, shell } from 'e
 import electronUpdater from 'electron-updater';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { inspect } from 'node:util';
@@ -18,6 +16,7 @@ import { RELEASE_BUILD } from './buildFlags.ts';
 import { startDesktopServer } from './desktopServer.ts';
 import { type Encryptor, keychainUsable, openDesktopSecrets } from './keychainSecrets.ts';
 import { type LogFile, openLogFile } from './logFile.ts';
+import { forbiddenSwitch } from './launchGuard.ts';
 import { menuTemplate } from './menu.ts';
 import { externalUrl, isAllowedPermission, isAppUrl } from './navigation.ts';
 import { type DesktopPreferences, readPreferences, writePreferences } from './preferences.ts';
@@ -29,21 +28,39 @@ import { scheduleUpdateChecks, updatesEnabled } from './updates.ts';
 const smokeTest = process.env.PR_QUEST_SMOKE_TEST === '1';
 /** After this the smoke test checks the window anyway, so a page that never loads fails it. */
 const SMOKE_LOAD_TIMEOUT_MS = 30_000;
-const SMOKE_CLOSE_TIMEOUT_MS = 5000;
+/** How long quitting waits for the server to close before it gives up on a stuck connection. */
+const CLOSE_TIMEOUT_MS = 5000;
+/** A renderer that crashes again sooner than this stays down instead of reloading in a loop. */
+const RELOAD_INTERVAL_MS = 10_000;
 
-if (smokeTest) {
-  // Its own profile, so it runs next to an open PR Quest instead of handing over to it.
-  app.setPath('userData', mkdtempSync(join(tmpdir(), 'pr-quest-smoke-')));
-  // Chromium keeps its cookie key in the OS keychain. An unsigned rebuild can't read the item an
-  // earlier build created without an access prompt, and pages don't load while that prompt waits.
-  app.commandLine.appendSwitch('use-mock-keychain');
-  app.commandLine.appendSwitch('password-store', 'basic');
-}
-
-if (app.requestSingleInstanceLock()) {
-  run();
+const forbidden = forbiddenSwitch({
+  isPackaged: app.isPackaged,
+  hasSwitch: (name) => app.commandLine.hasSwitch(name),
+});
+if (forbidden !== undefined) {
+  process.stderr.write(`[pr-quest] Refusing to start with --${forbidden}\n`);
+  app.exit(1);
+} else if (smokeTest && process.env.PR_QUEST_STATE_DIR === undefined) {
+  // Otherwise the checks would run against the player's real ~/.pr-quest.
+  process.stderr.write(
+    '[pr-quest] The smoke test needs PR_QUEST_STATE_DIR; see scripts/desktop-smoke.ts\n',
+  );
+  app.exit(2);
 } else {
-  app.quit();
+  if (smokeTest && process.env.PR_QUEST_STATE_DIR !== undefined) {
+    // Its own profile, so it runs next to an open PR Quest instead of handing over to it. It goes in
+    // the throwaway state directory, which desktop-smoke.ts deletes once Chromium has let go of it.
+    app.setPath('userData', join(process.env.PR_QUEST_STATE_DIR, 'smoke-profile'));
+    // Chromium keeps its cookie key in the OS keychain. An unsigned rebuild can't read the item an
+    // earlier build created without an access prompt, and pages don't load while that prompt waits.
+    app.commandLine.appendSwitch('use-mock-keychain');
+    app.commandLine.appendSwitch('password-store', 'basic');
+  }
+  if (app.requestSingleInstanceLock()) {
+    run();
+  } else {
+    app.quit();
+  }
 }
 
 function run(): void {
@@ -60,6 +77,8 @@ function run(): void {
         window.restore();
       }
       window.focus();
+    } else if (server) {
+      window = openWindow(server.url, log);
     }
   });
   // macOS apps stay open without windows; the server keeps polling and the Dock icon reopens one.
@@ -81,8 +100,7 @@ function run(): void {
     }
     server = undefined;
     event.preventDefault();
-    void running
-      .close()
+    void Promise.race([running.close(), delay(CLOSE_TIMEOUT_MS)])
       .then(() => log.close())
       .finally(() => {
         app.quit();
@@ -100,6 +118,7 @@ function run(): void {
             openHelp: () => {
               void shell.openExternal(README_URL);
             },
+            devTools: !app.isPackaged,
           }),
         ),
       );
@@ -222,9 +241,12 @@ function keychain(): Encryptor | undefined {
 /** The UI gets the permissions it uses, and only on its own origin. */
 function guardPermissions(appUrl: string): void {
   const { origin } = new URL(appUrl);
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(isAllowedPermission(permission, webContents.getURL(), origin));
-  });
+  // details.requestingUrl names the frame that asked, which may not be the page's top frame.
+  session.defaultSession.setPermissionRequestHandler(
+    (_webContents, permission, callback, details) => {
+      callback(isAllowedPermission(permission, details.requestingUrl, origin));
+    },
+  );
   session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
     isAllowedPermission(permission, requestingOrigin, origin),
   );
@@ -243,7 +265,12 @@ function openWindow(url: string, log: LogFile): BrowserWindow {
     minHeight: 480,
     show: false,
     title: app.name,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: !app.isPackaged,
+    },
   });
   const openExternally = (target: string): void => {
     const external = externalUrl(target);
@@ -260,14 +287,21 @@ function openWindow(url: string, log: LogFile): BrowserWindow {
     openExternally(target);
     return { action: 'deny' };
   });
-  window.webContents.on('will-navigate', (event) => {
+  const stayInApp = (event: Electron.Event<{ url: string }>): void => {
     if (!isAppUrl(event.url, origin)) {
       event.preventDefault();
       openExternally(event.url);
     }
-  });
+  };
+  window.webContents.on('will-navigate', stayInApp);
+  window.webContents.on('will-redirect', stayInApp);
+  let lastReload = 0;
   window.webContents.on('render-process-gone', (_event, details) => {
     log.warn(`the window's renderer stopped: ${details.reason} (exit code ${details.exitCode})`);
+    if (details.reason !== 'clean-exit' && Date.now() - lastReload > RELOAD_INTERVAL_MS) {
+      lastReload = Date.now();
+      window.webContents.reload();
+    }
   });
   window.webContents.loadURL(url).catch((error: unknown) => {
     log.warn(`the window failed to load ${url}: ${inspect(error)}`);
@@ -293,7 +327,7 @@ async function runSmokeTestAndExit(
   );
   const ok = await runSmokeTest(window, server.url);
   // A page that never finished loading keeps its connection open, and closing waits for it.
-  await Promise.race([server.close(), delay(SMOKE_CLOSE_TIMEOUT_MS)]);
+  await Promise.race([server.close(), delay(CLOSE_TIMEOUT_MS)]);
   await log.close();
   app.exit(ok ? 0 : 1);
 }

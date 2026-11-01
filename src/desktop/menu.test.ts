@@ -9,7 +9,7 @@ const labels = (template: Array<MenuItemConstructorOptions>): Array<string | und
 const roles = (item: MenuItemConstructorOptions | undefined): Array<string | undefined> =>
   Array.isArray(item?.submenu) ? item.submenu.map((entry) => entry.role) : [];
 
-const options = { appName: 'PR Quest', openHelp: vi.fn() };
+const options = { appName: 'PR Quest', openHelp: vi.fn(), devTools: true };
 
 describe('menuTemplate', () => {
   test('macOS gets the app menu first', () => {
@@ -31,6 +31,15 @@ describe('menuTemplate', () => {
     );
 
     expect(edit).toBeDefined();
+  });
+
+  test('a packaged app has no developer tools in its View menu', () => {
+    const template = menuTemplate({ ...options, platform: 'darwin', devTools: false });
+    const view = template.find((item) => item.label === 'View');
+
+    expect(labels(template)).not.toContain('viewMenu');
+    expect(roles(view)).toEqual(expect.arrayContaining(['reload', 'zoomIn', 'togglefullscreen']));
+    expect(roles(view)).not.toContain('toggleDevTools');
   });
 
   test('Help opens the README', () => {

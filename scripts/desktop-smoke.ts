@@ -41,11 +41,18 @@ if (!existsSync(executable)) {
   process.exit(1);
 }
 
+// The checks expect made-up keys to be refused, and real ones have no business in a test run.
+const {
+  CURSOR_API_KEY: _cursor,
+  ANTHROPIC_API_KEY: _anthropic,
+  LINEAR_API_KEY: _linear,
+  ...env
+} = process.env;
 const stateDir = mkdtempSync(join(tmpdir(), 'pr-quest-smoke-state-'));
 const child = spawn(executable, [], {
   stdio: 'inherit',
   env: {
-    ...process.env,
+    ...env,
     PR_QUEST_SMOKE_TEST: '1',
     PR_QUEST_STATE_DIR: stateDir,
     PR_QUEST_DISABLE_UPDATES: '1',

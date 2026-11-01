@@ -4,7 +4,24 @@ export interface MenuOptions {
   platform: NodeJS.Platform;
   appName: string;
   openHelp: () => void;
+  /** Offers Toggle Developer Tools, which only development builds should. */
+  devTools: boolean;
 }
+
+/** Electron's View menu without Toggle Developer Tools. */
+const VIEW_WITHOUT_DEV_TOOLS: MenuItemConstructorOptions = {
+  label: 'View',
+  submenu: [
+    { role: 'reload' },
+    { role: 'forceReload' },
+    { type: 'separator' },
+    { role: 'resetZoom' },
+    { role: 'zoomIn' },
+    { role: 'zoomOut' },
+    { type: 'separator' },
+    { role: 'togglefullscreen' },
+  ],
+};
 
 /**
  * A minimal menu from Electron's standard roles. The Edit menu matters even though it looks
@@ -17,7 +34,7 @@ export function menuTemplate(options: MenuOptions): Array<MenuItemConstructorOpt
   };
   const standard: Array<MenuItemConstructorOptions> = [
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    options.devTools ? { role: 'viewMenu' } : VIEW_WITHOUT_DEV_TOOLS,
     { role: 'windowMenu' },
     help,
   ];
