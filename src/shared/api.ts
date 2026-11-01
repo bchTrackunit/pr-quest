@@ -92,6 +92,13 @@ export type FindingSeverity = 'critical' | 'major' | 'minor' | 'nit';
 
 export type ReviewVerdict = 'approve' | 'comment' | 'requestChanges';
 
+/** The player's call on one finding. Only `accepted` findings are ever posted. */
+export type FindingDecision = 'undecided' | 'accepted' | 'rejected';
+
+/**
+ * A finding's id is its index in `ReviewResult.findings`. A result never changes once its run has
+ * finished, so the index stays stable.
+ */
 export interface ReviewFinding {
   /** Repository-relative path. */
   file: string;
@@ -155,6 +162,12 @@ export interface ReviewRun {
   finishedAt?: string;
   /** Set when `status` is `finished` and the agent output parsed as a `ReviewResult`. */
   result?: ReviewResult;
+  /**
+   * One decision per entry of `result.findings`, in the same order. Absent until the player
+   * decides on a finding; a missing entry is `undecided`. Fixed once the run is posted, when the
+   * accepted findings are exactly the ones that were posted.
+   */
+  findingDecisions?: Array<FindingDecision>;
   error?: ReviewRunError;
   /** GitHub URL of the review created by `POST /api/runs/:id/post`. */
   postedReviewUrl?: string;
