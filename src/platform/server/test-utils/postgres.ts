@@ -18,6 +18,11 @@ export interface TestDatabase {
   engine: 'pglite' | 'postgres';
   /** Deletes every user and everything they own, keeping the schema. */
   reset: () => Promise<void>;
+  /**
+   * A second pool on the same schema, standing in for another server instance; `close` closes it.
+   * PGlite has one connection, so there it is the same database and nothing truly runs at once.
+   */
+  connectAgain: () => Database;
   close: () => Promise<void>;
 }
 
@@ -37,14 +42,21 @@ async function realPostgres(url: string): Promise<TestDatabase> {
   const schema = `test_${randomUUID().replaceAll('-', '')}`;
   const admin = new Pool({ connectionString: url, max: 1 });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  const db = poolDatabase(
-    new Pool({ connectionString: url, max: 4, options: `-c search_path=${schema}` }),
-  );
+  const connect = () =>
+    poolDatabase(new Pool({ connectionString: url, max: 4, options: `-c search_path=${schema}` }));
+  const db = connect();
+  const others: Array<Database> = [];
   return {
     db,
     engine: 'postgres',
     reset: () => truncateUsers(db),
+    connectAgain: () => {
+      const other = connect();
+      others.push(other);
+      return other;
+    },
     close: async () => {
+      await Promise.all(others.map((other) => other.close()));
       await db.close();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
@@ -65,7 +77,13 @@ async function pglite(): Promise<TestDatabase> {
     transaction: (work) => engine.transaction((tx) => work(client(tx))),
     close: () => engine.close(),
   };
-  return { db, engine: 'pglite', reset: () => truncateUsers(db), close: () => db.close() };
+  return {
+    db,
+    engine: 'pglite',
+    reset: () => truncateUsers(db),
+    connectAgain: () => ({ ...db, close: async () => undefined }),
+    close: () => db.close(),
+  };
 }
 
 async function truncateUsers(db: Database): Promise<void> {

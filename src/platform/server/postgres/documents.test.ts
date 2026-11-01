@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import type { DocumentCodec } from '../documentCodec.ts';
 import { openTestDatabase, type TestDatabase } from '../test-utils/postgres.ts';
-import type { Database } from './database.ts';
+import type { Database, SqlClient } from './database.ts';
 import { ensureUser, PostgresDocument, readDocument, writeDocument } from './documents.ts';
 
 interface Counter {
@@ -216,6 +216,68 @@ describe('readDocument and writeDocument', () => {
 });
 
 describe('ensureUser', () => {
+  /** `db`, failing its first `failures` transactions with Postgres error `code`. */
+  const failingWith = (code: string, failures: number): Database & { attempts: number } => {
+    const flaky = {
+      ...db,
+      attempts: 0,
+      transaction: async <T>(work: (tx: SqlClient) => Promise<T>): Promise<T> => {
+        flaky.attempts += 1;
+        if (flaky.attempts <= failures) {
+          throw Object.assign(new Error(`simulated ${code}`), { code });
+        }
+        return await db.transaction(work);
+      },
+    };
+    return flaky;
+  };
+
+  test.each(['23505', '40P01'])(
+    'retries a registration another server raced with (%s)',
+    async (code) => {
+      const flaky = failingWith(code, 2);
+
+      await expect(ensureUser(flaky, { id: 77, login: 'racer' })).resolves.toEqual({});
+
+      expect(flaky.attempts).toBe(3);
+    },
+  );
+
+  test('gives up after three attempts, and never retries other errors', async () => {
+    const racing = failingWith('40P01', 3);
+    const broken = failingWith('42P01', 1);
+
+    await expect(ensureUser(racing, { id: 77, login: 'racer' })).rejects.toThrow(/40P01/);
+    await expect(ensureUser(broken, { id: 77, login: 'racer' })).rejects.toThrow(/42P01/);
+
+    expect(racing.attempts).toBe(3);
+    expect(broken.attempts).toBe(1);
+  });
+
+  test('two servers registering the same new users, or swapping logins, at once all succeed', async () => {
+    const other = database.connectAgain();
+    const pairs = Array.from({ length: 10 }, (_, index) => ({
+      id: 100 + index,
+      login: `new-${index}`,
+    }));
+
+    await Promise.all(pairs.flatMap((user) => [ensureUser(db, user), ensureUser(other, user)]));
+    await Promise.all([
+      ensureUser(db, { id: 100, login: 'new-1' }),
+      ensureUser(other, { id: 101, login: 'new-0' }),
+    ]);
+
+    const rows = (
+      await db.query('SELECT github_id::int AS id, login FROM users WHERE github_id < 102')
+    ).rows;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { id: 100, login: 'new-1' },
+        { id: 101, login: 'new-0' },
+      ]),
+    );
+  });
+
   const users = async () =>
     (await db.query('SELECT github_id::int AS id, login FROM users ORDER BY github_id')).rows;
 

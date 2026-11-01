@@ -30,6 +30,16 @@ export function sharedDatabase(db: Database): SharedDatabase {
   };
 }
 
+/** The SQLSTATE of a Postgres error, such as `23505` for a unique violation. */
+export function sqlStateOf(error: unknown): string | undefined {
+  return typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string'
+    ? error.code
+    : undefined;
+}
+
 export interface ConnectOptions {
   /** Most connections the pool opens; defaults to 10. */
   max?: number;

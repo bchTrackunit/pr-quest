@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { DocumentCodec } from '../documentCodec.ts';
 import type { GitHubUser } from '../githubUser.ts';
 import { refuseNewerVersion, WriteQueue } from '../privateFiles.ts';
-import { type Database, rowsOf, type SqlClient } from './database.ts';
+import { type Database, rowsOf, type SqlClient, sqlStateOf } from './database.ts';
 
 /** Which row of `user_documents`: a GitHub account and a document kind such as `game`. */
 export interface DocumentKey {
@@ -33,6 +33,27 @@ const DetachedRowSchema = z.object({ github_id: z.string().transform(Number) });
  * no login, until it signs in under its new one. Resolves to the id it took the login from.
  */
 export async function ensureUser(
+  db: Pick<Database, 'transaction'>,
+  user: GitHubUser,
+): Promise<{ detachedFrom?: number }> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await registerUser(db, user);
+    } catch (error) {
+      if (attempt >= MAX_ATTEMPTS || !RACING_SQLSTATES.has(sqlStateOf(error) ?? '')) {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Another server registering the same new login at once (unique violation), or two accounts
+ * swapping logins at once (deadlock). Running the registration again settles both.
+ */
+const RACING_SQLSTATES = new Set(['23505', '40P01']);
+
+async function registerUser(
   db: Pick<Database, 'transaction'>,
   user: GitHubUser,
 ): Promise<{ detachedFrom?: number }> {

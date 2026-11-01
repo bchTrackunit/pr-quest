@@ -1,7 +1,13 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
 
-import { poolConfig, poolDatabase, type PoolClientLike, transportWarning } from './database.ts';
+import {
+  poolConfig,
+  poolDatabase,
+  type PoolClientLike,
+  sqlStateOf,
+  transportWarning,
+} from './database.ts';
 
 describe('poolConfig', () => {
   test('bounds every wait, so a stuck database fails requests instead of hanging them', () => {
@@ -107,5 +113,14 @@ describe('transportWarning', () => {
 
     expect(warning).toMatch(/db\.example\.com.*sslmode=require/);
     expect(warning).not.toContain('s3cret');
+  });
+});
+
+describe('sqlStateOf', () => {
+  test("reads a Postgres error's SQLSTATE, and nothing from anything else", () => {
+    expect(sqlStateOf(Object.assign(new Error('duplicate key'), { code: '23505' }))).toBe('23505');
+    for (const other of [new Error('plain'), { code: 23505 }, 'x', null, undefined]) {
+      expect(sqlStateOf(other)).toBeUndefined();
+    }
   });
 });
