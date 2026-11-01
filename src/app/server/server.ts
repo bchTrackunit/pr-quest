@@ -37,6 +37,11 @@ export type {
   IdentityResolver,
 } from './identity.ts';
 export type { RawRoute } from '../../platform/server/router.ts';
+export type {
+  SharedDatabase,
+  SqlClient,
+  SqlResult,
+} from '../../platform/server/postgres/database.ts';
 export {
   type AppStorage,
   createFileStorage,
@@ -133,6 +138,7 @@ export async function startServer(
         (overrides.secrets
           ? createFileStorage(config.stateDir, { info, warn, secrets: overrides.secrets })
           : undefined),
+      database: database?.db,
       identity: overrides.identity,
       ghToken: overrides.ghToken ?? readGhToken,
       fetch: overrides.fetch,

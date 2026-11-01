@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DeviceFlow, GitHubTokenProvider } from '../../features/auth/server/index.ts';
 import type { GitHubViewer } from '../../features/quests/server/index.ts';
 import type { FetchLike } from '../../platform/server/githubApi.ts';
+import type { SharedDatabase } from '../../platform/server/postgres/database.ts';
 import type { RawRoute } from '../../platform/server/router.ts';
 import type { SecretStore } from '../../platform/server/secrets.ts';
 import type { GitHubAccount } from '../../shared/api.ts';
@@ -77,6 +78,11 @@ export interface IdentityContext<TServices extends SessionServices> {
    * the forgotten store over the reopened one.
    */
   releaseUser: (login: string) => void;
+  /**
+   * Hosted mode's Postgres database, when the server opened one from `config.database`, for the
+   * sign-in's own tables such as sessions. Add them as migrations in `postgres/migrations.ts`.
+   */
+  database?: SharedDatabase;
 }
 
 export type IdentityFactory<TServices extends SessionServices> = (
@@ -85,7 +91,7 @@ export type IdentityFactory<TServices extends SessionServices> = (
 
 export interface LocalIdentityOptions<TServices extends SessionServices> extends Omit<
   IdentityContext<TServices>,
-  'storage' | 'releaseUser'
+  'storage' | 'releaseUser' | 'database'
 > {
   /** The machine's secrets, which hold the OAuth token from "Sign in with GitHub". */
   secrets: SecretStore;

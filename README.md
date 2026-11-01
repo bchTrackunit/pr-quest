@@ -299,6 +299,10 @@ The commands read `DATABASE_URL` and the master keys from the environment only, 
 them. Migrations only go forward. A database migrated by a newer build is refused by an older
 one.
 
+When `startServer` opens the database from `DATABASE_URL`, the identity resolver gets it as
+`IdentityContext.database`, without `close`, for the sign-in's own tables such as sessions. Those
+tables belong in the same migrations.
+
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
 

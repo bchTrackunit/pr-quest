@@ -20,7 +20,7 @@ import { NotSignedInError } from '../../platform/server/githubApi.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 import { openTestDatabase, type TestDatabase } from '../../platform/server/test-utils/postgres.ts';
 import { openPostgresStorage } from './postgresStorage.ts';
-import type { IdentityFactory } from './identity.ts';
+import type { IdentityContext, IdentityFactory } from './identity.ts';
 import type { Session } from './sessions.ts';
 import {
   type AppStorage,
@@ -805,6 +805,40 @@ describe('createApp on Postgres storage', () => {
 
   afterAll(async () => {
     await database.close();
+  });
+
+  test('hands the identity resolver the database, for its own tables such as sessions', async () => {
+    let seen: IdentityContext<UserServices>['database'];
+    const identity: IdentityFactory<UserServices> = async (context) => {
+      seen = context.database;
+      return headerIdentity(context);
+    };
+    await start({
+      config: hostedConfig(),
+      identity,
+      storage: await postgres(),
+      database: database.db,
+    });
+
+    const result = await seen?.transaction((tx) =>
+      tx.query('SELECT count(*)::int AS n FROM users'),
+    );
+    expect(result?.rows).toEqual([{ n: 0 }]);
+    expect(seen).not.toHaveProperty('close');
+  });
+
+  test('gives the identity resolver no database when the app has none', async () => {
+    let seen: IdentityContext<UserServices>['database'] | 'unset' = 'unset';
+    await start({
+      config: hostedConfig(),
+      identity: async (context) => {
+        seen = context.database;
+        return headerIdentity(context);
+      },
+      storage: await postgres(),
+    });
+
+    expect(seen).toBeUndefined();
   });
 
   test("keeps each player's settings, time zone and encrypted keys apart", async () => {

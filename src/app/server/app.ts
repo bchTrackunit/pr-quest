@@ -14,6 +14,7 @@ import {
 } from '../../features/reviews/server/index.ts';
 import { type AppConfig, assertSafeConfig } from '../../platform/server/config.ts';
 import { EventHub } from '../../platform/server/events.ts';
+import { type Database, sharedDatabase } from '../../platform/server/postgres/database.ts';
 import { GameService, type StateStore } from '../../features/game/server/index.ts';
 import {
   GitHubClient,
@@ -98,6 +99,8 @@ export interface AppOptions {
   ghToken?: () => Promise<string | undefined>;
   /** Where everything is saved. Defaults to the JSON files in `config.stateDir`. */
   storage?: AppStorage;
+  /** The database behind `storage`, if any, for the identity resolver's own tables. */
+  database?: Database;
   /**
    * Works out who each request acts as. Defaults to local mode's one player per machine. An
    * injected resolver turns off the device flow and the gh fallback, which only work locally.
@@ -283,6 +286,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     log: info,
     warn,
     releaseUser,
+    ...(options.database ? { database: sharedDatabase(options.database) } : {}),
   };
   let identity: IdentityResolver<UserServices>;
   if (options.identity) {

@@ -19,6 +19,17 @@ export interface Database extends SqlClient {
   close: () => Promise<void>;
 }
 
+/** A database borrowed from its owner, who alone closes it. */
+export type SharedDatabase = Pick<Database, 'query' | 'transaction'>;
+
+/** `db` without `close`, to hand to code that must not end the owner's pool. */
+export function sharedDatabase(db: Database): SharedDatabase {
+  return {
+    query: (text, params) => db.query(text, params),
+    transaction: (work) => db.transaction(work),
+  };
+}
+
 export interface ConnectOptions {
   /** Most connections the pool opens; defaults to 10. */
   max?: number;
