@@ -19,7 +19,11 @@ const CHECK_TIMEOUT_MS = 30_000;
  * parts, and a call with a bogus key reaches the provider and fails authentication rather than
  * failing to load. Prints one line per check and resolves whether every check passed.
  */
-export async function runSmokeTest(window: BrowserWindow, url: string): Promise<boolean> {
+export async function runSmokeTest(
+  window: BrowserWindow,
+  url: string,
+  cspViolations: ReadonlyArray<string>,
+): Promise<boolean> {
   const checks: Array<Check> = [
     {
       name: 'health',
@@ -54,6 +58,21 @@ export async function runSmokeTest(window: BrowserWindow, url: string): Promise<
           await delay(UI_POLL_MS);
         }
         throw new Error(`the UI root rendered nothing in ${UI_RENDER_WAIT_MS} ms`);
+      },
+    },
+    {
+      name: 'csp',
+      run: async () => {
+        const fonts: unknown = await window.webContents.executeJavaScript(
+          `document.fonts.ready.then(() => [...document.fonts].filter((font) => font.status === 'loaded').length)`,
+        );
+        if (cspViolations.length > 0) {
+          throw new Error(`the page's policy blocked: ${cspViolations.join(' | ')}`);
+        }
+        if (typeof fonts !== 'number' || fonts === 0) {
+          throw new Error('no font loaded');
+        }
+        return `nothing blocked; ${fonts} font(s) loaded`;
       },
     },
     {

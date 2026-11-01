@@ -32,6 +32,8 @@ const SMOKE_LOAD_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 5000;
 /** A renderer that crashes again sooner than this stays down instead of reloading in a loop. */
 const RELOAD_INTERVAL_MS = 10_000;
+/** What the page's Content Security Policy blocked, which fails the smoke test. */
+const cspViolations: Array<string> = [];
 
 const forbidden = forbiddenSwitch({
   isPackaged: app.isPackaged,
@@ -295,6 +297,13 @@ function openWindow(url: string, log: LogFile): BrowserWindow {
   };
   window.webContents.on('will-navigate', stayInApp);
   window.webContents.on('will-redirect', stayInApp);
+  if (smokeTest) {
+    window.webContents.on('console-message', ({ message }) => {
+      if (message.includes('Content Security Policy')) {
+        cspViolations.push(message);
+      }
+    });
+  }
   let lastReload = 0;
   window.webContents.on('render-process-gone', (_event, details) => {
     log.warn(`the window's renderer stopped: ${details.reason} (exit code ${details.exitCode})`);
@@ -325,7 +334,7 @@ async function runSmokeTestAndExit(
   log.info(
     `smoke test window: ${window.webContents.isLoading() ? 'still loading' : 'loaded'} ${window.webContents.getURL()}, ${window.isVisible() ? 'visible' : 'hidden'}`,
   );
-  const ok = await runSmokeTest(window, server.url);
+  const ok = await runSmokeTest(window, server.url, cspViolations);
   // A page that never finished loading keeps its connection open, and closing waits for it.
   await Promise.race([server.close(), delay(CLOSE_TIMEOUT_MS)]);
   await log.close();

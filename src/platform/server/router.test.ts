@@ -499,8 +499,18 @@ describe('static files', () => {
         'cache-control': 'no-cache',
         'x-content-type-options': 'nosniff',
         'x-frame-options': 'DENY',
+        'content-security-policy':
+          "default-src 'self'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       },
     });
+  });
+
+  test('sends no content security policy with other files', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/assets/index-B4x9kQ.js');
+
+    expect(response.headers['content-security-policy']).toBeUndefined();
   });
 
   test.each(['/quests', '/runs/run-1', '/index.html'])('serves index.html for %s', async (path) => {
