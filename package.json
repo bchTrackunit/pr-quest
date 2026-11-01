@@ -4,14 +4,14 @@
   "type": "module",
   "version": "0.0.0",
   "description": "Gamified dashboard for the PRs you're asked to review, with Cursor review agents",
-  "packageManager": "yarn@4.13.0",
+  "packageManager": "yarn@4.18.1",
   "engines": {
     "node": ">=24.x",
-    "yarn": "4.13.0"
+    "yarn": "4.18.1"
   },
   "volta": {
     "node": "24.22.1",
-    "yarn": "4.13.0"
+    "yarn": "4.18.1"
   },
   "scripts": {
     "dev": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"tsx watch src/app/server/main.ts\" \"vite\"",
