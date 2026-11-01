@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -88,6 +88,8 @@ export interface LoadConfigOptions {
    * `PR_QUEST_STATE_DIR`, which the state directory's own env file can't.
    */
   legacyEnvFilePath?: string;
+  /** Hears about a state-directory env file that other users may read. */
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -101,6 +103,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     pick(env.PR_QUEST_STATE_DIR ?? legacyEnv.PR_QUEST_STATE_DIR) ?? join(homedir(), '.pr-quest');
   const envFilePath = options.envFilePath ?? join(stateDir, ENV_FILE_NAME);
   const fileEnv = readEnvFile(envFilePath);
+  if (options.onWarning && isShared(envFilePath)) {
+    options.onWarning(
+      `${envFilePath} can hold API keys but other users may read it. Run \`chmod 600 ${envFilePath}\`.`,
+    );
+  }
   if (fileEnv.PR_QUEST_STATE_DIR !== undefined) {
     throw new Error(
       `PR_QUEST_STATE_DIR can't be set in ${envFilePath}, which is read from the state directory. Set it in the environment instead.`,
@@ -266,6 +273,11 @@ function isHostname(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Readable or writable by the group or others; Windows has no such mode bits. */
+function isShared(path: string): boolean {
+  return process.platform !== 'win32' && existsSync(path) && (statSync(path).mode & 0o077) !== 0;
 }
 
 function readEnvFile(path: string | undefined): NodeJS.Dict<string> {

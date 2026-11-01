@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -99,6 +99,21 @@ describe('loadConfig', () => {
 
       expect(() => loadConfig({ env: {}, envFilePath })).toThrow(/PR_QUEST_STATE_DIR/);
     });
+
+    test.skipIf(process.platform === 'win32')(
+      'warns when other users may read it, as it can hold API keys',
+      () => {
+        const warnings: Array<string> = [];
+        writeFileSync(envFilePath, 'CURSOR_API_KEY=cur_state\n', { mode: 0o644 });
+        chmodSync(envFilePath, 0o644);
+
+        loadConfig({ env: {}, envFilePath, onWarning: (message) => warnings.push(message) });
+        chmodSync(envFilePath, 0o600);
+        loadConfig({ env: {}, envFilePath, onWarning: (message) => warnings.push(message) });
+
+        expect(warnings).toEqual([expect.stringContaining('chmod 600')]);
+      },
+    );
   });
 
   describe('the legacy env file', () => {

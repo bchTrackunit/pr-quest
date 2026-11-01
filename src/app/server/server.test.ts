@@ -13,6 +13,8 @@ import {
   startServer,
   type ServerOverrides,
   type UserServices,
+  userScope,
+  createFileStorage,
 } from './server.ts';
 
 vi.mock('@cursor/sdk', () => ({
@@ -158,6 +160,33 @@ describe('startServer', () => {
 
   test('refuses a port outside 0 to 65535', async () => {
     await expect(start(misconfigured({ port: 70000 }))).rejects.toThrow(/port must be/);
+  });
+
+  test.each([
+    ['http://pr-quest.example', true],
+    ['https://pr-quest.example', false],
+    ['http://localhost:8080', false],
+  ])('warns about the public origin %s only when it is plain HTTP', async (publicOrigin, warns) => {
+    await start(
+      { ...HOSTED_CONFIG, host: '127.0.0.1', publicOrigin },
+      {
+        identity: async () => ({
+          resolve: async () => undefined,
+          scope: async () => userScope('nobody'),
+          scopeFor: userScope,
+          signOut: async () => undefined,
+          rejected: () => undefined,
+          warmUp: async () => undefined,
+          close: () => undefined,
+        }),
+        storage: createFileStorage(join(dir, 'state'), {
+          info: () => undefined,
+          warn: () => undefined,
+        }),
+      },
+    );
+
+    expect(logs.some((line) => /plain HTTP/.test(line))).toBe(warns);
   });
 
   test('refuses hosted mode without a hosted identity and storage', async () => {

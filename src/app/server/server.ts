@@ -5,7 +5,11 @@ import { inspect } from 'node:util';
 
 import { type AppOptions, createApp, type UserServices } from './app.ts';
 import { readGhToken } from '../../features/auth/server/index.ts';
-import { type AppConfig, assertSafeConfig } from '../../platform/server/config.ts';
+import {
+  type AppConfig,
+  assertSafeConfig,
+  LOOPBACK_HOSTNAMES,
+} from '../../platform/server/config.ts';
 import {
   createRouter,
   type RequestListener,
@@ -91,6 +95,11 @@ export async function startServer(
   const info = overrides.info ?? defaultInfo;
   const warn = overrides.warn ?? defaultWarn;
   assertSafeConfig(config);
+  if (config.mode === 'hosted' && isPlainHttpOrigin(config.publicOrigin)) {
+    warn(
+      `PR_QUEST_PUBLIC_ORIGIN ${config.publicOrigin} is plain HTTP, so session cookies and API keys cross the network unencrypted. Serve it over HTTPS.`,
+    );
+  }
   const staticDir = usableStaticDir(overrides.staticDir, warn);
 
   const app = await createApp({
@@ -149,6 +158,16 @@ export async function startServer(
         server.closeAllConnections();
       }),
   };
+}
+
+/** HTTP to anything but this machine, where nothing protects what travels over it. */
+function isPlainHttpOrigin(origin: string): boolean {
+  const { protocol, hostname } = new URL(origin);
+  return (
+    protocol === 'http:' &&
+    !LOOPBACK_HOSTNAMES.some((name) => name === hostname) &&
+    hostname !== '[::1]'
+  );
 }
 
 function usableStaticDir(

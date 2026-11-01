@@ -15,7 +15,10 @@ export interface CliOptions {
 /** Starts the server from the environment and stops it on SIGINT or SIGTERM. */
 export async function runCli(options: CliOptions): Promise<void> {
   try {
-    const config = loadConfig({ legacyEnvFilePath: options.legacyEnvFilePath });
+    const config = loadConfig({
+      legacyEnvFilePath: options.legacyEnvFilePath,
+      onWarning: (message) => process.stderr.write(`[pr-quest] ${message}\n`),
+    });
     const server = await startServer(config, {
       staticDir: options.staticDir,
       devUiOrigin: options.devUiOrigin,

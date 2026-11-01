@@ -109,6 +109,16 @@ describe('router', () => {
     });
   });
 
+  test('tells browsers not to sniff JSON responses as another type', async () => {
+    const port = await startServer(createHandlers(config));
+
+    const ok = await sendRaw(port, 'GET', '/api/health');
+    const missing = await sendRaw(port, 'GET', '/api/nothing');
+
+    expect(ok.headers['x-content-type-options']).toBe('nosniff');
+    expect(missing.headers['x-content-type-options']).toBe('nosniff');
+  });
+
   test('contract routes without a handler respond 501', async () => {
     const port = await startServer({});
 
