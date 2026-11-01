@@ -75,7 +75,8 @@ export async function openPostgresStorage(
     kind,
   });
   return {
-    secrets: async (scope) => PostgresSecretStore.open(db, await register(userOf(scope)), keyring),
+    secrets: async (scope) =>
+      PostgresSecretStore.open(db, await register(userOf(scope)), keyring, document),
     settings: async (scope) => {
       const key = await keyOf(userOf(scope), KINDS.settings);
       return settingsStore(await PostgresDocument.open(db, key, SETTINGS_DOCUMENT, document));

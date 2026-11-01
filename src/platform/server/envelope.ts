@@ -37,14 +37,17 @@ export function newDataKey(): Buffer {
   return randomBytes(KEY_BYTES);
 }
 
-/** The master keys this server holds. It never logs or returns key material. */
+/**
+ * The master keys this server holds. It never logs or returns key material, and keeps it in a
+ * `#private` field so inspecting or serialising the keyring doesn't show it either.
+ */
 export class MasterKeyring {
   public readonly currentId: string;
-  private readonly keys: ReadonlyMap<string, Buffer>;
+  readonly #keys: ReadonlyMap<string, Buffer>;
 
   private constructor(currentId: string, keys: ReadonlyMap<string, Buffer>) {
     this.currentId = currentId;
-    this.keys = keys;
+    this.#keys = keys;
   }
 
   public static fromConfig(config: MasterKeyConfig): MasterKeyring {
@@ -83,7 +86,7 @@ export class MasterKeyring {
   }
 
   private masterKey(id: string): Buffer {
-    const key = this.keys.get(id);
+    const key = this.#keys.get(id);
     if (!key) {
       throw new Error(
         `A data key was wrapped with master key ${id}, which isn't configured. Add that key to ${PREVIOUS_MASTER_KEYS_VARIABLE}.`,

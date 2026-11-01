@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { FileSecretStore } from './secrets.ts';
@@ -49,6 +50,14 @@ describe('FileSecretStore', () => {
 
     expect(secrets.get('linear')).toBe('lin');
     expect(await modeOf(file)).toBe(0o600);
+  });
+
+  test('never shows its secrets when inspected or serialised', async () => {
+    const secrets = await FileSecretStore.open(dir);
+    await secrets.set('anthropic', 'sk-ant-secret');
+
+    expect(inspect(secrets, { depth: 5, showHidden: true })).not.toContain('sk-ant-secret');
+    expect(JSON.stringify(secrets)).not.toContain('sk-ant-secret');
   });
 
   test('deletes a secret', async () => {

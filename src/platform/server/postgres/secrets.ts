@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { type MasterKeyring, newDataKey, openSealed, seal } from '../envelope.ts';
 import type { GitHubUser } from '../githubUser.ts';
 import { WriteQueue } from '../privateFiles.ts';
-import { SECRET_NAMES, type SecretName, type SecretStore } from '../secrets.ts';
+import {
+  SECRET_NAMES,
+  type SecretName,
+  type SecretStore,
+  type SecretStoreOptions,
+} from '../secrets.ts';
 import { BytesSchema, type Database, rowsOf, type SqlClient } from './database.ts';
 import { userLabel } from './documents.ts';
 
@@ -48,8 +53,9 @@ export class PostgresSecretStore implements SecretStore {
   private readonly user: GitHubUser;
   private readonly keyring: MasterKeyring;
   private readonly writes = new WriteQueue();
-  private readonly secrets: Map<SecretName, string>;
-  private dataKey: DataKey | undefined;
+  /** `#private`, so inspecting or serialising the store shows neither the values nor the key. */
+  readonly #secrets: Map<SecretName, string>;
+  #dataKey: DataKey | undefined;
 
   private constructor(
     db: Database,
@@ -60,18 +66,21 @@ export class PostgresSecretStore implements SecretStore {
     this.db = db;
     this.user = user;
     this.keyring = keyring;
-    this.secrets = secrets;
+    this.#secrets = secrets;
   }
 
   /**
-   * `user` must already be in `users` (see `ensureUser`). Throws when a secret can't be decrypted
-   * with `keyring`.
+   * `user` must already be in `users` (see `ensureUser`). Throws when `keyring` can't unwrap a data
+   * key, as for a master key that isn't configured. A single secret that doesn't decrypt is
+   * reported to `onWarning` and treated as unset, so saving it again replaces it.
    */
   public static async open(
     db: Database,
     user: GitHubUser,
     keyring: MasterKeyring,
+    options: SecretStoreOptions = {},
   ): Promise<PostgresSecretStore> {
+    const onWarning = options.onWarning ?? (() => undefined);
     const rows = rowsOf(
       await db.query(
         `SELECT s.name, s.sealed, k.github_id::text AS github_id, k.version, k.master_key_id,
@@ -91,19 +100,25 @@ export class PostgresSecretStore implements SecretStore {
         key = await unwrapDataKey(db, keyring, row);
         keys.set(row.version, key);
       }
-      secrets.set(row.name, openSecret(key, row.sealed, user, row.name));
+      try {
+        secrets.set(row.name, openSealed(key, row.sealed, secretContext(user.id, row.name)));
+      } catch {
+        onWarning(
+          `${userLabel(user)}'s ${row.name} key could not be decrypted, so it counts as unset until it is saved again`,
+        );
+      }
     }
     return new PostgresSecretStore(db, user, keyring, secrets);
   }
 
   public get(name: SecretName): string | undefined {
-    return this.secrets.get(name);
+    return this.#secrets.get(name);
   }
 
   public set(name: SecretName, value: string): Promise<void> {
     return this.writes.run(async () => {
       const dataKey = await this.db.transaction(async (tx) => {
-        const current = this.dataKey ?? (await latestDataKey(tx, this.user.id, this.keyring));
+        const current = this.#dataKey ?? (await latestDataKey(tx, this.user.id, this.keyring));
         await tx.query(
           `INSERT INTO user_secrets (github_id, name, data_key_version, sealed)
            VALUES ($1, $2, $3, $4)
@@ -119,8 +134,8 @@ export class PostgresSecretStore implements SecretStore {
         );
         return current;
       });
-      this.dataKey = dataKey;
-      this.secrets.set(name, value);
+      this.#dataKey = dataKey;
+      this.#secrets.set(name, value);
     });
   }
 
@@ -130,7 +145,7 @@ export class PostgresSecretStore implements SecretStore {
         this.user.id,
         name,
       ]);
-      this.secrets.delete(name);
+      this.#secrets.delete(name);
     });
   }
 }
@@ -221,13 +236,3 @@ const wrappedOf = (row: DataKeyRow) => ({
   wrapped: row.wrapped_key,
 });
 const contextOf = (row: DataKeyRow): string => dataKeyContext(row.github_id, row.version);
-
-function openSecret(key: Buffer, sealed: Buffer, user: GitHubUser, name: SecretName): string {
-  try {
-    return openSealed(key, sealed, secretContext(user.id, name));
-  } catch (error) {
-    throw new Error(
-      `${userLabel(user)}'s ${name} key could not be decrypted: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}

@@ -46,11 +46,12 @@ export interface SecretStoreOptions {
 export class FileSecretStore implements SecretStore {
   private readonly file: string;
   private readonly writes = new WriteQueue();
-  private secrets: Secrets;
+  /** `#private`, so inspecting or serialising the store doesn't show the values. */
+  #secrets: Secrets;
 
   private constructor(file: string, secrets: Secrets) {
     this.file = file;
-    this.secrets = secrets;
+    this.#secrets = secrets;
   }
 
   public static async open(
@@ -66,7 +67,7 @@ export class FileSecretStore implements SecretStore {
   }
 
   public get(name: SecretName): string | undefined {
-    return this.secrets[name];
+    return this.#secrets[name];
   }
 
   public set(name: SecretName, value: string): Promise<void> {
@@ -83,9 +84,9 @@ export class FileSecretStore implements SecretStore {
 
   private write(mutate: (secrets: Secrets) => Secrets): Promise<void> {
     return this.writes.run(async () => {
-      const next = mutate(this.secrets);
+      const next = mutate(this.#secrets);
       await writePrivateJson(this.file, { version: 1, secrets: next });
-      this.secrets = next;
+      this.#secrets = next;
     });
   }
 }

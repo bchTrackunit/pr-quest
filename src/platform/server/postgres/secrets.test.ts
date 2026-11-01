@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { inspect } from 'node:util';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { z } from 'zod';
 
@@ -17,6 +18,7 @@ let db: Database;
 let oldKey: string;
 let newKey: string;
 let keyring: MasterKeyring;
+let warnings: Array<string>;
 
 beforeAll(async () => {
   database = await openTestDatabase();
@@ -28,6 +30,7 @@ beforeEach(async () => {
   oldKey = randomBytes(32).toString('base64');
   newKey = randomBytes(32).toString('base64');
   keyring = MasterKeyring.fromConfig({ current: oldKey });
+  warnings = [];
 });
 
 afterAll(async () => {
@@ -40,7 +43,9 @@ const userNamed = (login: string): GitHubUser => ({ id: ACCOUNT_IDS[login] ?? 99
 
 async function openAs(user: GitHubUser, ring = keyring): Promise<PostgresSecretStore> {
   await ensureUser(db, user);
-  return await PostgresSecretStore.open(db, user, ring);
+  return await PostgresSecretStore.open(db, user, ring, {
+    onWarning: (message) => warnings.push(message),
+  });
 }
 
 const open = async (login = 'octocat', ring = keyring) => await openAs(userNamed(login), ring);
@@ -125,7 +130,7 @@ describe('PostgresSecretStore', () => {
     await expect(open('bob')).rejects.toThrow(/could not be decrypted|data key/);
   });
 
-  test('a sealed value moved to another secret no longer opens', async () => {
+  test('a sealed value moved to another secret no longer opens, and only that one is lost', async () => {
     const store = await open();
     await store.set('cursor', CURSOR_KEY);
     await store.set('anthropic', ANTHROPIC_KEY);
@@ -134,13 +139,40 @@ describe('PostgresSecretStore', () => {
        WHERE name = 'anthropic'`,
     );
 
-    const failure = await open().catch((error: unknown) => error);
+    const reopened = await open();
 
-    expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toMatch(
-      /octocat \(GitHub id 583231\)'s anthropic key could not be decrypted/,
-    );
-    expect(String(failure)).not.toContain(CURSOR_KEY);
+    expect(reopened.get('cursor')).toBe(CURSOR_KEY);
+    expect(reopened.get('anthropic')).toBeUndefined();
+    expect(warnings).toEqual([
+      expect.stringMatching(/^octocat \(GitHub id 583231\)'s anthropic key could not be decrypted/),
+    ]);
+    expect(warnings.join('\n')).not.toContain(CURSOR_KEY);
+    expect(warnings.join('\n')).not.toContain(ANTHROPIC_KEY);
+  });
+
+  test('saving a secret that could not be decrypted replaces it', async () => {
+    const store = await open();
+    await store.set('anthropic', ANTHROPIC_KEY);
+    await db.query("UPDATE user_secrets SET sealed = '\\x01'");
+    await (await open()).set('anthropic', 'sk-ant-replacement');
+    warnings = [];
+
+    expect((await open()).get('anthropic')).toBe('sk-ant-replacement');
+    expect(warnings).toEqual([]);
+  });
+
+  test('never shows its secrets or data key when inspected or serialised', async () => {
+    const store = await open();
+    await store.set('cursor', CURSOR_KEY);
+
+    const shown = [inspect(store, { depth: 5, showHidden: true }), JSON.stringify(store)];
+    shown.push(inspect(keyring, { depth: 5, showHidden: true }), JSON.stringify(keyring));
+
+    for (const text of shown) {
+      expect(text).not.toContain(CURSOR_KEY);
+      expect(text).not.toContain(oldKey);
+      expect(text).not.toMatch(/Buffer|Uint8Array/);
+    }
   });
 
   test('refuses to open with a master key that did not wrap the data key', async () => {
