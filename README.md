@@ -32,6 +32,8 @@ token. It also accepts browser requests only from its own UI and API origins, as
   chmod 600 ~/.pr-quest/.env
   ```
 
+  PR Quest warns at startup when other users may read that file.
+
   ```sh
   # Cursor reviews. Create one at https://cursor.com/dashboard/integrations
   CURSOR_API_KEY=...
@@ -243,7 +245,9 @@ settings, so a typo can't expose the server.
 `PR_QUEST_PUBLIC_ORIGIN`, the origin browsers load PR Quest from (for example
 `https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `::`, every interface) and accepts the Host
 names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's host name).
-Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
+Every player brings their own keys, so hosted mode refuses to start with `CURSOR_API_KEY`,
+`ANTHROPIC_API_KEY` or `LINEAR_API_KEY` set, and the server warns when the public origin is plain
+`http:` to anything but loopback. Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
 don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server
 supplies them through `startServer` in
 [`src/app/server/server.ts`](src/app/server/server.ts).
@@ -560,7 +564,8 @@ build shows up on the next load.
 
 In [hosted mode](#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and the Origin
 must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a load
-balancer can probe it by IP address; its other checks still apply.
+balancer can probe it by IP address; its other checks still apply. It answers only
+`{ "ok": true }` there, without the configuration local mode reports.
 
 ## XP and achievements
 
