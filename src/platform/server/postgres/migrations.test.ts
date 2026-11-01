@@ -108,6 +108,27 @@ describe('migrate', () => {
     await expect(migrate(db)).rejects.toThrow(/newer version of PR Quest.*9999_dropped_column/);
   });
 
+  test('runs migrations without the pool statement timeout, but with a lock timeout', async () => {
+    const { db } = database;
+    const probe: Array<Migration> = [
+      ...MIGRATIONS,
+      {
+        id: '0002_probe',
+        statements: [
+          `CREATE TABLE probe AS SELECT current_setting('statement_timeout') AS statement_timeout,
+             current_setting('lock_timeout') AS lock_timeout`,
+        ],
+      },
+    ];
+    await db.query("SET statement_timeout = '15s'");
+
+    await migrate(db, probe);
+
+    expect((await db.query('SELECT statement_timeout, lock_timeout FROM probe')).rows).toEqual([
+      { statement_timeout: '0', lock_timeout: '1min' },
+    ]);
+  });
+
   test('records whether each migration breaks older builds', async () => {
     const { db } = database;
     const withBreaking: Array<Migration> = [

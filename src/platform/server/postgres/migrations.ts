@@ -105,6 +105,12 @@ export interface SchemaCheckOptions {
 }
 
 /**
+ * How long a migration waits for a lock before failing, rather than queueing every query behind
+ * it. Statements themselves have no time limit, unlike the pool's.
+ */
+const MIGRATION_LOCK_TIMEOUT = '60s';
+
+/**
  * Runs every pending migration and resolves to the ids it ran. Safe to run from several processes.
  * After a rollback, the database may have migrations from a newer build: when none is `breaking`,
  * it warns and runs nothing, so a release command that always migrates doesn't block the rollback.
@@ -115,6 +121,8 @@ export async function migrate(
   options: SchemaCheckOptions = {},
 ): Promise<Array<string>> {
   return await db.transaction(async (tx) => {
+    await tx.query('SET LOCAL statement_timeout = 0');
+    await tx.query(`SET LOCAL lock_timeout = '${MIGRATION_LOCK_TIMEOUT}'`);
     await tx.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK]);
     await tx.query(CREATE_LEDGER);
     const applied = await appliedMigrations(tx);
