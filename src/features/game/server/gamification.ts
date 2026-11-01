@@ -101,7 +101,7 @@ export interface PlayerContext {
   timeZone?: string;
 }
 
-const zoneOf = (player: PlayerContext): string => player.timeZone ?? machineTimeZone();
+const zoneOf = (player: PlayerContext): string | undefined => player.timeZone ?? machineTimeZone();
 
 export interface FinishedReview {
   questId: string;
@@ -159,7 +159,7 @@ export function levelProgress(
 }
 
 /** The calendar date (`YYYY-MM-DD`) of `date` in `timeZone`. */
-export function localDate(date: Date, timeZone: string = machineTimeZone()): string {
+export function localDate(date: Date, timeZone: string | undefined = machineTimeZone()): string {
   return zonedTime(date, timeZone).date;
 }
 
@@ -167,7 +167,7 @@ export function localDate(date: Date, timeZone: string = machineTimeZone()): str
 export function currentStreak(
   state: GameState,
   now: Date,
-  timeZone: string = machineTimeZone(),
+  timeZone: string | undefined = machineTimeZone(),
 ): number {
   const last = state.lastReviewDate;
   const today = localDate(now, timeZone);
@@ -225,7 +225,7 @@ function actionFacts(
   ledger: AchievementLedger,
   action: ReviewAction,
   waitedMs: number,
-  timeZone: string,
+  timeZone: string | undefined,
 ): ActionFacts {
   const facts: ActionFacts = {
     kind: action.kind,
@@ -335,7 +335,7 @@ function withUnlocks(
   state: GameState,
   grants: Array<XpGrant>,
   at: Date,
-  timeZone: string,
+  timeZone: string | undefined,
   extra: Partial<Pick<AchievementFacts, 'action' | 'queueEmptyAfterActionToday'>> = {},
 ): GameUpdate {
   const facts: AchievementFacts = { ...factsFor(state, at, timeZone), ...extra };
@@ -366,7 +366,7 @@ function withUnlocks(
   };
 }
 
-function factsFor(state: GameState, now: Date, timeZone: string): AchievementFacts {
+function factsFor(state: GameState, now: Date, timeZone: string | undefined): AchievementFacts {
   const { reviewsPosted, approvals, changesRequested } = state.counters;
   const day = state.ledger.day?.date === localDate(now, timeZone) ? state.ledger.day : undefined;
   return {

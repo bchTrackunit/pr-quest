@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import { canonicalTimeZone, machineTimeZone, previousDate, zonedTime } from './timeZone.ts';
 
@@ -61,18 +61,49 @@ describe('canonicalTimeZone', () => {
     expect(canonicalTimeZone(zone)).toBe(expected);
   });
 
-  test.each(['Mars/Olympus_Mons', '', '+01:00', '-05:00', 'Europe/Copenhagen '])(
-    'refuses %j',
-    (zone) => {
-      expect(canonicalTimeZone(zone)).toBeUndefined();
-    },
-  );
+  test.each([
+    'Mars/Olympus_Mons',
+    '',
+    '+01:00',
+    '-05:00',
+    'Etc/GMT+5',
+    'Etc/GMT-14',
+    'Etc/Unknown',
+    'Europe/Copenhagen ',
+  ])('refuses %j', (zone) => {
+    expect(canonicalTimeZone(zone)).toBeUndefined();
+  });
 });
 
 describe('machineTimeZone', () => {
+  const original = process.env.TZ;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = original;
+    }
+  });
+
   test("is the zone the machine's local Date methods use", () => {
     const at = new Date('2026-11-10T12:34:00Z');
 
     expect(zonedTime(at, machineTimeZone()).hour).toBe(at.getHours());
   });
+
+  test.each(['', 'Not/A_Zone'])(
+    'is undefined when TZ=%j names no zone, and zonedTime then follows the local clock',
+    (tz) => {
+      process.env.TZ = tz;
+      const at = new Date('2026-11-10T23:34:00Z');
+
+      expect(machineTimeZone()).toBeUndefined();
+      expect(zonedTime(at, machineTimeZone())).toEqual({
+        date: `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`,
+        hour: at.getHours(),
+        weekday: at.getDay(),
+      });
+    },
+  );
 });

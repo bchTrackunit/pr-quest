@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import type { AchievementId, DifficultyTier, RequestKind } from '../../../shared/api.ts';
 import {
@@ -147,6 +147,27 @@ describe('streaks', () => {
 
     expect(toPlayerState(state, day(12)).streakDays).toBe(2);
     expect(toPlayerState(state, day(13)).streakDays).toBe(0);
+  });
+});
+
+describe('a machine whose TZ names no zone', () => {
+  const original = process.env.TZ;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = original;
+    }
+  });
+
+  test('still rewards actions and counts the streak by the local clock', () => {
+    process.env.TZ = '';
+    const first = applyReviewAction(initialGameState(), action({ at: day(10) })).state;
+    const second = applyReviewAction(first, action({ at: day(11), questId: 'o/r#2' })).state;
+
+    expect(second.streakDays).toBe(2);
+    expect(toPlayerState(second, day(11)).streakDays).toBe(2);
   });
 });
 

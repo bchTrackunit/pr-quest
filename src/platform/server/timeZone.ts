@@ -10,32 +10,45 @@ export interface ZonedTime {
 
 const WEEKDAYS: ReadonlyArray<string> = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+const FORMAT: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  hourCycle: 'h23',
+  weekday: 'short',
+};
+
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function formatterFor(timeZone: string): Intl.DateTimeFormat {
+/** Without a zone, a fresh formatter on the local clock, which follows `TZ` if it changes. */
+function formatterFor(timeZone: string | undefined): Intl.DateTimeFormat {
+  if (timeZone === undefined) {
+    return new Intl.DateTimeFormat('en-US', FORMAT);
+  }
   let formatter = formatters.get(timeZone);
   if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      hourCycle: 'h23',
-      weekday: 'short',
-    });
+    formatter = new Intl.DateTimeFormat('en-US', { ...FORMAT, timeZone });
     formatters.set(timeZone, formatter);
   }
   return formatter;
 }
 
-/** The zone the machine's local `Date` methods use: `TZ` when set, else the system's. */
-export function machineTimeZone(): string {
-  return new Intl.DateTimeFormat().resolvedOptions().timeZone;
+/**
+ * The IANA zone the machine's local `Date` methods use: `TZ` when set, else the system's. Undefined
+ * when that names no zone, such as `TZ=` (which Node reports as `Etc/Unknown`) or a name it doesn't know.
+ */
+export function machineTimeZone(): string | undefined {
+  // Node reports a `TZ` it can't resolve, such as `Not/A_Zone`, as undefined despite the types.
+  const zone: unknown = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return typeof zone === 'string' ? canonicalTimeZone(zone) : undefined;
 }
 
-/** `at` on a wall clock in `timeZone`, an IANA zone such as `Europe/Copenhagen`. */
-export function zonedTime(at: Date, timeZone: string): ZonedTime {
+/**
+ * `at` on a wall clock in `timeZone`, an IANA zone such as `Europe/Copenhagen`, or on the
+ * machine's local clock when `timeZone` is undefined.
+ */
+export function zonedTime(at: Date, timeZone: string | undefined): ZonedTime {
   const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of formatterFor(timeZone).formatToParts(at)) {
     parts[part.type] = part.value;
@@ -54,16 +67,19 @@ export function previousDate(date: string): string {
 }
 
 /**
- * `value` as the IANA zone name it stands for, or `undefined` when it isn't one. Fixed offsets such
- * as `+01:00` are refused: they ignore daylight saving time, so a streak would end an hour early.
+ * `value` as the IANA zone name it stands for, or `undefined` when it isn't one. Fixed offsets, as
+ * `+01:00` or `Etc/GMT-1`, are refused: they ignore daylight saving time, so a streak would end an
+ * hour early, and the `Etc/GMT` signs are inverted. `Etc/Unknown` is Node's name for no zone.
  */
 export function canonicalTimeZone(value: string): string | undefined {
   if (value === '' || value !== value.trim() || /^[+-]/.test(value)) {
     return undefined;
   }
+  let zone: string;
   try {
-    return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+    zone = new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
   } catch {
     return undefined;
   }
+  return /^Etc\/(GMT[+-]|Unknown$)/.test(zone) ? undefined : zone;
 }
