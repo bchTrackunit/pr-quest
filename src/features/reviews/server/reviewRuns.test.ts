@@ -13,7 +13,7 @@ import type {
 } from '../../../shared/api.ts';
 import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL } from './claudeReview.ts';
 import { ReviewRunService, type ClaudeRunner, type ReviewRunServiceOptions } from './reviewRuns.ts';
-import { StateStore, type StoredRun } from '../../game/server/index.ts';
+import { type FinishedReview, StateStore, type StoredRun } from '../../game/server/index.ts';
 
 vi.mock('@cursor/sdk', () => {
   class MockCursorAgentError extends Error {
@@ -105,7 +105,7 @@ let dir: string;
 let store: StateStore;
 let events: Array<ServerEvent>;
 let logs: Array<string>;
-let recordAgentReviewFinished: ReturnType<typeof vi.fn<() => Promise<void>>>;
+let recordAgentReviewFinished: ReturnType<typeof vi.fn<(review: FinishedReview) => Promise<void>>>;
 let idCounter: number;
 
 function service(overrides: Partial<ReviewRunServiceOptions> = {}): ReviewRunService {
@@ -162,6 +162,8 @@ describe('ReviewRunService.start', () => {
       id: quest.id,
       headSha: HEAD_SHA,
       difficulty: 'Normal',
+      author: quest.author,
+      diffStats: quest.diffStats,
     });
     await runs.whenIdle();
   });
@@ -261,7 +263,10 @@ describe('ReviewRunService.start', () => {
     expect(agent[Symbol.asyncDispose]).toHaveBeenCalledOnce();
     expect(runStatuses()).toEqual(['queued', 'queued', 'running', 'finished']);
     expect(logs.join('\n')).toMatch(/bc-123[\s\S]*run-abc/);
-    expect(recordAgentReviewFinished).toHaveBeenCalledOnce();
+    expect(recordAgentReviewFinished).toHaveBeenCalledExactlyOnceWith({
+      questId: quest.id,
+      provider: 'cursor',
+    });
   });
 
   test('marks startupFailed with retryable when the SDK throws before the run starts', async () => {
@@ -420,7 +425,10 @@ describe('ReviewRunService with Claude', () => {
       expect.anything(),
     );
     expect(createMock).not.toHaveBeenCalled();
-    expect(recordAgentReviewFinished).toHaveBeenCalledOnce();
+    expect(recordAgentReviewFinished).toHaveBeenCalledExactlyOnceWith({
+      questId: quest.id,
+      provider: 'claude',
+    });
   });
 
   test('prefers the requested model over the one in the settings', async () => {

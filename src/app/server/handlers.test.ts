@@ -99,7 +99,8 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-handlers-'));
   const store = await StateStore.open(dir);
   const events = new EventHub();
-  const game = new GameService(store, events);
+  // A Friday afternoon, two days after the oldest fixture PR opened: no time-based unlocks.
+  const game = new GameService(store, events, { now: () => new Date(2026, 9, 30, 15) });
   github = {
     fetchReviewRequests: vi.fn(async () => REQUESTS),
     fetchRateLimitReset: vi.fn(async () => undefined),
@@ -312,10 +313,50 @@ describe('POST /api/quests/:id/approve', () => {
     expect(response.body).toMatchObject({
       questId: DIRECT_ID,
       approvedVia: 'github',
-      outcome: { xpGained: 30 + 10, unlocked: [{ id: 'first-blood' }] },
+      outcome: {
+        xpGained: 30 + 25 + 50,
+        unlocked: [{ id: 'first-blood' }, { id: 'archaeologist' }],
+        achievements: [{ name: 'First Blood' }, { name: 'Archaeologist' }],
+      },
     });
     const quests = (await send('GET', '/api/quests')).body as { quests: Array<{ id: string }> };
     expect(quests.quests.map((quest) => quest.id)).not.toContain(DIRECT_ID);
+  });
+
+  test("records the quest's repo and author for the achievements", async () => {
+    await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
+      confirm: true,
+      headSha: DIRECT_HEAD,
+    });
+
+    const progress = (id: string) =>
+      services.game.achievements().find((status) => status.id === id)?.progress;
+    expect(progress('explorer')).toBe(1);
+    expect(progress('diplomat')).toBe(1);
+  });
+
+  test('approving a newer quest while an older one waits is no Archaeologist', async () => {
+    const TEAM_ID = 'Trackunit/circleci-configuration#930';
+    await send('GET', '/api/quests');
+    const headSha = services.quests.find(TEAM_ID)?.headSha ?? '';
+    github.fetchHeadSha.mockResolvedValue(headSha);
+
+    const response = await send('POST', `/api/quests/${encodeURIComponent(TEAM_ID)}/approve`, {
+      confirm: true,
+      headSha,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      outcome: {
+        unlocked: expect.arrayContaining([expect.objectContaining({ id: 'first-blood' })]),
+      },
+    });
+    expect(response.body).not.toMatchObject({
+      outcome: {
+        unlocked: expect.arrayContaining([expect.objectContaining({ id: 'archaeologist' })]),
+      },
+    });
   });
 
   test('awards nothing when gh fails', async () => {
@@ -384,8 +425,27 @@ describe('runs', () => {
     expect(response.body).toMatchObject({
       reviewUrl: 'https://github.com/r#pullrequestreview-9',
       run: { disposition: 'posted', postedReviewUrl: 'https://github.com/r#pullrequestreview-9' },
-      outcome: { xpGained: 30 + 10 },
+      outcome: {
+        xpGained: 30 + 25 + 50,
+        unlocked: [{ id: 'first-blood' }, { id: 'archaeologist' }],
+      },
     });
+    const gatekeeper = services.game.achievements().find((status) => status.id === 'gatekeeper');
+    expect(gatekeeper?.progress).toBe(1);
+  });
+
+  test('Eagle Eye counts only the findings that were posted', async () => {
+    const nitOnly = await finishedRun();
+    const withMajor = await finishedRun();
+    await send('POST', `/api/runs/${nitOnly.id}/post`, { findingIndexes: [1] });
+    const eagleEye = () =>
+      services.game.achievements().find((status) => status.id === 'eagle-eye')?.unlockedAt;
+    expect(eagleEye()).toBeUndefined();
+
+    const response = await send('POST', `/api/runs/${withMajor.id}/post`, {});
+
+    expect(response.body).toMatchObject({ outcome: { unlocked: [{ id: 'eagle-eye' }] } });
+    expect(eagleEye()).toBeDefined();
   });
 
   test('an agent verdict of approve still posts a comment, never an approval', async () => {
@@ -488,7 +548,7 @@ describe('player', () => {
     const achievements = (await send('GET', '/api/achievements')).body as {
       achievements: Array<{ id: string }>;
     };
-    expect(achievements.achievements).toHaveLength(7);
+    expect(achievements.achievements).toHaveLength(27);
   });
 });
 

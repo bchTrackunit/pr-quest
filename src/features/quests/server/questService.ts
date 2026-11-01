@@ -103,7 +103,12 @@ export class QuestService {
   }
 
   public find(id: string): Quest | undefined {
-    return this.snapshot ? this.response().quests.find((quest) => quest.id === id) : undefined;
+    return this.board()?.find((quest) => quest.id === id);
+  }
+
+  /** The quests the board shows now, without the ones just acted on; `undefined` before a fetch. */
+  public board(): Array<Quest> | undefined {
+    return this.snapshot ? this.response().quests : undefined;
   }
 
   /** An unknown id refetches only once the cache has expired, so it can't force GitHub calls. */

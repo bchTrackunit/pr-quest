@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ReviewRun, ServerEvent } from '../../shared/api.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
 import type { EventHub } from '../../platform/server/events.ts';
-import type { GameService } from '../../features/game/server/index.ts';
+import type { BoardQuest, GameService } from '../../features/game/server/index.ts';
 import {
   type GitHubClient,
   RateLimitedError,
@@ -99,6 +99,10 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
     return quest;
   };
 
+  /** The board as the player sees it; call before `markActedOn` hides the quest acted on. */
+  const boardNow = (): Array<BoardQuest> | undefined =>
+    quests.board()?.map(({ id, requestedAt, requestKind }) => ({ id, requestedAt, requestKind }));
+
   return {
     health,
 
@@ -141,6 +145,9 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
         difficulty: quest.difficulty,
         requestKind: quest.requestKind,
         requestedAt: quest.requestedAt,
+        author: quest.author,
+        diffStats: quest.diffStats,
+        board: boardNow(),
       });
       await quests.markActedOn(quest.id);
       return { questId: quest.id, approvedVia: 'github', outcome };
@@ -164,12 +171,18 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
         const ref = requireQuestRef(stored.quest.id);
         const submitted = await upstream(() => github.submitReview(ref, draft));
         const run = await runs.markPosted(stored.run.id, submitted.url);
+        // Runs started before snapshots kept the author and diff stats read them off the board.
+        const live = quests.find(stored.quest.id);
         const outcome = await game.recordReviewAction({
           kind: draft.event === 'requestChanges' ? 'changesRequested' : 'reviewPosted',
           questId: stored.quest.id,
           difficulty: stored.quest.difficulty,
           requestKind: stored.quest.requestKind,
           requestedAt: stored.quest.requestedAt,
+          author: stored.quest.author ?? live?.author,
+          diffStats: stored.quest.diffStats ?? live?.diffStats,
+          postedSeverities: draft.findings.map((finding) => finding.severity),
+          board: boardNow(),
         });
         await quests.markActedOn(stored.quest.id);
         return { run, reviewUrl: submitted.url, outcome };

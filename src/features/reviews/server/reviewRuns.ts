@@ -405,9 +405,14 @@ export class ReviewRunService {
   }
 
   private async finish(id: string, result: ReviewResult): Promise<void> {
-    await this.patch(id, { status: 'finished', finishedAt: this.now().toISOString(), result });
+    const run = await this.patch(id, {
+      status: 'finished',
+      finishedAt: this.now().toISOString(),
+      result,
+    });
     this.log(`review ${id}: finished with ${result.findings.length} findings`);
-    await this.game.recordAgentReviewFinished().catch((error: unknown) => {
+    const review = { questId: run.questId, provider: run.provider };
+    await this.game.recordAgentReviewFinished(review).catch((error: unknown) => {
       this.log(`review ${id}: could not count the agent review: ${errorMessage(error)}`);
     });
   }
@@ -458,6 +463,8 @@ function snapshotOf(quest: Quest): QuestSnapshot {
     difficulty: quest.difficulty,
     requestKind: quest.requestKind,
     requestedAt: quest.requestedAt,
+    author: quest.author,
+    diffStats: quest.diffStats,
   };
   if (quest.headSha) {
     snapshot.headSha = quest.headSha;
