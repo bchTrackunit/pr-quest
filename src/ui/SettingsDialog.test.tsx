@@ -522,7 +522,9 @@ describe('SettingsDialog', () => {
     );
 
     const section = screen.getByRole('region', { name: 'GitHub account' });
-    expect(within(section).getByText(/Signed out of @octocat\. PR Quest now acts as @hubot/));
+    expect(
+      within(section).getByText(/Signed out of @octocat\. PR Quest now acts as @hubot/),
+    ).toBeTruthy();
     await user.click(within(section).getByRole('button', { name: 'Dismiss' }));
     expect(github.actions.dismissFallback).toHaveBeenCalledTimes(1);
   });

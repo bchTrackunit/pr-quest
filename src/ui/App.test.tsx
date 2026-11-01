@@ -336,7 +336,9 @@ describe('App', () => {
       type: 'runUpdated',
       run: makeRun({ id: 'run-old', status: 'error', error: { message: 'Agent crashed' } }),
     });
-    expect(within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'));
+    expect(
+      within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'),
+    ).toBeTruthy();
 
     const notSignedIn = new ApiRequestError(401, 'notSignedIn', 'Sign in with GitHub first.');
     api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
