@@ -25,7 +25,7 @@ test-postgres:
     #!/usr/bin/env bash
     set -euo pipefail
     container=$(docker run --detach --rm --publish 127.0.0.1::5432 \
-        --env POSTGRES_PASSWORD=pr-quest-test --env POSTGRES_DB=pr_quest_test postgres:17-alpine)
+        --env POSTGRES_PASSWORD=pr-quest-test --env POSTGRES_DB=pr_quest_test postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b)
     trap 'docker stop "$container" >/dev/null' EXIT
     port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
     # The image's init runs a socket-only server first, so wait for TCP.
