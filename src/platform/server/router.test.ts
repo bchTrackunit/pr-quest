@@ -11,6 +11,7 @@ import {
   createRouter,
   loopbackOrigins,
   matchRoute,
+  type RawRoute,
   type RouteHandlers,
   type RouterOptions,
   trustedRequests,
@@ -591,6 +592,92 @@ describe('static files', () => {
     const port = await startServer({});
 
     expect((await send(port, 'GET', '/')).status).toBe(404);
+  });
+});
+
+describe('raw routes', () => {
+  const redirect = (location: string): RawRoute['handle'] => {
+    return (_req, res) => {
+      res.writeHead(302, { Location: location }).end();
+    };
+  };
+  const signIn: RawRoute = {
+    method: 'GET',
+    path: '/auth/github',
+    handle: redirect('https://github.com/login/oauth/authorize'),
+  };
+  const callback: RawRoute = {
+    method: 'GET',
+    path: '/auth/github/callback',
+    crossSite: true,
+    handle: redirect('/'),
+  };
+  const serve = (routes: ReadonlyArray<RawRoute>, options: RouterOptions = {}) =>
+    startServer({}, { ...options, routes });
+
+  test('lets the handler write a non-JSON response, such as a redirect', async () => {
+    const port = await serve([signIn]);
+
+    const response = await sendRaw(port, 'GET', '/auth/github?next=%2F');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('https://github.com/login/oauth/authorize');
+  });
+
+  test('refuses a cross-site request unless the route expects one', async () => {
+    const port = await serve([signIn, callback]);
+    const crossSite = { 'Sec-Fetch-Site': 'cross-site' };
+
+    expect((await sendRaw(port, 'GET', '/auth/github', crossSite)).status).toBe(403);
+    expect((await sendRaw(port, 'GET', '/auth/github/callback?code=1', crossSite)).status).toBe(
+      302,
+    );
+  });
+
+  test('still checks the Host of a cross-site route', async () => {
+    const port = await serve([callback]);
+
+    const response = await sendRaw(port, 'GET', '/auth/github/callback', {
+      Host: 'rebind.example',
+      'Sec-Fetch-Site': 'cross-site',
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test('answers before the built UI would', async () => {
+    const staticDir = await mkdtemp(join(tmpdir(), 'pr-quest-raw-'));
+    await writeFile(join(staticDir, 'index.html'), '<!doctype html>');
+    const port = await serve([callback], { staticDir });
+
+    const response = await sendRaw(port, 'GET', '/auth/github/callback');
+    await rm(staticDir, { recursive: true, force: true });
+
+    expect(response.status).toBe(302);
+  });
+
+  test('answers a thrown ApiError as JSON', async () => {
+    const port = await serve([
+      {
+        ...signIn,
+        handle: () => {
+          throw new ApiError(400, 'badRequest', 'No OAuth state');
+        },
+      },
+    ]);
+
+    expect(await send(port, 'GET', '/auth/github')).toEqual({
+      status: 400,
+      body: { error: { code: 'badRequest', message: 'No OAuth state' } },
+    });
+  });
+
+  test('refuses a raw route that would shadow the JSON API or another raw route', () => {
+    expect(() => createRouter({}, { routes: [{ ...signIn, path: '/api/health' }] })).toThrow(
+      /api\/health/,
+    );
+    expect(() => createRouter({}, { routes: [signIn, signIn] })).toThrow(/twice/);
+    expect(() => createRouter({}, { routes: [{ ...signIn, path: 'auth' }] })).toThrow(/start/);
   });
 });
 

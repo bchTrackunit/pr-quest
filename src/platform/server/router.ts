@@ -59,6 +59,23 @@ export type RouteHandlers = { [TName in JsonRouteName]?: RouteHandler<TName> } &
 
 export type RequestListener = (req: IncomingMessage, res: ServerResponse) => void;
 
+/**
+ * A route outside the JSON API, such as an OAuth sign-in redirect or its callback. The handler
+ * writes the whole response; an `ApiError` it throws before writing is answered as JSON.
+ */
+export interface RawRoute {
+  method: 'GET' | 'POST';
+  /** The exact path, matched without the query string. It can't be a JSON API route. */
+  path: string;
+  /**
+   * Skips the Origin and `Sec-Fetch-Site` checks, which a top-level navigation back from another
+   * site fails, such as an OAuth callback from github.com. The Host is still checked, so the
+   * handler must prove the request is genuine itself, for example with the OAuth `state`.
+   */
+  crossSite?: boolean;
+  handle: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+}
+
 export interface RouterOptions {
   /** Exact origins (`http://127.0.0.1:4318`) a browser may call from; any other Origin gets 403. */
   allowedOrigins?: ReadonlyArray<string>;
@@ -68,6 +85,8 @@ export interface RouterOptions {
   hostCheckExempt?: ReadonlyArray<RouteName>;
   /** Serves the built UI from this directory to GET and HEAD requests outside `/api`. */
   staticDir?: string;
+  /** Answered before the JSON API and the built UI. */
+  routes?: ReadonlyArray<RawRoute>;
   onUnexpectedError?: (error: unknown) => void;
 }
 
@@ -137,8 +156,9 @@ export function createRouter(
   };
   const serveStatic =
     options.staticDir === undefined ? undefined : createStaticHandler(options.staticDir);
+  const rawRoutes = compileRawRoutes(options.routes ?? []);
   return (req, res) => {
-    handle(handlers, trust, serveStatic, req, res).catch((error: unknown) => {
+    handle({ handlers, rawRoutes, trust, serveStatic }, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
         sendError(res, error.status, {
           ...error.details,
@@ -159,15 +179,50 @@ interface Trust {
   hostCheckExempt: ReadonlyArray<CompiledRoute>;
 }
 
+interface Routing {
+  handlers: RouteHandlers;
+  rawRoutes: ReadonlyMap<string, RawRoute>;
+  trust: Trust;
+  serveStatic: StaticHandler | undefined;
+}
+
+const rawRouteKey = (method: string, path: string): string => `${method} ${path}`;
+
+function compileRawRoutes(routes: ReadonlyArray<RawRoute>): ReadonlyMap<string, RawRoute> {
+  const compiled = new Map<string, RawRoute>();
+  for (const route of routes) {
+    const key = rawRouteKey(route.method, route.path);
+    if (!route.path.startsWith('/')) {
+      throw new Error(`Raw route path "${route.path}" must start with /`);
+    }
+    if (matchRoute(route.method, route.path)) {
+      throw new Error(`Raw route ${key} would shadow a JSON API route`);
+    }
+    if (compiled.has(key)) {
+      throw new Error(`Raw route ${key} is registered twice`);
+    }
+    compiled.set(key, route);
+  }
+  return compiled;
+}
+
 async function handle(
-  handlers: RouteHandlers,
-  trust: Trust,
-  serveStatic: StaticHandler | undefined,
+  { handlers, rawRoutes, trust, serveStatic }: Routing,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const method = req.method ?? 'GET';
+  const raw = rawRoutes.get(rawRouteKey(method, url.pathname));
+  if (raw) {
+    if (raw.crossSite) {
+      assertTrustedHost(req, trust.allowedHosts);
+    } else {
+      assertTrustedRequest(req, trust, false);
+    }
+    await raw.handle(req, res);
+    return;
+  }
   if (serveStatic && !isApiPath(url.pathname) && (method === 'GET' || method === 'HEAD')) {
     // The UI's files are public and change nothing, so a link from another site may open them.
     assertTrustedHost(req, trust.allowedHosts);
