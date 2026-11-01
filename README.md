@@ -336,8 +336,8 @@ which replaces it.
 **Updates.** A release build checks GitHub Releases for a newer version at start and every 6
 hours, downloads it in the background and installs it when you quit. Set
 `PR_QUEST_DISABLE_UPDATES=1` to turn this off. The repository it checks, and that **Help** opens,
-is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts); macOS installs updates
-only into a signed app.
+is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts), or the `owner/repo` in
+`PR_QUEST_RELEASE_REPO` when the app was built; macOS installs updates only into a signed app.
 
 A release build is one built with `PR_QUEST_RELEASE_BUILD=1` in the environment of both
 `yarn build` (which bakes the flag into the desktop bundle) and electron-builder (which then
@@ -356,7 +356,8 @@ it authenticates with) or with a certificate (`WIN_CSC_LINK`, `WIN_CSC_KEY_PASSW
 electron-builder.config.ts --publish always` uploads the installers and the update files to a
 draft release.
 `CSC_IDENTITY_AUTO_DISCOVERY=false` skips signing on a Mac with a signing certificate in its
-keychain.
+keychain. Releases are built and published by the **Release** workflow; see
+[RELEASING.md](RELEASING.md) for the steps and the secrets it needs.
 
 ## Checks
 
