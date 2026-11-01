@@ -9,6 +9,7 @@ import { createApp, type App } from './app.ts';
 import type { CreateMessage } from '../../features/reviews/server/index.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
 import { createRouter } from '../../platform/server/router.ts';
+import { LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import { SOURCE_DIFF, toolMessage } from '../../features/reviews/server/test-utils/claude.ts';
 import { fixture } from '../../features/quests/server/test-utils/fixtures.ts';
 
@@ -56,9 +57,7 @@ const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Respons
 });
 
 const config = (): AppConfig => ({
-  host: '127.0.0.1',
-  port: 0,
-  uiPort: 0,
+  ...LOCAL_CONFIG,
   stateDir: dir,
   githubClientId: 'Iv1.test',
 });

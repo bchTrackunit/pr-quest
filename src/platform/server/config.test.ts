@@ -1,13 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import {
   DEFAULT_GITHUB_CLIENT_ID,
   DEFAULT_SERVER_PORT,
+  ENV_FILE_NAME,
+  HOSTED_DEFAULT_HOST,
   loadConfig,
-  SERVER_HOST,
+  LOOPBACK_HOST,
+  LOOPBACK_HOSTNAMES,
 } from './config.ts';
 
 describe('loadConfig', () => {
@@ -71,16 +74,157 @@ describe('loadConfig', () => {
     expect(loadConfig({ env: { CURSOR_API_KEY: '' }, envFilePath }).cursorApiKey).toBeUndefined();
   });
 
-  test('always binds to loopback and defaults the port', () => {
-    const config = loadConfig({ env: {}, envFilePath });
-
-    expect(config.host).toBe(SERVER_HOST);
-    expect(config.port).toBe(DEFAULT_SERVER_PORT);
-  });
-
   test('rejects an invalid port', () => {
     expect(() => loadConfig({ env: { PR_QUEST_PORT: 'abc' }, envFilePath })).toThrow(
       /PR_QUEST_PORT/,
+    );
+  });
+
+  describe('the env file in the state directory', () => {
+    test('is read from <stateDir>/.env by default', () => {
+      writeFileSync(join(dir, ENV_FILE_NAME), 'CURSOR_API_KEY=cur_state\n');
+
+      const config = loadConfig({ env: { PR_QUEST_STATE_DIR: dir } });
+
+      expect(config.stateDir).toBe(dir);
+      expect(config.cursorApiKey).toBe('cur_state');
+    });
+
+    test('defaults the state directory to ~/.pr-quest', () => {
+      expect(loadConfig({ env: {}, envFilePath }).stateDir).toBe(join(homedir(), '.pr-quest'));
+    });
+
+    test('refuses to move the state directory from inside it', () => {
+      writeFileSync(envFilePath, `PR_QUEST_STATE_DIR=${join(dir, 'elsewhere')}\n`);
+
+      expect(() => loadConfig({ env: {}, envFilePath })).toThrow(/PR_QUEST_STATE_DIR/);
+    });
+  });
+
+  describe('the legacy env file', () => {
+    let legacyEnvFilePath: string;
+
+    beforeEach(() => {
+      legacyEnvFilePath = join(dir, 'repo', '.env.local');
+      mkdirSync(join(dir, 'repo'));
+    });
+
+    test('fills in what neither the environment nor the state env file sets', () => {
+      writeFileSync(legacyEnvFilePath, 'CURSOR_API_KEY=cur_legacy\nLINEAR_API_KEY=lin_legacy\n');
+      writeFileSync(envFilePath, 'LINEAR_API_KEY=lin_state\n');
+
+      const config = loadConfig({ env: {}, envFilePath, legacyEnvFilePath });
+
+      expect(config.cursorApiKey).toBe('cur_legacy');
+      expect(config.linearApiKey).toBe('lin_state');
+    });
+
+    test('can still choose the state directory, whose env file it then reads', () => {
+      const stateDir = join(dir, 'state');
+      mkdirSync(stateDir);
+      writeFileSync(join(stateDir, ENV_FILE_NAME), 'CURSOR_API_KEY=cur_state\n');
+      writeFileSync(legacyEnvFilePath, `PR_QUEST_STATE_DIR=${stateDir}\n`);
+
+      const config = loadConfig({ env: {}, legacyEnvFilePath });
+
+      expect(config.stateDir).toBe(stateDir);
+      expect(config.cursorApiKey).toBe('cur_state');
+    });
+  });
+
+  describe('local mode', () => {
+    test('is the default, listening only on loopback with the default port', () => {
+      const config = loadConfig({ env: {}, envFilePath });
+
+      expect(config.mode).toBe('local');
+      expect(config.host).toBe(LOOPBACK_HOST);
+      expect(config.port).toBe(DEFAULT_SERVER_PORT);
+      expect(config.allowedHosts).toEqual(LOOPBACK_HOSTNAMES);
+      expect(config.publicOrigin).toBeUndefined();
+    });
+
+    test('accepts PR_QUEST_HOST only when it is 127.0.0.1', () => {
+      expect(loadConfig({ env: { PR_QUEST_HOST: '127.0.0.1' }, envFilePath }).host).toBe(
+        LOOPBACK_HOST,
+      );
+      expect(() => loadConfig({ env: { PR_QUEST_HOST: '0.0.0.0' }, envFilePath })).toThrow(
+        /PR_QUEST_HOST/,
+      );
+    });
+
+    test.each(['PR_QUEST_PUBLIC_ORIGIN', 'PR_QUEST_ALLOWED_HOSTS'])(
+      'refuses %s, which would widen who may call the server',
+      (name) => {
+        expect(() => loadConfig({ env: { [name]: 'pr-quest.example' }, envFilePath })).toThrow(
+          name,
+        );
+      },
+    );
+  });
+
+  describe('hosted mode', () => {
+    const hosted = { PR_QUEST_MODE: 'hosted', PR_QUEST_PUBLIC_ORIGIN: 'https://pr-quest.example' };
+
+    test('listens on every interface and trusts the public origin host by default', () => {
+      const config = loadConfig({ env: hosted, envFilePath });
+
+      expect(config.mode).toBe('hosted');
+      expect(config.host).toBe(HOSTED_DEFAULT_HOST);
+      expect(config.publicOrigin).toBe('https://pr-quest.example');
+      expect(config.allowedHosts).toEqual(['pr-quest.example']);
+    });
+
+    test('takes the host and allowed hosts from the environment', () => {
+      const config = loadConfig({
+        env: {
+          ...hosted,
+          PR_QUEST_HOST: '::',
+          PR_QUEST_ALLOWED_HOSTS: ' Pr-Quest.example , pr-quest.fly.dev ,',
+        },
+        envFilePath,
+      });
+
+      expect(config.host).toBe('::');
+      expect(config.allowedHosts).toEqual(['pr-quest.example', 'pr-quest.fly.dev']);
+    });
+
+    test('normalises a trailing slash on the public origin', () => {
+      const config = loadConfig({
+        env: { ...hosted, PR_QUEST_PUBLIC_ORIGIN: 'https://pr-quest.example/' },
+        envFilePath,
+      });
+
+      expect(config.publicOrigin).toBe('https://pr-quest.example');
+    });
+
+    test('requires a public origin', () => {
+      expect(() => loadConfig({ env: { PR_QUEST_MODE: 'hosted' }, envFilePath })).toThrow(
+        /PR_QUEST_PUBLIC_ORIGIN/,
+      );
+    });
+
+    test.each(['pr-quest.example', 'ftp://pr-quest.example', 'https://pr-quest.example/app'])(
+      'rejects the public origin %s',
+      (origin) => {
+        expect(() =>
+          loadConfig({ env: { ...hosted, PR_QUEST_PUBLIC_ORIGIN: origin }, envFilePath }),
+        ).toThrow(/PR_QUEST_PUBLIC_ORIGIN/);
+      },
+    );
+
+    test.each(['pr-quest.example:443', 'https://pr-quest.example', 'a b'])(
+      'rejects the allowed host %s',
+      (host) => {
+        expect(() =>
+          loadConfig({ env: { ...hosted, PR_QUEST_ALLOWED_HOSTS: host }, envFilePath }),
+        ).toThrow(/PR_QUEST_ALLOWED_HOSTS/);
+      },
+    );
+  });
+
+  test('rejects an unknown mode', () => {
+    expect(() => loadConfig({ env: { PR_QUEST_MODE: 'cloud' }, envFilePath })).toThrow(
+      /PR_QUEST_MODE/,
     );
   });
 });

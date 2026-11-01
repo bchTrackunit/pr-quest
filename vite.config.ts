@@ -6,7 +6,9 @@ import { defineConfig, type Logger, type Plugin } from 'vite';
 
 import { loadConfig } from './src/platform/server/config.ts';
 
-const config = loadConfig();
+const config = loadConfig({
+  legacyEnvFilePath: fileURLToPath(new URL('./.env.local', import.meta.url)),
+});
 const root = fileURLToPath(new URL('.', import.meta.url));
 
 /**

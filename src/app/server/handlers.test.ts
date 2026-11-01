@@ -18,6 +18,7 @@ import {
 import { createHandlers, type AppServices } from './handlers.ts';
 import { ReviewRunService } from '../../features/reviews/server/index.ts';
 import { createRouter } from '../../platform/server/router.ts';
+import { LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import { reviewRequests } from '../../features/quests/server/test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
@@ -137,11 +138,7 @@ beforeEach(async () => {
   });
   services = { quests, runs, game, github, events };
 
-  server = createServer(
-    createRouter(
-      createHandlers({ host: '127.0.0.1', port: 0, uiPort: 0, stateDir: dir }, services),
-    ),
-  );
+  server = createServer(createRouter(createHandlers({ ...LOCAL_CONFIG, stateDir: dir }, services)));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   port = typeof address === 'object' && address ? address.port : 0;
@@ -735,8 +732,6 @@ describe('GET /api/events', () => {
 
 describe('without services', () => {
   test('only health is implemented', () => {
-    expect(
-      Object.keys(createHandlers({ host: '127.0.0.1', port: 0, uiPort: 0, stateDir: dir })),
-    ).toEqual(['health']);
+    expect(Object.keys(createHandlers({ ...LOCAL_CONFIG, stateDir: dir }))).toEqual(['health']);
   });
 });

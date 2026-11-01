@@ -11,6 +11,7 @@ import {
   type RouteHandlers,
   type RouterOptions,
 } from './router.ts';
+import { LOCAL_CONFIG } from './test-utils/config.ts';
 
 interface TestResponse {
   status: number;
@@ -71,13 +72,7 @@ function send(
   });
 }
 
-const config = {
-  host: '127.0.0.1',
-  port: 0,
-  uiPort: 0,
-  stateDir: '/tmp/pr-quest-test',
-  cursorApiKey: 'secret',
-} as const;
+const config = { ...LOCAL_CONFIG, cursorApiKey: 'secret' };
 
 describe('router', () => {
   test('GET /api/health reports which keys are configured without leaking them', async () => {

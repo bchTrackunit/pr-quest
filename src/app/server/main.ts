@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
 
 import { createApp } from './app.ts';
@@ -14,7 +15,9 @@ const warn = (message: string): void => {
 };
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = loadConfig({
+    legacyEnvFilePath: fileURLToPath(new URL('../../../.env.local', import.meta.url)),
+  });
   const app = await createApp({ config, ghToken: readGhToken, info, warn });
 
   const server = createServer(
