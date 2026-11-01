@@ -51,6 +51,7 @@ import {
   MACHINE_SCOPE,
   scopeKey,
   type StorageScope,
+  userScope,
 } from './storage.ts';
 
 /** One player's game, opened when their sign-in is first seen. */
@@ -294,6 +295,8 @@ export async function createApp(options: AppOptions): Promise<App> {
     log: info,
     warn,
     releaseUser,
+    secretsFor: async (player) =>
+      (await servicesFor(hosted ? userScope(player) : MACHINE_SCOPE)).secrets,
     ...(options.database ? { database: sharedDatabase(options.database) } : {}),
   };
   let identity: IdentityResolver<UserServices>;
@@ -333,7 +336,14 @@ export async function createApp(options: AppOptions): Promise<App> {
           const session = await identity.resolve(req, res);
           return session ? { account: session.account } : {};
         } catch (error) {
-          return { error: error instanceof Error ? error.message : String(error) };
+          if (error instanceof GitHubApiError) {
+            return { error: error.message };
+          }
+          // Anything else may be about stored keys or the database, which the browser needn't see.
+          warn(
+            `Could not check who is signed in: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return { error: "Couldn't check who is signed in; see the server log" };
         }
       },
       signOut: async () => {

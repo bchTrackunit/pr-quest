@@ -840,6 +840,52 @@ describe('createApp on Postgres storage', () => {
     expect(seen).not.toHaveProperty('close');
   });
 
+  test("hands the identity resolver each player's secrets, kept until the player is released", async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const identity: IdentityFactory<UserServices> = async (given) => {
+      context = given;
+      return headerIdentity(given);
+    };
+    await start({ config: hostedConfig(), identity, storage: await postgres() });
+    const player = accountOf('brianchristensen');
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+
+    const secrets = await context.secretsFor(player);
+    await secrets.set('github', 'gho_sealed_token');
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+
+    expect(await context.secretsFor(player)).toBe(secrets);
+    expect(secrets.get('anthropic')).toBe(ANTHROPIC_KEY);
+    expect((await context.secretsFor(accountOf('other-player'))).get('github')).toBeUndefined();
+    context.releaseUser(player);
+    const reopened = await context.secretsFor(player);
+    expect(reopened).not.toBe(secrets);
+    expect(reopened.get('github')).toBe('gho_sealed_token');
+  });
+
+  test("tells the browser only that the sign-in couldn't be checked, and logs why", async () => {
+    await start({
+      config: hostedConfig(),
+      identity: async (context) => ({
+        ...(await headerIdentity(context)),
+        resolve: async () => {
+          throw new Error("octocat's github key could not be decrypted: tag mismatch");
+        },
+      }),
+      storage: perUserStorage(),
+    });
+
+    const status = await send('GET', '/api/auth/status');
+
+    expect(status.body).toMatchObject({
+      error: "Couldn't check who is signed in; see the server log",
+    });
+    expect(status.text).not.toContain('decrypted');
+    expect(logs.join('\n')).toMatch(/could not be decrypted: tag mismatch/);
+  });
+
   test('gives the identity resolver no database when the app has none', async () => {
     let seen: IdentityContext<UserServices>['database'] | 'unset' = 'unset';
     await start({

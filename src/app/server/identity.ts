@@ -81,6 +81,12 @@ export interface IdentityContext<TServices extends SessionServices> {
    */
   releaseUser: (user: GitHubUser) => void;
   /**
+   * `user`'s secrets, for the sign-in's own ones such as their sealed GitHub token: the same store
+   * their API keys are in, opened once and kept until `releaseUser`. Local mode has only the
+   * machine's.
+   */
+  secretsFor: (user: GitHubUser) => Promise<SecretStore>;
+  /**
    * Hosted mode's Postgres database, when the server opened one from `config.database`, for the
    * sign-in's own tables such as sessions. Add them as migrations in `postgres/migrations.ts`.
    */
@@ -93,7 +99,7 @@ export type IdentityFactory<TServices extends SessionServices> = (
 
 export interface LocalIdentityOptions<TServices extends SessionServices> extends Omit<
   IdentityContext<TServices>,
-  'storage' | 'releaseUser' | 'database'
+  'storage' | 'releaseUser' | 'database' | 'secretsFor'
 > {
   /** The machine's secrets, which hold the OAuth token from "Sign in with GitHub". */
   secrets: SecretStore;
