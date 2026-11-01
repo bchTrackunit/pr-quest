@@ -50,8 +50,8 @@ token. It also accepts browser requests only from its own UI and API origins, as
 
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
 `4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). `PR_QUEST_MODE`, `PR_QUEST_HOST`,
-`PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to [hosted mode](#hosted-mode),
-which isn't usable yet.
+`PR_QUEST_PUBLIC_ORIGIN`, `PR_QUEST_ALLOWED_HOSTS`, `DATABASE_URL`, `PR_QUEST_MASTER_KEY` and
+`PR_QUEST_PREVIOUS_MASTER_KEYS` belong to [hosted mode](#hosted-mode), which isn't usable yet.
 
 PR Quest reads settings from three places, and the first one that sets a value wins:
 
@@ -194,6 +194,11 @@ Keys belong to this computer, not to a GitHub account: every GitHub account that
 uses the same saved keys, and signing out doesn't remove them. The review provider and models are
 shared the same way.
 
+Settings can also hold an IANA time zone, such as `Europe/Copenhagen`, for streaks, daily counts
+and the time-of-day achievements (see [XP and achievements](#xp-and-achievements)). The popup
+doesn't show it yet; `PUT /api/settings` with `{"timeZone": "Europe/Copenhagen"}` sets it, and
+`null` clears it. Without one, PR Quest uses the server's time zone.
+
 ### Review providers and models
 
 - **Cursor** sends a Cursor cloud agent, which checks out the repo and reviews the PR there. It
@@ -232,8 +237,8 @@ yarn start
 `yarn build` builds the UI into `dist/` and bundles the server into `dist-server/` with
 [esbuild](https://esbuild.github.io). `yarn start` runs `node dist-server/main.js`, which serves
 the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port. Without
-a `dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk` and
-`@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
+a `dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk`,
+`@anthropic-ai/sdk` and `pg` out, so it still needs the repo's `node_modules`.
 
 ### Hosted mode
 
@@ -247,10 +252,52 @@ settings, so a typo can't expose the server.
 names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's host name).
 Every player brings their own keys, so hosted mode refuses to start with `CURSOR_API_KEY`,
 `ANTHROPIC_API_KEY` or `LINEAR_API_KEY` set, and the server warns when the public origin is plain
-`http:` to anything but loopback. Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
-don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server
-supplies them through `startServer` in
-[`src/app/server/server.ts`](src/app/server/server.ts).
+`http:` to anything but loopback. Hosted mode also needs a sign-in that tells players apart, which doesn't exist yet, so
+`yarn start` refuses to start in hosted mode. Code that embeds the server supplies it through
+`startServer` in [`src/app/server/server.ts`](src/app/server/server.ts), along with its own
+storage or the Postgres storage below.
+
+#### Hosted storage
+
+Hosted mode keeps every player's state in Postgres instead of the state directory. It reads two
+settings, only in hosted mode; local mode ignores `DATABASE_URL`:
+
+- `DATABASE_URL`: a `postgres://` or `postgresql://` connection string.
+- `PR_QUEST_MASTER_KEY`: 32 random bytes, base64-encoded, from `openssl rand -base64 32`. Keep it
+  outside the database, as a deployment secret.
+
+Each player has one row per document (settings, game state, quest cache) in `user_documents`, as
+JSON in the same versioned format as the files. Updates to a document take a row lock and apply
+the change to the latest stored value, so two server instances don't lose each other's writes. A
+document from a newer build stops that player's load with an error instead of being overwritten;
+an unreadable one is copied to `user_documents_quarantine` with a warning, and the player starts
+fresh.
+
+The GitHub token and the Cursor, Anthropic and Linear keys are stored per player in
+`user_secrets`, encrypted with AES-256-GCM under that player's data key. The data key is stored
+in `user_data_keys`, itself encrypted under the master key, with the master key's id. Each
+ciphertext is bound to its player and key name, so it can't be copied to another row. Hosted mode
+has no machine-wide keys or settings, so the Postgres storage refuses the machine scope.
+
+To rotate the master key, move the current one into `PR_QUEST_PREVIOUS_MASTER_KEYS`
+(comma-separated), set a new `PR_QUEST_MASTER_KEY` and restart. Data keys are rewrapped under the
+new key as players load; `just db-rewrap-keys` (`node dist-server/db.js rewrap-keys` in a
+deployment) rewraps the rest at once, after which the previous keys can be removed.
+
+The schema is created by plain SQL migrations in
+[`src/platform/server/postgres/migrations.ts`](src/platform/server/postgres/migrations.ts). The
+server doesn't run them; it refuses to start until they have run. Run them before starting a new
+build:
+
+| Command               | In a deployment                      | What it does                                        |
+| --------------------- | ------------------------------------ | --------------------------------------------------- |
+| `just db-migrate`     | `node dist-server/db.js migrate`     | Runs the pending migrations in one transaction      |
+| `just db-status`      | `node dist-server/db.js status`      | Lists pending migrations; fails while any is        |
+| `just db-rewrap-keys` | `node dist-server/db.js rewrap-keys` | Rewraps every data key under the current master key |
+
+The commands read `DATABASE_URL` and the master keys from the environment only, and never print
+them. Migrations only go forward. A database migrated by a newer build is refused by an older
+one.
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
@@ -271,6 +318,11 @@ reconnecting the live stream never forces a GitHub call; both use the server's c
 
 With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
 tests and build, as CI does on every pull request and every push to `main`.
+
+The Postgres storage tests run on [PGlite](https://pglite.dev), Postgres compiled to WebAssembly,
+in-process, so `yarn test` needs no database. `just test-postgres` runs the whole suite against a
+throwaway `postgres:17` container in Docker instead. To use a server of your own, set
+`PR_QUEST_TEST_DATABASE_URL`; each test file works in its own schema and drops it afterwards.
 
 oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
 `oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums and the
@@ -312,7 +364,8 @@ src/
     reviews/    review runs, Cursor and Claude reviews, diff budget, review result and approve UI
   platform/
     server/     router and security guards, config, SSE events, GitHub API wrapper, rate limits,
-                private files and secrets
+                private files and secrets, time zones, envelope encryption, Postgres
+                (postgres/)
     ui/         API client, store, Modal, Popover, Tooltip, formatting and clock helpers,
                 notifications, styles
   shared/       the API contract (api.ts) and the review prompt and result schema (reviewResult.ts)
@@ -579,7 +632,7 @@ XP is awarded only for real review actions, never for just starting an agent:
 
 Base XP is multiplied by tier: Trivial ×1, Normal ×1.5, Hard ×2, Boss ×3. Approving the same PR
 twice earns XP once. The XP needed for the next level is `100 × level^1.5`. The streak counts
-consecutive local calendar days with at least one rewarded action.
+consecutive calendar days with at least one rewarded action, in the player's time zone.
 
 Inbox Zero counts only what GitHub's search returns. Hiding a quest you just approved doesn't
 count as an empty queue, and neither does a refresh where most PR details couldn't be read.
@@ -595,8 +648,8 @@ Unlocking an achievement adds bonus XP by rarity, and the bonus can level you up
 
 Each achievement pays its bonus once. Achievements unlocked before bonuses existed don't pay
 retroactively. "Review action" below means posting a review, requesting changes or approving;
-starting or finishing an agent counts only where it says so. Times and days use the server's
-local clock.
+starting or finishing an agent counts only where it says so. Times and days use the time zone in
+[Settings](#settings), or the server's time zone without one.
 
 | Achievement      | How to unlock                                                                 | Rarity    |
 | ---------------- | ----------------------------------------------------------------------------- | --------- |
@@ -635,7 +688,7 @@ local clock.
 
 The Achievements dialog shows the secret ones as "???" with a hint until they unlock, and shows
 progress where there is a count, such as Explorer 3/10 or Centurion 12/50 toward Silver. Daily
-counts (Clean Sweep, Featherweight) start again at local midnight.
+counts (Clean Sweep, Featherweight) start again at midnight in that time zone.
 
 Achievements are defined in
 [`src/features/game/server/achievements.ts`](src/features/game/server/achievements.ts); the UI
@@ -666,7 +719,7 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 ~/.pr-quest/
 ├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved from Settings
-├── settings.json       the review provider and the model per provider
+├── settings.json       the review provider, the model per provider and the time zone
 └── users/
     └── <login>/        one folder per GitHub user, named by the lower-cased login
         ├── state.json  XP, counters, streak, achievements, the last 200 review runs and
