@@ -105,7 +105,9 @@ describe('router', () => {
   test('names the provider whose configuration is missing', async () => {
     const port = await startServer({
       startReview: () => {
-        throw new ApiError(400, 'missingConfig', 'Add an Anthropic API key', { provider: 'claude' });
+        throw new ApiError(400, 'missingConfig', 'Add an Anthropic API key', {
+          provider: 'claude',
+        });
       },
     });
 

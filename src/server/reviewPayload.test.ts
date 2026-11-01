@@ -82,7 +82,9 @@ describe('renderReview', () => {
     const body = renderReview({ ...draft, provider: 'claude', omitted }, { inline: true }).body;
 
     expect(body).toContain('Not reviewed by the agent; check these yourself:');
-    expect(body).toContain('- `yarn.lock` (lockfile)\n- `dist/app.js` (generated)\n- `src/huge.ts` (too large)');
+    expect(body).toContain(
+      '- `yarn.lock` (lockfile)\n- `dist/app.js` (generated)\n- `src/huge.ts` (too large)',
+    );
   });
 
   test('says nothing about omitted files when there are none', () => {

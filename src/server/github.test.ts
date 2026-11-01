@@ -553,7 +553,9 @@ describe('GitHubClient.fetchDiff', () => {
       if (call.path.includes('/compare/')) {
         return json({ message: 'Not Found' }, 404);
       }
-      return call.accept === 'application/vnd.github.diff' ? ok(DIFF) : json({ head: { sha: HEAD } });
+      return call.accept === 'application/vnd.github.diff'
+        ? ok(DIFF)
+        : json({ head: { sha: HEAD } });
     });
 
     const diff = await github.client().fetchDiff(ref, { base: 'main', headSha: HEAD });

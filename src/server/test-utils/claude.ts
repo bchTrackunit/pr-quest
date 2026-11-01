@@ -13,7 +13,9 @@ export function toolMessage(input: unknown, overrides: Partial<Message> = {}): M
     type: 'message',
     role: 'assistant',
     model: DEFAULT_CLAUDE_MODEL,
-    content: [{ type: 'tool_use', id: 'tu_1', name: 'submit_review', input, caller: { type: 'direct' } }],
+    content: [
+      { type: 'tool_use', id: 'tu_1', name: 'submit_review', input, caller: { type: 'direct' } },
+    ],
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: { input_tokens: 10, output_tokens: 10 },

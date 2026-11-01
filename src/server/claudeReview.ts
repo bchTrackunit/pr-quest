@@ -297,7 +297,11 @@ function toStartupError(error: unknown, model: string): ClaudeReviewError {
   }
   if (error instanceof APIError) {
     const retryable = error.status === undefined || error.status >= 500;
-    return new ClaudeReviewError('startup', `Anthropic refused the review: ${error.message}`, retryable);
+    return new ClaudeReviewError(
+      'startup',
+      `Anthropic refused the review: ${error.message}`,
+      retryable,
+    );
   }
   return new ClaudeReviewError('startup', errorMessage(error));
 }

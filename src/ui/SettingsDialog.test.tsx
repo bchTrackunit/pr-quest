@@ -225,9 +225,7 @@ describe('SettingsDialog', () => {
     await user.type(input, 'bad key');
     await user.click(within(row).getByRole('button', { name: 'Save key for Cursor' }));
 
-    expect((await screen.findByRole('alert')).textContent).toBe(
-      "Couldn't save: value: no spaces",
-    );
+    expect((await screen.findByRole('alert')).textContent).toBe("Couldn't save: value: no spaces");
     expect(input.value).toBe('bad key');
   });
 

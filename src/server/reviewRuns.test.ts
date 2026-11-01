@@ -4,19 +4,9 @@ import { join } from 'node:path';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type {
-  Quest,
-  ReviewProvider,
-  ReviewResult,
-  ReviewRun,
-  ServerEvent,
-} from '../shared/api.ts';
+import type { Quest, ReviewProvider, ReviewResult, ReviewRun, ServerEvent } from '../shared/api.ts';
 import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL } from './claudeReview.ts';
-import {
-  ReviewRunService,
-  type ClaudeRunner,
-  type ReviewRunServiceOptions,
-} from './reviewRuns.ts';
+import { ReviewRunService, type ClaudeRunner, type ReviewRunServiceOptions } from './reviewRuns.ts';
 import { StateStore, type StoredRun } from './store.ts';
 
 vi.mock('@cursor/sdk', () => {
@@ -406,7 +396,11 @@ describe('ReviewRunService with Claude', () => {
     const run = await runs.start(quest);
     await runs.whenIdle();
 
-    expect(run).toMatchObject({ provider: 'claude', model: DEFAULT_CLAUDE_MODEL, status: 'queued' });
+    expect(run).toMatchObject({
+      provider: 'claude',
+      model: DEFAULT_CLAUDE_MODEL,
+      status: 'queued',
+    });
     expect(runs.get(run.id)?.run).toMatchObject({
       status: 'finished',
       finishedAt: '2026-10-30T10:00:00.000Z',

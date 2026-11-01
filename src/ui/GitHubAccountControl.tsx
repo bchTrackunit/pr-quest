@@ -42,9 +42,9 @@ export const FallbackNotice = ({ state, actions }: GitHubAccountControlProps) =>
   state.fallback ? (
     <div className="notice notice--warning fallback-notice" role="status">
       <p>
-        Signed out of @{state.fallback.from}. PR Quest now acts as @{state.fallback.to} through
-        your GitHub CLI login. Run <code>gh auth switch</code> or <code>gh auth logout</code> to
-        change that.
+        Signed out of @{state.fallback.from}. PR Quest now acts as @{state.fallback.to} through your
+        GitHub CLI login. Run <code>gh auth switch</code> or <code>gh auth logout</code> to change
+        that.
       </p>
       <button className="button button--small" onClick={actions.dismissFallback} type="button">
         Dismiss

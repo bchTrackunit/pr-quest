@@ -123,7 +123,7 @@ describe('SessionManager', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
-  test("hands the session the token it was opened with while that token is current", async () => {
+  test('hands the session the token it was opened with while that token is current', async () => {
     const { sessions, contextOf } = setup({ token: { token: 'gho_a', source: 'gh' } });
     await sessions.current();
 
@@ -144,7 +144,7 @@ describe('SessionManager', () => {
     await expect(alice.token()).rejects.toThrow(/@alice/);
   });
 
-  test('refuses the old session\'s calls after sign-out, even when the token comes back', async () => {
+  test("refuses the old session's calls after sign-out, even when the token comes back", async () => {
     const { sessions, contextOf } = setup({ token: { token: 'gho_a', source: 'oauth' } });
     await sessions.current();
     const alice = contextOf('alice');
@@ -183,7 +183,7 @@ describe('SessionManager', () => {
     expect(error).toMatchObject({ message: expect.stringMatching(/rejected the saved sign-in/) });
   });
 
-  test('ignores a rejection of a token that is not the open session\'s', async () => {
+  test("ignores a rejection of a token that is not the open session's", async () => {
     const { sessions, stops } = setup({ token: { token: 'gho_a', source: 'gh' } });
     await sessions.current();
 

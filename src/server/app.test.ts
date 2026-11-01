@@ -78,7 +78,11 @@ async function start(): Promise<void> {
   port = typeof address === 'object' && address ? address.port : 0;
 }
 
-function send(method: string, path: string, body?: unknown): Promise<{ status: number; body: unknown; text: string }> {
+function send(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown; text: string }> {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = request(
@@ -89,7 +93,9 @@ function send(method: string, path: string, body?: unknown): Promise<{ status: n
         path,
         headers: {
           'Content-Type': 'application/json',
-          ...(payload === undefined ? {} : { 'Content-Length': String(Buffer.byteLength(payload)) }),
+          ...(payload === undefined
+            ? {}
+            : { 'Content-Length': String(Buffer.byteLength(payload)) }),
         },
       },
       (res) => {
@@ -256,9 +262,10 @@ describe('createApp', () => {
     expect(approved).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
     expect(approved.text).toContain('@other-player');
     expect(reviewTokens).toEqual([]);
-    const otherState = await readFile(join(dir, 'users', 'other-player', 'state.json'), 'utf8').catch(
-      () => '{}',
-    );
+    const otherState = await readFile(
+      join(dir, 'users', 'other-player', 'state.json'),
+      'utf8',
+    ).catch(() => '{}');
     expect(otherState).not.toContain('"approvals": 1');
   });
 
@@ -273,7 +280,9 @@ describe('createApp', () => {
     await send('POST', '/api/auth/sign-out');
     await send('GET', '/api/quests');
 
-    const tokens = fakeGitHub.mock.calls.map(([, init]) => new Headers(init.headers).get('authorization'));
+    const tokens = fakeGitHub.mock.calls.map(([, init]) =>
+      new Headers(init.headers).get('authorization'),
+    );
     expect(tokens.length).toBeGreaterThan(0);
     expect(tokens).not.toContain(`Bearer ${OAUTH_TOKEN}`);
   });
@@ -313,7 +322,9 @@ describe('createApp', () => {
     });
     const saved = z
       .object({ runs: z.array(z.object({ run: z.object({ status: z.string() }) })) })
-      .parse(JSON.parse(await readFile(join(dir, 'users', 'brianchristensen', 'state.json'), 'utf8')));
+      .parse(
+        JSON.parse(await readFile(join(dir, 'users', 'brianchristensen', 'state.json'), 'utf8')),
+      );
     expect(saved.runs.map(({ run }) => run.status)).toEqual(['finished']);
   });
 
@@ -348,7 +359,9 @@ describe('createApp', () => {
 
     expect(quests).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
     expect(status.body).not.toHaveProperty('account');
-    expect(status.body).toMatchObject({ error: expect.stringMatching(/rejected the saved sign-in/) });
+    expect(status.body).toMatchObject({
+      error: expect.stringMatching(/rejected the saved sign-in/),
+    });
   });
 
   test('health and settings report a key saved in Settings without revealing it', async () => {

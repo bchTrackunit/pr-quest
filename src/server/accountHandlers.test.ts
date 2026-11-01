@@ -61,13 +61,11 @@ function fakeServices(): AccountServices {
       }),
     },
     models: {
-      list: vi.fn(
-        async (provider): Promise<ListModelsResponse> => ({
-          provider,
-          source: 'api',
-          models: [{ id: 'm', displayName: 'M' }],
-        }),
-      ),
+      list: vi.fn(async (provider): Promise<ListModelsResponse> => ({
+        provider,
+        source: 'api',
+        models: [{ id: 'm', displayName: 'M' }],
+      })),
     },
     deviceFlow: {
       start: vi.fn(async () => device),
@@ -124,9 +122,7 @@ function send(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => (text += chunk));
-      res.on('end', () =>
-        resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), text }),
-      );
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), text }));
     });
     req.on('error', reject);
     req.end(body);
@@ -274,7 +270,10 @@ describe('auth', () => {
     const first = await send('GET', '/api/auth/status');
     const second = await send('GET', '/api/auth/status');
 
-    expect(first.body).toMatchObject({ account: { login: 'Player' }, device: { state: 'complete' } });
+    expect(first.body).toMatchObject({
+      account: { login: 'Player' },
+      device: { state: 'complete' },
+    });
     expect(second.body).toMatchObject({ account: { login: 'Player' }, device: { state: 'idle' } });
   });
 
@@ -367,25 +366,31 @@ describe('request checks on every settings, key and auth write', () => {
     expectNothingChanged();
   });
 
-  test.each(WRITES)('%s %s refuses other origins and changes nothing', async (method, path, body) => {
-    const response = await send(method, path, {
-      headers: { ...JSON_HEADERS, Origin: 'http://127.0.0.1:9999' },
-      body,
-    });
+  test.each(WRITES)(
+    '%s %s refuses other origins and changes nothing',
+    async (method, path, body) => {
+      const response = await send(method, path, {
+        headers: { ...JSON_HEADERS, Origin: 'http://127.0.0.1:9999' },
+        body,
+      });
 
-    expect(response.status).toBe(403);
-    expectNothingChanged();
-  });
+      expect(response.status).toBe(403);
+      expectNothingChanged();
+    },
+  );
 
-  test.each(WRITES)('%s %s refuses Origin: null and changes nothing', async (method, path, body) => {
-    const response = await send(method, path, {
-      headers: { ...JSON_HEADERS, Origin: 'null' },
-      body,
-    });
+  test.each(WRITES)(
+    '%s %s refuses Origin: null and changes nothing',
+    async (method, path, body) => {
+      const response = await send(method, path, {
+        headers: { ...JSON_HEADERS, Origin: 'null' },
+        body,
+      });
 
-    expect(response.status).toBe(403);
-    expectNothingChanged();
-  });
+      expect(response.status).toBe(403);
+      expectNothingChanged();
+    },
+  );
 
   test.each(WRITES)('%s %s refuses cross-site requests', async (method, path, body) => {
     const response = await send(method, path, {

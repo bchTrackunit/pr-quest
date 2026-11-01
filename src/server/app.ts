@@ -62,7 +62,11 @@ export async function createApp(options: AppOptions): Promise<App> {
   const secrets = await SecretStore.open(config.stateDir, { onWarning: warn });
   const settings = await SettingsStore.open(config.stateDir, { onWarning: warn });
   const apiKeys = new ApiKeys({
-    env: { cursor: config.cursorApiKey, anthropic: config.anthropicApiKey, linear: config.linearApiKey },
+    env: {
+      cursor: config.cursorApiKey,
+      anthropic: config.anthropicApiKey,
+      linear: config.linearApiKey,
+    },
     secrets,
   });
   const tokens = new GitHubTokenProvider({
@@ -70,7 +74,9 @@ export async function createApp(options: AppOptions): Promise<App> {
     ghToken: options.ghToken,
   });
   const fetchViewer = (token: string) =>
-    new GitHubClient(new GitHubApi({ token: async () => token, fetch: options.fetch })).fetchViewer();
+    new GitHubClient(
+      new GitHubApi({ token: async () => token, fetch: options.fetch }),
+    ).fetchViewer();
   const linear = new LinearReviewClient({ apiKey: () => apiKeys.get('linear'), onWarning: warn });
   const claude = new ClaudeReviewer({
     apiKey: () => apiKeys.get('anthropic'),
@@ -85,7 +91,9 @@ export async function createApp(options: AppOptions): Promise<App> {
   const openStore = async (login: string, dir: string): Promise<StateStore> => {
     const { migrated } = await migrateLegacyState(config.stateDir, login, { onWarning: warn });
     if (migrated.length > 0) {
-      info(`Moved ${migrated.join(' and ')} into ${login}'s folder; the originals are kept as .bak files`);
+      info(
+        `Moved ${migrated.join(' and ')} into ${login}'s folder; the originals are kept as .bak files`,
+      );
     }
     return StateStore.open(dir, { onWarning: warn });
   };
@@ -246,17 +254,14 @@ export async function createApp(options: AppOptions): Promise<App> {
           anthropicApiKey: apiKeys.status('anthropic').set,
         },
       }),
-      listQuests: async (context) =>
-        required((await user()).listQuests, 'listQuests')(context),
-      startReview: async (context) =>
-        required((await user()).startReview, 'startReview')(context),
+      listQuests: async (context) => required((await user()).listQuests, 'listQuests')(context),
+      startReview: async (context) => required((await user()).startReview, 'startReview')(context),
       approveQuest: async (context) =>
         required((await user()).approveQuest, 'approveQuest')(context),
       listRuns: async (context) => required((await user()).listRuns, 'listRuns')(context),
       getRun: async (context) => required((await user()).getRun, 'getRun')(context),
       postRun: async (context) => required((await user()).postRun, 'postRun')(context),
-      discardRun: async (context) =>
-        required((await user()).discardRun, 'discardRun')(context),
+      discardRun: async (context) => required((await user()).discardRun, 'discardRun')(context),
       getPlayer: async (context) => required((await user()).getPlayer, 'getPlayer')(context),
       listAchievements: async (context) =>
         required((await user()).listAchievements, 'listAchievements')(context),
@@ -266,7 +271,9 @@ export async function createApp(options: AppOptions): Promise<App> {
       try {
         await sessions.current();
       } catch (error) {
-        warn(`Could not open the game yet: ${error instanceof Error ? error.message : String(error)}`);
+        warn(
+          `Could not open the game yet: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     },
     close: () => {

@@ -1,5 +1,8 @@
 import { AuthenticationError, BadRequestError, RateLimitError } from '@anthropic-ai/sdk';
-import type { Message, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages';
+import type {
+  Message,
+  MessageCreateParamsNonStreaming,
+} from '@anthropic-ai/sdk/resources/messages';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -29,7 +32,8 @@ const quest: QuestSnapshot = {
   requestedAt: '2026-10-30T08:00:00.000Z',
 };
 
-const LOCK_DIFF = 'diff --git a/yarn.lock b/yarn.lock\n--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1 +1 @@\n-a\n+b\n';
+const LOCK_DIFF =
+  'diff --git a/yarn.lock b/yarn.lock\n--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1 +1 @@\n-a\n+b\n';
 
 const REVIEW = {
   summary: 'Adds a cache.',
@@ -83,7 +87,7 @@ function lockDiff(path: string): string {
 }
 
 describe('ClaudeReviewer', () => {
-  test("reads each diff through the GitHub client of the player whose run it is", async () => {
+  test('reads each diff through the GitHub client of the player whose run it is', async () => {
     const { shared } = setup();
     const alice = vi.fn(async () => SOURCE_DIFF);
     const bob = vi.fn(async () => SOURCE_DIFF);
@@ -132,7 +136,9 @@ describe('ClaudeReviewer', () => {
       return toolMessage(REVIEW);
     });
 
-    await reviewer.review(quest, HEAD, undefined, { onRequest: async () => void order.push('request') });
+    await reviewer.review(quest, HEAD, undefined, {
+      onRequest: async () => void order.push('request'),
+    });
 
     expect(order).toEqual(['diff', 'request', 'claude']);
   });
@@ -216,7 +222,9 @@ describe('ClaudeReviewer', () => {
   });
 
   test('fails with the validation problem when the tool input is not a review', async () => {
-    const { reviewer } = setup({ reply: toolMessage({ summary: 'x', verdict: 'lgtm', findings: [] }) });
+    const { reviewer } = setup({
+      reply: toolMessage({ summary: 'x', verdict: 'lgtm', findings: [] }),
+    });
 
     await expect(reviewer.review(quest, HEAD, undefined)).rejects.toMatchObject({
       stage: 'output',
@@ -250,7 +258,13 @@ describe('ClaudeReviewer', () => {
     const { reviewer } = setup({
       reply: new BadRequestError(
         400,
-        { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 250000 tokens > 200000 maximum' } },
+        {
+          type: 'error',
+          error: {
+            type: 'invalid_request_error',
+            message: 'prompt is too long: 250000 tokens > 200000 maximum',
+          },
+        },
         'prompt is too long: 250000 tokens > 200000 maximum',
         new Headers(),
       ),

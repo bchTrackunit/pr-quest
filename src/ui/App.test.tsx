@@ -365,8 +365,7 @@ describe('App', () => {
       account: { login: 'octocat', tokenSource: 'oauth' },
       device: { state: 'idle' },
     });
-    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () =>
-      undefined;
+    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () => undefined;
     api.fetchRuns.mockReturnValue(
       new Promise((resolver) => {
         resolveRuns = resolver;

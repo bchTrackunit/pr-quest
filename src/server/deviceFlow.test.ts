@@ -163,7 +163,11 @@ describe('DeviceFlow', () => {
     expect(onToken).not.toHaveBeenCalled();
   });
 
-  test.each(['javascript:alert(1)', 'file:///etc/passwd', 'https://github.com.evil.example/login/device'])(
+  test.each([
+    'javascript:alert(1)',
+    'file:///etc/passwd',
+    'https://github.com.evil.example/login/device',
+  ])(
     'refuses a verification link to %s, since the UI renders it as a link',
     async (verificationUri) => {
       const flow = new DeviceFlow({
@@ -194,10 +198,16 @@ describe('DeviceFlow', () => {
       log: () => undefined,
       sleep: async () => undefined,
       fetch: async (url, init) => {
-        const body = z.object({ device_code: z.string().optional() }).parse(JSON.parse(String(init.body)));
+        const body = z
+          .object({ device_code: z.string().optional() })
+          .parse(JSON.parse(String(init.body)));
         if (url.endsWith('/login/device/code')) {
           codes++;
-          return json({ ...CODE_RESPONSE, device_code: `dev-${codes}`, user_code: `CODE-${codes}` });
+          return json({
+            ...CODE_RESPONSE,
+            device_code: `dev-${codes}`,
+            user_code: `CODE-${codes}`,
+          });
         }
         polled.push(body.device_code ?? '');
         return json({ error: 'access_denied' });
@@ -212,7 +222,7 @@ describe('DeviceFlow', () => {
     expect(flow.status().state).toBe('denied');
   });
 
-  test("drops a token for the first code that arrives after a restart, and keeps polling the second", async () => {
+  test('drops a token for the first code that arrives after a restart, and keeps polling the second', async () => {
     let codes = 0;
     let releaseFirstPoll: (() => void) | undefined;
     const polled: Array<string> = [];
@@ -223,10 +233,16 @@ describe('DeviceFlow', () => {
       log: () => undefined,
       sleep: async () => undefined,
       fetch: async (url, init) => {
-        const body = z.object({ device_code: z.string().optional() }).parse(JSON.parse(String(init.body)));
+        const body = z
+          .object({ device_code: z.string().optional() })
+          .parse(JSON.parse(String(init.body)));
         if (url.endsWith('/login/device/code')) {
           codes++;
-          return json({ ...CODE_RESPONSE, device_code: `dev-${codes}`, user_code: `CODE-${codes}` });
+          return json({
+            ...CODE_RESPONSE,
+            device_code: `dev-${codes}`,
+            user_code: `CODE-${codes}`,
+          });
         }
         polled.push(body.device_code ?? '');
         if (body.device_code === 'dev-1') {
@@ -293,7 +309,8 @@ describe('DeviceFlow', () => {
       clientId: 'Iv1.client',
       onToken: async () => undefined,
       log: () => undefined,
-      fetch: async () => json({ error: 'unauthorized_client', error_description: 'Bad client' }, 400),
+      fetch: async () =>
+        json({ error: 'unauthorized_client', error_description: 'Bad client' }, 400),
     });
 
     await expect(flow.start()).rejects.toMatchObject({
