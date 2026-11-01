@@ -28,27 +28,35 @@ const open = (options: { secrets?: SecretStore } = {}) =>
   });
 
 describe('createFileStorage', () => {
-  test('keeps one machine-wide set of keys, whichever scope asks', async () => {
+  test('keeps one machine-wide set of keys', async () => {
     const storage = open();
 
     const machine = await storage.secrets(MACHINE_SCOPE);
     await machine.set('cursor', 'key_machine');
 
-    expect(await storage.secrets(userScope('Octocat'))).toBe(machine);
+    expect(await storage.secrets(MACHINE_SCOPE)).toBe(machine);
     expect(JSON.parse(await readFile(join(dir, 'secrets.json'), 'utf8'))).toEqual({
       version: 1,
       secrets: { cursor: 'key_machine' },
     });
   });
 
-  test('keeps one machine-wide settings file, whichever scope asks', async () => {
+  test('keeps one machine-wide settings file', async () => {
     const storage = open();
 
     const machine = await storage.settings(MACHINE_SCOPE);
     await machine.update({ reviewProvider: 'claude' });
 
-    expect(await storage.settings(userScope('octocat'))).toBe(machine);
+    expect(await storage.settings(MACHINE_SCOPE)).toBe(machine);
     expect((await open().settings(MACHINE_SCOPE)).get().reviewProvider).toBe('claude');
+  });
+
+  test("refuses a user's keys and settings rather than handing over the machine's", async () => {
+    const storage = open();
+
+    await expect(storage.secrets(userScope('octocat'))).rejects.toThrow(/per-user/);
+    await expect(storage.settings(userScope('octocat'))).rejects.toThrow(/per-user/);
+    await expect(stat(join(dir, 'secrets.json'))).rejects.toThrow(/ENOENT/);
   });
 
   test('uses an injected secret store instead of secrets.json', async () => {

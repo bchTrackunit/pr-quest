@@ -8,9 +8,16 @@ import { z } from 'zod';
 import { createApp, type App, type AppOptions, type UserServices } from './app.ts';
 import type { AppSettings, SettingsStore } from '../../features/settings/server/index.ts';
 import { NotSignedInError } from '../../platform/server/githubApi.ts';
+import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 import type { IdentityFactory } from './identity.ts';
 import type { Session } from './sessions.ts';
-import { type AppStorage, createFileStorage, scopeKey, userScope } from './storage.ts';
+import {
+  type AppStorage,
+  createFileStorage,
+  scopeKey,
+  type StorageScope,
+  userScope,
+} from './storage.ts';
 import type { CreateMessage } from '../../features/reviews/server/index.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
 import { createRouter } from '../../platform/server/router.ts';
@@ -462,18 +469,36 @@ function memorySettings(): SettingsStore {
   };
 }
 
-/** The file storage, but with settings kept per scope as a hosted store would. */
-function perUserSettingsStorage(): AppStorage {
+function memorySecrets(): SecretStore {
+  const saved = new Map<SecretName, string>();
+  return {
+    get: (name) => saved.get(name),
+    set: async (name, value) => {
+      saved.set(name, value);
+    },
+    delete: async (name) => {
+      saved.delete(name);
+    },
+  };
+}
+
+/** The file storage for games, with keys and settings kept per scope in memory as a hosted store would. */
+function perUserStorage(): AppStorage {
   const files = createFileStorage(dir, { info: () => undefined, warn: () => undefined });
   const settings = new Map<string, SettingsStore>();
+  const secrets = new Map<string, SecretStore>();
+  const scoped =
+    <TStore>(stores: Map<string, TStore>, create: () => TStore) =>
+    async (scope: StorageScope): Promise<TStore> => {
+      const key = scopeKey(scope);
+      const store = stores.get(key) ?? create();
+      stores.set(key, store);
+      return store;
+    };
   return {
     ...files,
-    settings: async (scope) => {
-      const key = scopeKey(scope);
-      const store = settings.get(key) ?? memorySettings();
-      settings.set(key, store);
-      return store;
-    },
+    secrets: scoped(secrets, memorySecrets),
+    settings: scoped(settings, memorySettings),
   };
 }
 
@@ -481,7 +506,7 @@ describe('createApp with an injected identity and storage', () => {
   const as = (token: string) => ({ 'X-Test-Token': token });
 
   test('opens each signed-in player their own game, side by side', async () => {
-    await start({ identity: headerIdentity, storage: perUserSettingsStorage() });
+    await start({ identity: headerIdentity, storage: perUserStorage() });
 
     const first = await send('GET', '/api/player', undefined, as(GH_TOKEN));
     const second = await send('GET', '/api/player', undefined, as(OAUTH_TOKEN));
@@ -495,7 +520,7 @@ describe('createApp with an injected identity and storage', () => {
   });
 
   test("keeps each player's settings apart", async () => {
-    await start({ identity: headerIdentity, storage: perUserSettingsStorage() });
+    await start({ identity: headerIdentity, storage: perUserStorage() });
 
     await send('PUT', '/api/settings', { reviewProvider: 'claude' }, as(GH_TOKEN));
 
@@ -508,7 +533,7 @@ describe('createApp with an injected identity and storage', () => {
   });
 
   test('answers notSignedIn on settings routes when the identity needs a sign-in', async () => {
-    await start({ identity: headerIdentity, storage: perUserSettingsStorage() });
+    await start({ identity: headerIdentity, storage: perUserStorage() });
 
     const settings = await send('GET', '/api/settings');
 
@@ -517,7 +542,7 @@ describe('createApp with an injected identity and storage', () => {
 
   test("never falls back to the gh CLI's token or offers the device flow", async () => {
     ghToken = GH_TOKEN;
-    await start({ identity: headerIdentity, storage: perUserSettingsStorage() });
+    await start({ identity: headerIdentity, storage: perUserStorage() });
 
     const player = await send('GET', '/api/player');
     const device = await send('POST', '/api/auth/device', {}, as(GH_TOKEN));

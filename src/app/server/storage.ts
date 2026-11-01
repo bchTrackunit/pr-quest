@@ -46,23 +46,25 @@ export interface FileStorageOptions {
 }
 
 /**
- * The JSON files in the state directory. Keys and settings are per machine, so every scope gets the
- * same `secrets.json` and `settings.json`; each player's game and quest cache live in
- * `users/<login>/`.
+ * The JSON files in the state directory. Keys and settings are per machine, in `secrets.json` and
+ * `settings.json`; each player's game and quest cache live in `users/<login>/`. A user scope is
+ * refused, because the machine's secrets hold the local player's GitHub token.
  */
 export function createFileStorage(stateDir: string, options: FileStorageOptions): AppStorage {
   const { info, warn } = options;
   let secrets: Promise<SecretStore> | undefined;
   let settings: Promise<SettingsStore> | undefined;
   return {
-    secrets: () => {
+    secrets: async (scope) => {
+      assertMachineScope(scope);
       secrets ??=
         options.secrets === undefined
           ? FileSecretStore.open(stateDir, { onWarning: warn })
           : Promise.resolve(options.secrets);
       return secrets;
     },
-    settings: () => {
+    settings: async (scope) => {
+      assertMachineScope(scope);
       settings ??= FileSettingsStore.open(stateDir, { onWarning: warn });
       return settings;
     },
@@ -79,4 +81,12 @@ export function createFileStorage(stateDir: string, options: FileStorageOptions)
     questCache: async (login) =>
       new FileQuestCache(userStateDir(stateDir, login), { onWarning: warn }),
   };
+}
+
+function assertMachineScope(scope: StorageScope): void {
+  if (scope.kind !== 'machine') {
+    throw new Error(
+      `The file storage keeps only the machine's keys and settings, not per-user ones for ${scope.login}; inject a storage that has them`,
+    );
+  }
 }
