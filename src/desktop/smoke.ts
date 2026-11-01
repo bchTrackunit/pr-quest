@@ -32,6 +32,16 @@ export async function runSmokeTest(window: BrowserWindow, url: string): Promise<
       },
     },
     {
+      name: 'request-secret',
+      run: async () => {
+        const res = await fetch(new URL('/api/player', url));
+        if (res.status !== 403) {
+          throw new Error(`a request without the secret got ${res.status}`);
+        }
+        return 'a request without the secret is refused';
+      },
+    },
+    {
       name: 'ui',
       run: async () => {
         for (let waited = 0; waited < UI_RENDER_WAIT_MS; waited += UI_POLL_MS) {

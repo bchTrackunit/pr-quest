@@ -9,6 +9,7 @@ import { HOSTED_CONFIG, LOCAL_CONFIG } from '../../platform/server/test-utils/co
 import {
   type IdentityFactory,
   MACHINE_SCOPE,
+  REQUEST_SECRET_COOKIE,
   type RunningServer,
   startServer,
   type ServerOverrides,
@@ -95,6 +96,20 @@ describe('startServer', () => {
     await running?.close();
     const dev = await start({ ...LOCAL_CONFIG, uiPort: 4318 }, { devUiOrigin: true });
     expect((await putFrom(dev)).status).toBe(200);
+  });
+
+  test('answers only requests that carry the request secret, when given one', async () => {
+    const server = await start(LOCAL_CONFIG, { requestSecret: 'per-launch-secret' });
+
+    const without = await fetch(`${server.url}/api/settings`);
+    const withSecret = await fetch(`${server.url}/api/settings`, {
+      headers: { Cookie: `${REQUEST_SECRET_COOKIE}=per-launch-secret` },
+    });
+    const health = await fetch(`${server.url}/api/health`);
+
+    expect(without.status).toBe(403);
+    expect(withSecret.status).toBe(200);
+    expect(health.status).toBe(200);
   });
 
   test('serves the built UI from the static directory', async () => {

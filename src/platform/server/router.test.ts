@@ -12,6 +12,7 @@ import {
   loopbackOrigins,
   matchRoute,
   type RawRoute,
+  REQUEST_SECRET_COOKIE,
   type RouteHandlers,
   type RouterOptions,
   trustedRequests,
@@ -768,6 +769,85 @@ describe('raw routes', () => {
     expect(() => createRouter({}, { routes: [{ ...callback, method: 'POST' }] })).toThrow(
       /POST \/auth\/github\/callback.*GET/,
     );
+  });
+});
+
+describe('request secret', () => {
+  const SECRET = 'a'.repeat(64);
+  let staticDir: string;
+
+  beforeEach(async () => {
+    staticDir = await mkdtemp(join(tmpdir(), 'pr-quest-secret-'));
+    await writeFile(join(staticDir, 'index.html'), '<!doctype html>');
+  });
+
+  afterEach(async () => {
+    await rm(staticDir, { recursive: true, force: true });
+  });
+
+  const serve = (): Promise<number> =>
+    startServer(
+      { health: createHandlers(config).health },
+      {
+        allowedOrigins: loopbackOrigins([API_PORT]),
+        requestSecret: SECRET,
+        staticDir,
+        routes: [
+          {
+            method: 'GET',
+            path: '/oauth/start',
+            handle: (_req, res) => {
+              res.end('raw');
+            },
+          },
+        ],
+      },
+    );
+
+  test.each(['/api/player', '/', '/index.html', '/oauth/start'])(
+    'refuses GET %s without the secret, as any other program on the machine would send it',
+    async (path) => {
+      const port = await serve();
+
+      const response = await sendRaw(port, 'GET', path);
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(response.text)).toMatchObject({ error: { code: 'forbidden' } });
+    },
+  );
+
+  test('refuses a wrong or partial secret', async () => {
+    const port = await serve();
+
+    const wrong = await sendRaw(port, 'GET', '/api/player', {
+      Cookie: `${REQUEST_SECRET_COOKIE}=${'b'.repeat(64)}`,
+    });
+    const partial = await sendRaw(port, 'GET', '/api/player', {
+      Cookie: `${REQUEST_SECRET_COOKIE}=${SECRET.slice(0, 32)}`,
+    });
+
+    expect(wrong.status).toBe(403);
+    expect(partial.status).toBe(403);
+  });
+
+  test('passes requests that carry the secret cookie, among others', async () => {
+    const port = await serve();
+    const Cookie = `theme=dark; ${REQUEST_SECRET_COOKIE}=${SECRET}`;
+
+    const api = await sendRaw(port, 'GET', '/api/player', { Cookie });
+    const page = await sendRaw(port, 'GET', '/', { Cookie });
+    const raw = await sendRaw(port, 'GET', '/oauth/start', { Cookie });
+
+    // No handler for getPlayer, so a request that got past the check is answered 501.
+    expect(api.status).toBe(501);
+    expect(page.status).toBe(200);
+    expect(raw.text).toBe('raw');
+  });
+
+  test('answers the health check without it', async () => {
+    const port = await serve();
+
+    expect((await sendRaw(port, 'GET', '/api/health')).status).toBe(200);
   });
 });
 

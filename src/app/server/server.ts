@@ -32,7 +32,7 @@ export type {
   IdentityFactory,
   IdentityResolver,
 } from './identity.ts';
-export type { RawRoute } from '../../platform/server/router.ts';
+export { type RawRoute, REQUEST_SECRET_COOKIE } from '../../platform/server/router.ts';
 export {
   type AppStorage,
   createFileStorage,
@@ -63,6 +63,12 @@ export interface ServerOverrides extends Pick<
    * `/api` here. Without it, the server trusts only its own origin.
    */
   devUiOrigin?: boolean;
+  /**
+   * Answers only requests whose `REQUEST_SECRET_COOKIE` cookie holds this value, apart from the
+   * health check, so other programs and users on the machine can't call the server. For an app
+   * that embeds the server and sets the cookie in its own browser; `yarn start` leaves it unset.
+   */
+  requestSecret?: string;
   /** Defaults to running `gh auth token`. */
   ghToken?: () => Promise<string | undefined>;
   info?: (message: string) => void;
@@ -138,6 +144,7 @@ export async function startServer(
     ...trustedRequests(config, port, { devUiOrigin: overrides.devUiOrigin }),
     staticDir,
     routes: app.routes,
+    requestSecret: overrides.requestSecret,
     onUnexpectedError: (error) => {
       warn(`unexpected error ${inspect(error)}`);
     },

@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
@@ -89,8 +90,17 @@ export interface RouterOptions {
   staticDir?: string;
   /** Answered before the JSON API and the built UI. */
   routes?: ReadonlyArray<RawRoute>;
+  /**
+   * Answers only requests whose `REQUEST_SECRET_COOKIE` cookie holds this value, apart from
+   * `/api/health`. Loopback alone lets every program and user on the machine call the server; an
+   * app that embeds it sets the cookie in its own browser before loading the UI.
+   */
+  requestSecret?: string;
   onUnexpectedError?: (error: unknown) => void;
 }
+
+/** The cookie that carries `RouterOptions.requestSecret`. */
+export const REQUEST_SECRET_COOKIE = 'pr_quest_secret';
 
 export type TrustOptions = Required<
   Pick<RouterOptions, 'allowedOrigins' | 'allowedHosts' | 'hostCheckExempt'>
@@ -169,19 +179,22 @@ export function createRouter(
   const serveStatic =
     options.staticDir === undefined ? undefined : createStaticHandler(options.staticDir);
   const rawRoutes = compileRawRoutes(options.routes ?? []);
+  const secret = options.requestSecret === undefined ? undefined : digest(options.requestSecret);
   return (req, res) => {
-    handle({ handlers, rawRoutes, trust, serveStatic }, req, res).catch((error: unknown) => {
-      if (error instanceof ApiError) {
-        sendError(res, error.status, {
-          ...error.details,
-          code: error.code,
-          message: error.message,
-        });
-        return;
-      }
-      options.onUnexpectedError?.(error);
-      sendError(res, 500, { code: 'internal', message: 'Internal server error' });
-    });
+    handle({ handlers, rawRoutes, trust, serveStatic, secret }, req, res).catch(
+      (error: unknown) => {
+        if (error instanceof ApiError) {
+          sendError(res, error.status, {
+            ...error.details,
+            code: error.code,
+            message: error.message,
+          });
+          return;
+        }
+        options.onUnexpectedError?.(error);
+        sendError(res, 500, { code: 'internal', message: 'Internal server error' });
+      },
+    );
   };
 }
 
@@ -196,6 +209,8 @@ interface Routing {
   rawRoutes: ReadonlyMap<string, RawRoute>;
   trust: Trust;
   serveStatic: StaticHandler | undefined;
+  /** The SHA-256 of the request secret, so comparing it takes the same time whatever was sent. */
+  secret: Buffer | undefined;
 }
 
 const rawRouteKey = (method: string, path: string): string => `${method} ${path}`;
@@ -224,12 +239,16 @@ function compileRawRoutes(routes: ReadonlyArray<RawRoute>): ReadonlyMap<string, 
 }
 
 async function handle(
-  { handlers, rawRoutes, trust, serveStatic }: Routing,
+  { handlers, rawRoutes, trust, serveStatic, secret }: Routing,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const method = req.method ?? 'GET';
+  const isHealthCheck = method === 'GET' && url.pathname === API_ROUTES.health.path;
+  if (secret && !isHealthCheck && !carriesSecret(req, secret)) {
+    throw new ApiError(403, 'forbidden', 'This server answers only the app that started it');
+  }
   const raw = rawRoutes.get(rawRouteKey(method, url.pathname));
   if (raw) {
     if (raw.crossSite) {
@@ -368,6 +387,19 @@ function isAllowedHost(host: string | undefined, allowedHosts: ReadonlyArray<str
   } catch {
     return false;
   }
+}
+
+function digest(value: string): Buffer {
+  return createHash('sha256').update(value).digest();
+}
+
+function carriesSecret(req: IncomingMessage, secret: Buffer): boolean {
+  const prefix = `${REQUEST_SECRET_COOKIE}=`;
+  return (req.headers.cookie ?? '')
+    .split(';')
+    .map((pair) => pair.trim())
+    .filter((pair) => pair.startsWith(prefix))
+    .some((pair) => timingSafeEqual(digest(pair.slice(prefix.length)), secret));
 }
 
 function isApiPath(pathname: string): boolean {

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, safeStorage, session, shell } from 'electron';
 import electronUpdater from 'electron-updater';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { inspect } from 'node:util';
 
-import { loadConfig, type RunningServer } from '../app/server/server.ts';
+import { loadConfig, REQUEST_SECRET_COOKIE, type RunningServer } from '../app/server/server.ts';
 import { RELEASE_BUILD } from './buildFlags.ts';
 import { startDesktopServer } from './desktopServer.ts';
 import { type Encryptor, openDesktopSecrets } from './keychainSecrets.ts';
@@ -108,15 +109,25 @@ function run(): void {
       });
       const preferencesFile = join(app.getPath('userData'), 'desktop.json');
       const { port } = await readPreferences(preferencesFile);
+      const requestSecret = randomBytes(32).toString('base64url');
       const running = await startDesktopServer(base, port, {
         secrets,
         staticDir: join(app.getAppPath(), 'dist'),
+        requestSecret,
         info: log.info,
         warn: log.warn,
       });
       server = running;
       await writePreferences(preferencesFile, { port: running.port });
 
+      // Only this window may call the server; every request it makes, EventSource too, sends this.
+      await session.defaultSession.cookies.set({
+        url: running.url,
+        name: REQUEST_SECRET_COOKIE,
+        value: requestSecret,
+        httpOnly: true,
+        sameSite: 'strict',
+      });
       guardPermissions(running.url);
       window = openWindow(running.url, log);
 
