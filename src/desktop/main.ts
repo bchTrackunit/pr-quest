@@ -97,7 +97,7 @@ function run(): void {
       );
 
       // State stays in ~/.pr-quest (or PR_QUEST_STATE_DIR), shared with the CLI.
-      const base = loadConfig();
+      const base = loadConfig({ onWarning: log.warn });
       const secrets = await openDesktopSecrets(base.stateDir, {
         // macOS asks before a rebuilt, unsigned app may read its keychain entry, and the question
         // blocks the main process, so a smoke test leaves the keychain alone.

@@ -1,5 +1,6 @@
 import {
   type AppConfig,
+  type LocalConfig,
   type RunningServer,
   type ServerOverrides,
   startServer,
@@ -7,15 +8,15 @@ import {
 
 /**
  * The server config for the desktop app: local mode on `port`. The window loads the UI from the
- * server itself, so no separate UI origin is trusted; port 0 never matches a real origin.
+ * server itself, so the overrides must leave `devUiOrigin` unset.
  */
-export function desktopConfig(base: AppConfig, port: number): AppConfig {
+export function desktopConfig(base: AppConfig, port: number): LocalConfig {
   if (base.mode !== 'local') {
     throw new Error(
       `The desktop app only runs in local mode; remove PR_QUEST_MODE=${base.mode} from the environment or ${base.stateDir}/.env`,
     );
   }
-  return { ...base, port, uiPort: 0 };
+  return { ...base, port };
 }
 
 /**

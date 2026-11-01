@@ -18,14 +18,23 @@ describe('desktopConfig', () => {
   test('listens on loopback and trusts no UI port besides its own', () => {
     const config = desktopConfig(base, 53124);
 
-    expect(config).toMatchObject({ mode: 'local', host: '127.0.0.1', port: 53124 });
+    expect(config).toEqual({ ...base, port: 53124 });
+    expect(config).toMatchObject({ mode: 'local', host: '127.0.0.1' });
     const { allowedOrigins } = trustedRequests(config, 53124);
     expect(allowedOrigins).toContain('http://127.0.0.1:53124');
     expect(allowedOrigins.some((origin) => origin.endsWith(`:${base.uiPort}`))).toBe(false);
   });
 
   test('refuses hosted mode', () => {
-    expect(() => desktopConfig({ ...base, mode: 'hosted' }, 0)).toThrow(/local mode/);
+    const hosted = loadConfig({
+      env: {
+        PR_QUEST_STATE_DIR: '/tmp/pr-quest-desktop-test',
+        PR_QUEST_MODE: 'hosted',
+        PR_QUEST_PUBLIC_ORIGIN: 'https://pr-quest.example',
+      },
+    });
+
+    expect(() => desktopConfig(hosted, 0)).toThrow(/local mode/);
   });
 });
 
