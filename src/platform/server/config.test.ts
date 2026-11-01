@@ -1,9 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { HOSTED_CONFIG, LOCAL_CONFIG } from './test-utils/config.ts';
+
 import {
+  type AppConfig,
   assertSafeConfig,
   DEFAULT_GITHUB_CLIENT_ID,
   DEFAULT_SERVER_PORT,
@@ -13,7 +17,6 @@ import {
   LOOPBACK_HOST,
   LOOPBACK_HOSTNAMES,
 } from './config.ts';
-import { HOSTED_CONFIG } from './test-utils/config.ts';
 
 describe('loadConfig', () => {
   let dir: string;
@@ -246,6 +249,61 @@ describe('loadConfig', () => {
         ).toThrow(/PR_QUEST_ALLOWED_HOSTS/);
       },
     );
+
+    describe('the database', () => {
+      const masterKey = randomBytes(32).toString('base64');
+      const previous = randomBytes(32).toString('base64');
+      const withDatabase = {
+        ...hosted,
+        DATABASE_URL: 'postgres://pr_quest@db.internal:5432/pr_quest',
+        PR_QUEST_MASTER_KEY: masterKey,
+      };
+
+      test('reads the URL and the master keys', () => {
+        const config = loadConfig({
+          env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
+          envFilePath,
+        });
+
+        expect(config.database).toEqual({
+          url: 'postgres://pr_quest@db.internal:5432/pr_quest',
+          masterKey,
+          previousMasterKeys: previous,
+        });
+      });
+
+      test('is optional, for a server given its storage in code', () => {
+        expect(loadConfig({ env: hosted, envFilePath }).database).toBeUndefined();
+      });
+
+      test('requires a master key to encrypt the API keys with', () => {
+        const { PR_QUEST_MASTER_KEY: _omitted, ...env } = withDatabase;
+
+        expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_MASTER_KEY is required/);
+      });
+
+      test('refuses a malformed master key without echoing it', () => {
+        const env = { ...withDatabase, PR_QUEST_MASTER_KEY: 'c2hvcnQta2V5' };
+
+        expect(() => loadConfig({ env, envFilePath })).toThrow(/32 random bytes/);
+        expect(() => loadConfig({ env, envFilePath })).not.toThrow(/c2hvcnQta2V5/);
+      });
+
+      test('refuses a non-Postgres URL', () => {
+        expect(() =>
+          loadConfig({ env: { ...withDatabase, DATABASE_URL: 'mysql://db/x' }, envFilePath }),
+        ).toThrow(/DATABASE_URL/);
+      });
+    });
+  });
+
+  test('local mode ignores DATABASE_URL, which other tools on the machine may set', () => {
+    const config = loadConfig({
+      env: { DATABASE_URL: 'postgres://elsewhere/db', PR_QUEST_MASTER_KEY: 'x' },
+      envFilePath,
+    });
+
+    expect(config.database).toBeUndefined();
   });
 
   test('rejects an unknown mode', () => {
@@ -268,4 +326,37 @@ describe('assertSafeConfig', () => {
       );
     },
   );
+});
+
+describe('assertSafeConfig with a database', () => {
+  const database = {
+    url: 'postgres://pr_quest@db.internal:5432/pr_quest',
+    masterKey: randomBytes(32).toString('base64'),
+  };
+
+  test('accepts a hosted config with a Postgres URL and a master key', () => {
+    expect(() => assertSafeConfig({ ...HOSTED_CONFIG, database })).not.toThrow();
+  });
+
+  test('refuses a hosted config whose master key is malformed, without echoing it', () => {
+    const config: AppConfig = {
+      ...HOSTED_CONFIG,
+      database: { ...database, masterKey: 'c2hvcnQ=' },
+    };
+
+    expect(() => assertSafeConfig(config)).toThrow(/32 random bytes/);
+    expect(() => assertSafeConfig(config)).not.toThrow(/c2hvcnQ=/);
+  });
+
+  test('refuses a hosted config with a non-Postgres URL', () => {
+    expect(() =>
+      assertSafeConfig({ ...HOSTED_CONFIG, database: { ...database, url: 'mysql://db/x' } }),
+    ).toThrow(/DATABASE_URL/);
+  });
+
+  test('refuses a database in local mode, which keeps its state in files', () => {
+    const local: AppConfig = Object.assign({ ...LOCAL_CONFIG }, { database });
+
+    expect(() => assertSafeConfig(local)).toThrow(/hosted mode/);
+  });
 });

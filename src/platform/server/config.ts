@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 
+import { MASTER_KEY_VARIABLE, MasterKeyring, PREVIOUS_MASTER_KEYS_VARIABLE } from './envelope.ts';
+
 /**
  * `local` serves one person on their own machine and acts as them, so it only listens on loopback.
  * `hosted` serves many users from a public address behind HTTPS.
@@ -34,6 +36,16 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
  */
 export const DEFAULT_GITHUB_CLIENT_ID = '';
 
+/** Hosted mode's Postgres database and the master keys that encrypt users' API keys in it. */
+export interface DatabaseConfig {
+  /** `DATABASE_URL`, a `postgres://` connection string. */
+  url: string;
+  /** `PR_QUEST_MASTER_KEY`: base64 of 32 random bytes. */
+  masterKey: string;
+  /** `PR_QUEST_PREVIOUS_MASTER_KEYS`: comma-separated keys being rotated out. */
+  previousMasterKeys?: string;
+}
+
 interface BaseConfig {
   /** Enables "Sign in with GitHub"; without it PR Quest relies on the gh CLI's token. */
   githubClientId?: string;
@@ -53,6 +65,7 @@ export interface LocalConfig extends BaseConfig {
   host: LoopbackHost;
   allowedHosts: ReadonlyArray<LoopbackHostname>;
   publicOrigin?: never;
+  database?: never;
 }
 
 /** Many players behind HTTPS. Each saves their own API keys, so none come from the environment. */
@@ -67,6 +80,8 @@ export interface HostedConfig extends BaseConfig {
   linearApiKey?: never;
   cursorApiKey?: never;
   anthropicApiKey?: never;
+  /** Postgres storage, from `DATABASE_URL`. Without it, the embedding app supplies the storage. */
+  database?: DatabaseConfig;
 }
 
 export type AppConfig = LocalConfig | HostedConfig;
@@ -132,7 +147,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
         );
       }
     }
-    return { ...base, ...boundary };
+    const database = databaseConfig(read);
+    return { ...base, ...boundary, ...(database ? { database } : {}) };
   }
   return {
     ...base,
@@ -177,6 +193,9 @@ export function assertSafeConfig(config: AppConfig): void {
         `Hosted mode takes no API keys from the config (${shared.map((field) => ENV_API_KEYS[field]).join(', ')}): every player would share them`,
       );
     }
+    if (config.database !== undefined) {
+      assertDatabase(config.database);
+    }
     return;
   }
   const host: string = config.host;
@@ -192,6 +211,38 @@ export function assertSafeConfig(config: AppConfig): void {
   if (publicOrigin !== undefined) {
     throw new Error('Local mode has no public origin; that is hosted mode (PR_QUEST_MODE=hosted)');
   }
+  const { database }: { database?: unknown } = config;
+  if (database !== undefined) {
+    throw new Error(
+      'Local mode keeps its state in files, not a database; that is hosted mode (PR_QUEST_MODE=hosted)',
+    );
+  }
+}
+
+/** Local mode never reads `DATABASE_URL`, which other tools on the machine may set. */
+function databaseConfig(read: (name: string) => string | undefined): DatabaseConfig | undefined {
+  const url = read('DATABASE_URL');
+  if (url === undefined) {
+    return undefined;
+  }
+  const masterKey = read(MASTER_KEY_VARIABLE);
+  if (masterKey === undefined) {
+    throw new Error(
+      `${MASTER_KEY_VARIABLE} is required with DATABASE_URL: it encrypts every user's API keys. Create one with \`openssl rand -base64 32\` and keep it in the platform's secrets.`,
+    );
+  }
+  const previousMasterKeys = read(PREVIOUS_MASTER_KEYS_VARIABLE);
+  const database = { url, masterKey, ...(previousMasterKeys ? { previousMasterKeys } : {}) };
+  assertDatabase(database);
+  return database;
+}
+
+/** Fails at startup rather than on the first sign-in, and never echoes a key. */
+function assertDatabase(database: DatabaseConfig): void {
+  if (!/^postgres(?:ql)?:\/\//.test(database.url)) {
+    throw new Error('DATABASE_URL must be a postgres:// connection string');
+  }
+  MasterKeyring.fromConfig({ current: database.masterKey, previous: database.previousMasterKeys });
 }
 
 /** Who may reach the server: loopback only in local mode, the public origin's hosts when hosted. */
