@@ -19,8 +19,9 @@ token. It also accepts browser requests only from its own UI and API origins, as
     client ID, set up once.
   - Or the **GitHub CLI**, logged in with `gh auth login`. PR Quest reads its token with
     `gh auth token`. Check it with `gh auth status`.
-- **Node and Yarn through [Volta](https://volta.sh)**. Node 24.22.1 and Yarn 4.13.0 are pinned in
-  `package.json`, so Volta switches to them inside the repo.
+- **Node and Yarn through [Volta](https://volta.sh)**. Node 24.22.1 and Yarn 4.18.1 are pinned in
+  `package.json`, so Volta switches to them inside the repo. Yarn older than 4.17.1 can't install
+  TypeScript 7.
 - **Optional keys** for reviews and Linear. Add them in the [settings popup](#settings), or in
   `.env.local` at the repo root (git-ignored). Start from the example:
 
@@ -228,6 +229,19 @@ oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` r
 [project structure](#project-structure) boundaries) are a small oxlint JS plugin in
 `oxlint-plugins/local.js`. oxfmt reads `.oxfmtrc.json`. For editor support, install the
 recommended [Oxc extension](https://marketplace.visualstudio.com/items?itemName=oxc.oxc-vscode).
+
+`yarn typecheck` runs TypeScript 7, the native compiler, which ships as the `typescript` package.
+It has no `tsserver`, so keep your editor on its bundled TypeScript rather than "Use Workspace
+Version".
+
+The UI is built with the [React Compiler](https://react.dev/learn/react-compiler)
+(`babel-plugin-react-compiler`, run by `@vitejs/plugin-react`), which memoises components and
+hooks. `vite build` prints how many it memoised and lists any it skipped; a skipped component
+still works, it just isn't memoised. Vitest reuses `vite.config.ts`, so the jsdom UI tests run
+the compiled components. oxlint checks the Rules of React the compiler relies on with its built-in
+port of the compiler's lint rules (`react/purity`, `react/refs`, `react/immutability` and the
+others listed in `.oxlintrc.json`), and `react/todo` warns about code the compiler can't compile
+yet.
 
 ## Project structure
 
