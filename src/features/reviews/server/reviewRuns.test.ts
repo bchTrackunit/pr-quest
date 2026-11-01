@@ -13,7 +13,7 @@ import type {
 } from '../../../shared/api.ts';
 import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL } from './claudeReview.ts';
 import { ReviewRunService, type ClaudeRunner, type ReviewRunServiceOptions } from './reviewRuns.ts';
-import { type FinishedReview, StateStore, type StoredRun } from '../../game/server/index.ts';
+import { type FinishedReview, FileStateStore, type StoredRun } from '../../game/server/index.ts';
 
 vi.mock('@cursor/sdk', () => {
   class MockCursorAgentError extends Error {
@@ -102,7 +102,7 @@ const quest: Quest = {
 };
 
 let dir: string;
-let store: StateStore;
+let store: FileStateStore;
 let events: Array<ServerEvent>;
 let logs: Array<string>;
 let recordAgentReviewFinished: ReturnType<typeof vi.fn<(review: FinishedReview) => Promise<void>>>;
@@ -126,7 +126,7 @@ const runStatuses = (): Array<string> =>
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-runs-'));
-  store = await StateStore.open(dir);
+  store = await FileStateStore.open(dir);
   events = [];
   logs = [];
   idCounter = 0;
@@ -707,7 +707,7 @@ describe('ReviewRunService finding decisions', () => {
     await runs.decide(id, [0], 'accepted');
     await runs.decide(id, [1], 'rejected');
 
-    const reopened = service({ store: await StateStore.open(dir) });
+    const reopened = service({ store: await FileStateStore.open(dir) });
 
     expect(reopened.get(id)?.run.findingDecisions).toEqual(['accepted', 'rejected', 'undecided']);
   });

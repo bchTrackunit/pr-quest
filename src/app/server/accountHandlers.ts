@@ -38,10 +38,15 @@ const KeyNameSchema = z.enum(API_KEY_NAMES, {
 
 const EmptyBodySchema = z.strictObject({}, { error: 'This route takes no body' });
 
-export interface AccountServices {
+/** What the settings, API key and model routes act on: one storage scope's. */
+export interface SettingsServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
   settings: Pick<SettingsStore, 'get' | 'update'>;
   models: Pick<ModelCatalog, 'list'>;
+}
+
+/** What the sign-in routes act on. */
+export interface AuthServices {
   deviceFlow: Pick<DeviceFlow, 'start' | 'status' | 'cancel' | 'acknowledgeComplete'>;
   auth: {
     clientIdConfigured: boolean;
@@ -52,18 +57,16 @@ export interface AccountServices {
   };
 }
 
+export interface AccountServices extends SettingsServices, AuthServices {}
+
 /** Sign-in, settings, API key and model routes. None of them return or log a secret. */
 export function createAccountHandlers(services: AccountServices): RouteHandlers {
-  const { apiKeys, settings, models, deviceFlow, auth } = services;
+  return { ...createAuthHandlers(services), ...createSettingsHandlers(services) };
+}
 
-  const settingsResponse = (): SettingsResponse => {
-    const current = settings.get();
-    return {
-      reviewProvider: current.reviewProvider,
-      models: current.models,
-      keys: apiKeys.statuses(),
-    };
-  };
+/** The sign-in routes: who is signed in, the device flow and signing out. */
+export function createAuthHandlers(services: AuthServices): RouteHandlers {
+  const { deviceFlow, auth } = services;
 
   const authStatus = async (): Promise<AuthStatusResponse> => {
     const { account, error } = await auth.current();
@@ -109,7 +112,23 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
       }
       return status;
     },
+  };
+}
 
+/** The settings, API key and model routes. */
+export function createSettingsHandlers(services: SettingsServices): RouteHandlers {
+  const { apiKeys, settings, models } = services;
+
+  const settingsResponse = (): SettingsResponse => {
+    const current = settings.get();
+    return {
+      reviewProvider: current.reviewProvider,
+      models: current.models,
+      keys: apiKeys.statuses(),
+    };
+  };
+
+  return {
     getSettings: settingsResponse,
 
     updateSettings: async ({ body }) => {

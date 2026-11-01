@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { FindingDecision, ReviewRun } from '../../shared/api.ts';
 import { EventHub } from '../../platform/server/events.ts';
-import { GameService, StateStore } from '../../features/game/server/index.ts';
+import { GameService, FileStateStore } from '../../features/game/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
 import {
   type GitHubClient,
@@ -106,7 +106,7 @@ async function finishedRun(): Promise<ReviewRun> {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-handlers-'));
-  const store = await StateStore.open(dir);
+  const store = await FileStateStore.open(dir);
   const events = new EventHub();
   // A Friday afternoon, two days after the oldest fixture PR opened: no time-based unlocks.
   const game = new GameService(store, events, { now: () => new Date(2026, 9, 30, 15) });

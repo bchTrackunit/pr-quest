@@ -23,6 +23,16 @@ const SecretsFileSchema = z.object({
 
 type Secrets = Partial<Record<SecretName, string>>;
 
+/**
+ * Saved secrets. Reads are synchronous, so an implementation loads its values when it opens and
+ * resolves `set` and `delete` once the change is stored. Nothing may log or return a value to the UI.
+ */
+export interface SecretStore {
+  get: (name: SecretName) => string | undefined;
+  set: (name: SecretName, value: string) => Promise<void>;
+  delete: (name: SecretName) => Promise<void>;
+}
+
 export interface SecretStoreOptions {
   onWarning?: (message: string) => void;
 }
@@ -31,7 +41,7 @@ export interface SecretStoreOptions {
  * Secrets in `<stateDir>/secrets.json`: mode 0600 in a 0700 directory, written atomically. Values
  * stay in this process; nothing here logs or returns them to the UI.
  */
-export class SecretStore {
+export class FileSecretStore implements SecretStore {
   private readonly file: string;
   private readonly writes = new WriteQueue();
   private secrets: Secrets;
@@ -44,10 +54,13 @@ export class SecretStore {
   public static async open(
     stateDir: string,
     options: SecretStoreOptions = {},
-  ): Promise<SecretStore> {
+  ): Promise<FileSecretStore> {
     await ensurePrivateDir(stateDir);
     const file = join(stateDir, SECRETS_FILE);
-    return new SecretStore(file, await readSecrets(file, options.onWarning ?? (() => undefined)));
+    return new FileSecretStore(
+      file,
+      await readSecrets(file, options.onWarning ?? (() => undefined)),
+    );
   }
 
   public get(name: SecretName): string | undefined {

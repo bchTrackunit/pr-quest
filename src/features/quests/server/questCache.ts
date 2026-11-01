@@ -75,12 +75,19 @@ const CacheFileSchema = z.object({
 
 type CacheFile = z.infer<typeof CacheFileSchema>;
 
+/** The quest list and backoff that survive a restart. Losing them only costs a GitHub refresh. */
+export interface QuestCache {
+  /** Resolves to `{}` rather than rejecting when there is nothing usable. */
+  load: () => Promise<CachedQuestState>;
+  save: (state: CachedQuestState) => Promise<void>;
+}
+
 export interface QuestCacheOptions {
   onWarning?: (message: string) => void;
 }
 
 /** `<stateDir>/quests.json`. Writes are serialized and atomic; an unreadable file is ignored. */
-export class QuestCache {
+export class FileQuestCache implements QuestCache {
   private readonly file: string;
   private readonly stateDir: string;
   private readonly onWarning: (message: string) => void;

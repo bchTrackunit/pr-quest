@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { ApiKeys } from './apiKeys.ts';
 import { ApiError } from '../../../platform/server/router.ts';
-import { SecretStore } from '../../../platform/server/secrets.ts';
+import { FileSecretStore } from '../../../platform/server/secrets.ts';
 
 let dir: string;
-let secrets: SecretStore;
+let secrets: FileSecretStore;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-keys-'));
-  secrets = await SecretStore.open(dir);
+  secrets = await FileSecretStore.open(dir);
 });
 
 afterEach(async () => {
