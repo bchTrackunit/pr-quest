@@ -1,9 +1,34 @@
 import { describe, expect, test } from 'vitest';
 
-import { isPublishable, publishSettings } from './release.ts';
+import { DEFAULT_RELEASE_REPO, isPublishable, publishSettings, releaseRepo } from './release.ts';
 
 const real = { owner: 'octocat', repo: 'pr-quest' };
 const placeholder = { owner: 'CHANGE-ME', repo: 'pr-quest' };
+
+describe('releaseRepo', () => {
+  test('is the default repository when the build names none', () => {
+    expect(releaseRepo(undefined)).toEqual(DEFAULT_RELEASE_REPO);
+    expect(releaseRepo('')).toEqual(DEFAULT_RELEASE_REPO);
+  });
+
+  test('is the owner/repo the build names, as in GITHUB_REPOSITORY', () => {
+    expect(releaseRepo('octo-org/pr-quest.app')).toEqual({
+      owner: 'octo-org',
+      repo: 'pr-quest.app',
+    });
+  });
+
+  test.each([
+    'pr-quest',
+    'octo-org/',
+    '/pr-quest',
+    'octo-org/pr-quest/extra',
+    'https://github.com/octo-org/pr-quest',
+    'octo-org/"pr-quest',
+  ])('refuses %j, which names no repository', (value) => {
+    expect(() => releaseRepo(value)).toThrow(/PR_QUEST_RELEASE_REPO/);
+  });
+});
 
 describe('isPublishable', () => {
   test('accepts a GitHub owner and repository name', () => {

@@ -2,7 +2,7 @@ import { Arch, type Configuration } from 'electron-builder';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { publishSettings, RELEASE_REPO } from './src/desktop/release.ts';
+import { publishSettings, releaseRepo } from './src/desktop/release.ts';
 
 /*
  * Installers for the desktop app. Local builds are unsigned. Release builds sign and publish
@@ -20,10 +20,13 @@ import { publishSettings, RELEASE_REPO } from './src/desktop/release.ts';
  *   app-update.yml the updater reads, and it refuses the placeholder RELEASE_REPO. Without it the
  *   app never checks for updates.
  * - Publishing: GH_TOKEN, used by `electron-builder --publish always`. Releases go to RELEASE_REPO
- *   in src/desktop/release.ts as drafts.
+ *   in src/desktop/release.ts as drafts, or to the owner/repo in PR_QUEST_RELEASE_REPO, which
+ *   like PR_QUEST_RELEASE_BUILD is set for the whole `yarn desktop:package`. The release workflow
+ *   publishes from a job of its own instead; see RELEASING.md.
  */
 const env = process.env;
 const releaseBuild = env.PR_QUEST_RELEASE_BUILD === '1';
+const repo = releaseRepo(env.PR_QUEST_RELEASE_REPO);
 
 function required(name: string): string {
   const value = env[name];
@@ -87,7 +90,7 @@ const config: Configuration = {
       );
     }
   },
-  publish: publishSettings({ releaseBuild, repo: RELEASE_REPO }),
+  publish: publishSettings({ releaseBuild, repo }),
   // Targets name no architecture, so each build is for the machine it runs on unless `--arm64` or
   // `--x64` says otherwise. Release macOS on an Apple Silicon and an Intel runner.
   mac: {
@@ -107,7 +110,7 @@ const config: Configuration = {
     target: ['AppImage', 'deb'],
     category: 'Development',
     executableName: 'pr-quest',
-    maintainer: `PR Quest <${RELEASE_REPO.owner}@users.noreply.github.com>`,
+    maintainer: `PR Quest <${repo.owner}@users.noreply.github.com>`,
   },
 };
 
