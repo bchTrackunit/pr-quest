@@ -83,7 +83,7 @@ PR_QUEST_GITHUB_CLIENT_ID=Ov23li...
 
 A client ID isn't secret: it only names the app, and every sign-in still needs your approval on
 github.com. A team could later commit theirs as the default in `DEFAULT_GITHUB_CLIENT_ID` in
-[`src/server/config.ts`](src/server/config.ts), so nobody has to set it.
+[`src/platform/server/config.ts`](src/platform/server/config.ts), so nobody has to set it.
 
 Without a client ID, the sign-in button and the settings popup explain this setup and link here.
 
@@ -195,9 +195,49 @@ With [just](https://just.systems) installed, `just check` runs the type check, l
 tests and build, as CI does on every pull request and every push to `main`.
 
 oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
-`oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums) are a
-small oxlint JS plugin in `oxlint-plugins/local.js`. oxfmt reads `.oxfmtrc.json`. For editor
-support, install the recommended [Oxc extension](https://marketplace.visualstudio.com/items?itemName=oxc.oxc-vscode).
+`oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums and the
+[project structure](#project-structure) boundaries) are a small oxlint JS plugin in
+`oxlint-plugins/local.js`. oxfmt reads `.oxfmtrc.json`. For editor support, install the
+recommended [Oxc extension](https://marketplace.visualstudio.com/items?itemName=oxc.oxc-vscode).
+
+## Project structure
+
+Each feature owns its server and UI code. Tests sit next to the code they test.
+
+```text
+src/
+  app/          composition roots: they wire the features together
+    server/     main.ts (entry), app.ts, the HTTP route tables, per-player sessions and state dirs
+    ui/         main.tsx (entry), App.tsx, the game controller hook and the live event stream
+  features/
+    auth/       GitHub device flow, token resolution, the GitHub account control
+    settings/   API keys, review provider and model settings, the settings dialog
+    game/       XP, levels, achievements, streaks, the player state store, HUD, toasts, XP popups
+    quests/     GitHub search and GraphQL client, Linear, quest cache and polling, the quest board
+    reviews/    review runs, Cursor and Claude reviews, diff budget, review result and approve UI
+  platform/
+    server/     router and security guards, config, SSE events, GitHub API wrapper, rate limits,
+                private files and secrets
+    ui/         API client, store, Modal, formatting and clock helpers, notifications, styles
+  shared/       the API contract (api.ts) and the review prompt and result schema (reviewResult.ts)
+```
+
+Each feature has `server/` and `ui/` folders, and each folder has an `index.ts` that is its public
+entry. Server and UI get separate entries so that the UI bundle never pulls in server code.
+
+Dependency rules, enforced by `yarn lint`:
+
+- `src/shared` imports only from `src/shared`.
+- `src/platform` imports only from `src/platform` and `src/shared`, never from a feature or
+  `src/app`.
+- A feature imports its own files, `src/platform` and `src/shared`. It reaches another feature only
+  through that feature's `index.ts`, never a deeper file. Tests may also use another feature's
+  `test-utils/`.
+- Only `src/app` imports from `src/app`, and it also goes through each feature's `index.ts`.
+- UI code and server code never import each other; they share only `src/shared`.
+- There are no import cycles (`import/no-cycle`). The features form one direction: `reviews`
+  uses `quests`, `game` and `settings`; `quests` uses `game` and `settings`; `game` uses
+  `settings`; `settings` uses `auth`.
 
 ## How it works
 
@@ -413,7 +453,8 @@ count as an empty queue, and neither does a refresh where most PR details couldn
 | On Fire         | A 5-day streak                                                  | 75       |
 | Agent Commander | 10 finished agent reviews                                       | 40       |
 
-Achievements are defined in [`src/server/achievements.ts`](src/server/achievements.ts); the UI
+Achievements are defined in
+[`src/features/game/server/achievements.ts`](src/features/game/server/achievements.ts); the UI
 renders whatever that file lists.
 
 ## Where state lives

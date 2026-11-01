@@ -65,6 +65,8 @@
         "local/no-barrel-files": "error",
         "local/no-type-assertion": "warn",
         "local/no-enum": "warn",
+        "local/feature-boundaries": "error",
+        "import/no-cycle": "error",
         "typescript/array-type": ["error", { "default": "generic" }],
         "typescript/await-thenable": "warn",
         "typescript/ban-ts-comment": "warn",
@@ -111,7 +113,13 @@
       }
     },
     {
-      "files": ["src/ui/**/*.ts", "src/ui/**/*.tsx"],
+      "files": ["src/features/*/server/index.ts", "src/features/*/ui/index.ts"],
+      "rules": {
+        "local/no-barrel-files": "off"
+      }
+    },
+    {
+      "files": ["src/**/ui/**/*.ts", "src/**/ui/**/*.tsx"],
       "rules": {
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "error",
@@ -119,7 +127,7 @@
           "error",
           {
             "name": "localStorage",
-            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
           }
         ],
         "eslint/no-restricted-properties": [
@@ -127,7 +135,7 @@
           {
             "object": "window",
             "property": "localStorage",
-            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
           }
         ]
       }

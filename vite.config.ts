@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
-import { loadConfig } from './src/server/config.ts';
+import { loadConfig } from './src/platform/server/config.ts';
 
 const config = loadConfig();
 

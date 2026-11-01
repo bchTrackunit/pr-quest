@@ -14,8 +14,8 @@
     "yarn": "4.13.0"
   },
   "scripts": {
-    "dev": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"tsx watch src/server/main.ts\" \"vite\"",
-    "start": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"tsx src/server/main.ts\" \"vite\"",
+    "dev": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"tsx watch src/app/server/main.ts\" \"vite\"",
+    "start": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"tsx src/app/server/main.ts\" \"vite\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint",
