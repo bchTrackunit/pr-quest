@@ -322,11 +322,12 @@ The commands take `DATABASE_URL` and the master keys from the environment only, 
 arguments, so they stay out of shell history, and never print them. Results go to stdout, failures
 to stderr, and a failure exits 1.
 
-To roll forward, run `db-migrate` with the new build's code, then deploy it. Migrations only go
-forward, and `migrate` refuses a database that a newer build migrated. To roll back, deploy the
-older build: it starts, with a warning, beside migrations it doesn't know, as long as they only
-add things. Write a change that an older build can't run beside, such as dropping or renaming a
-column, as its own later migration with `breaking: true`; once that has run, older builds refuse
+To roll forward, run `db-migrate` with the new build's code, then deploy it; a release command
+that runs `migrate` before every deploy does both. Migrations only go forward. To roll back,
+deploy the older build: as long as the newer build's migrations only add things, the older
+build's `migrate` warns about them and runs nothing, and the server starts with a warning. Write a
+change that an older build can't run beside, such as dropping or renaming a column, as its own
+later migration with `breaking: true`. Once that has run, older builds refuse both to migrate and
 to start, and rolling back past it means restoring a backup.
 
 When `startServer` opens the database from `DATABASE_URL`, the identity resolver gets it as

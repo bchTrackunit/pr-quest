@@ -50,6 +50,26 @@ describe('runDbCommand', () => {
     expect(output).toEqual(['The database schema is up to date']);
   });
 
+  test('migrate lets a rollback through: it warns about a newer build and runs nothing', async () => {
+    await run(['migrate']);
+    await database.db.query("INSERT INTO schema_migrations (id) VALUES ('9999_added_table')");
+    output = [];
+
+    expect(await run(['migrate'])).toBe(0);
+    expect(output).toEqual([]);
+    expect(errors).toEqual([expect.stringMatching(/newer version of PR Quest.*9999_added_table/)]);
+  });
+
+  test('migrate refuses a database a newer build changed incompatibly', async () => {
+    await run(['migrate']);
+    await database.db.query(
+      "INSERT INTO schema_migrations (id, breaking) VALUES ('9999_dropped_column', true)",
+    );
+
+    expect(await run(['migrate'])).toBe(1);
+    expect(errors.join('\n')).toMatch(/Failed: .*9999_dropped_column/);
+  });
+
   test('status lists what migrate would run and fails while anything is pending', async () => {
     expect(await run(['status'])).toBe(1);
     expect(output.join('\n')).toMatch(/Pending: 0001_users_documents_secrets/);

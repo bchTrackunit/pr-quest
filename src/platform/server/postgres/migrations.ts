@@ -104,16 +104,28 @@ export interface SchemaCheckOptions {
   onWarning?: (message: string) => void;
 }
 
-/** Runs every pending migration and resolves to the ids it ran. Safe to run from several processes. */
+/**
+ * Runs every pending migration and resolves to the ids it ran. Safe to run from several processes.
+ * After a rollback, the database may have migrations from a newer build: when none is `breaking`,
+ * it warns and runs nothing, so a release command that always migrates doesn't block the rollback.
+ */
 export async function migrate(
   db: Database,
   migrations: ReadonlyArray<Migration> = MIGRATIONS,
+  options: SchemaCheckOptions = {},
 ): Promise<Array<string>> {
   return await db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK]);
     await tx.query(CREATE_LEDGER);
     const applied = await appliedMigrations(tx);
-    refuseUnknown(statusOf(applied, migrations).unknown);
+    const { unknown, breaking } = statusOf(applied, migrations);
+    refuseUnknown(breaking);
+    if (unknown.length > 0) {
+      options.onWarning?.(
+        `The database has migrations from a newer version of PR Quest (${unknown.join(', ')}), so this version runs none of its own. Deploy the newer one to migrate further.`,
+      );
+      return [];
+    }
     const ran: Array<string> = [];
     for (const migration of migrations) {
       if (applied.some((row) => row.id === migration.id)) {

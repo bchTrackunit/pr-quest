@@ -74,12 +74,38 @@ describe('migrate', () => {
     }
   });
 
-  test('refuses to migrate a database a newer build migrated, before changing anything', async () => {
+  test('after a rollback, warns about additive migrations from a newer build and runs nothing', async () => {
     const { db } = database;
-    await migrate(db);
-    await db.query("INSERT INTO schema_migrations (id) VALUES ('9999_from_the_future')");
+    const newer: Array<Migration> = [
+      ...MIGRATIONS,
+      { id: '9999_added_table', statements: ['CREATE TABLE added_later (x int)'] },
+    ];
+    await migrate(db, newer);
+    const warnings: Array<string> = [];
+    const olderWithPending: Array<Migration> = [
+      ...MIGRATIONS,
+      { id: '0500_never_shipped', statements: ['CREATE TABLE never_shipped (x int)'] },
+    ];
 
-    await expect(migrate(db)).rejects.toThrow(/newer version of PR Quest.*9999_from_the_future/);
+    expect(await migrate(db, MIGRATIONS, { onWarning: (line) => warnings.push(line) })).toEqual([]);
+    expect(await migrate(db, olderWithPending, { onWarning: () => undefined })).toEqual([]);
+
+    expect(warnings).toEqual([
+      expect.stringMatching(/newer version of PR Quest.*9999_added_table/),
+    ]);
+    expect((await db.query("SELECT to_regclass('never_shipped') IS NULL AS absent")).rows).toEqual([
+      { absent: true },
+    ]);
+  });
+
+  test('refuses to migrate a database a newer build changed incompatibly, before changing anything', async () => {
+    const { db } = database;
+    await migrate(db, [
+      ...MIGRATIONS,
+      { id: '9999_dropped_column', statements: ['SELECT 1'], breaking: true },
+    ]);
+
+    await expect(migrate(db)).rejects.toThrow(/newer version of PR Quest.*9999_dropped_column/);
   });
 
   test('records whether each migration breaks older builds', async () => {

@@ -4,7 +4,7 @@ import {
   PREVIOUS_MASTER_KEYS_VARIABLE,
 } from '../../platform/server/envelope.ts';
 import { connectPostgres, type Database } from '../../platform/server/postgres/database.ts';
-import { migrate, schemaStatus } from '../../platform/server/postgres/migrations.ts';
+import { migrate, MIGRATIONS, schemaStatus } from '../../platform/server/postgres/migrations.ts';
 import { rewrapDataKeys } from '../../platform/server/postgres/secrets.ts';
 
 const USAGE = 'Usage: db <migrate | status | rewrap-keys>';
@@ -67,12 +67,14 @@ type Command = (
 ) => Promise<number>;
 
 const COMMANDS = {
-  migrate: async (db, { out }) => {
-    const ran = await migrate(db);
+  migrate: async (db, { out, err }) => {
+    const warnings: Array<string> = [];
+    const ran = await migrate(db, MIGRATIONS, { onWarning: (message) => warnings.push(message) });
+    warnings.forEach((message) => err(message));
     for (const id of ran) {
       out(`Ran migration ${id}`);
     }
-    if (ran.length === 0) {
+    if (ran.length === 0 && warnings.length === 0) {
       out('The database schema is up to date');
     }
     return 0;
