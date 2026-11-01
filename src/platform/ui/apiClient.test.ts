@@ -38,7 +38,11 @@ afterEach(() => {
 describe('apiRequest', () => {
   test.each([
     ['discardRun without a body', () => discardRun('run-1'), '{}'],
-    ['postRun with the default body', () => postRun('run-1'), '{}'],
+    [
+      'postRun with the accepted findings',
+      () => postRun('run-1', { findingIndexes: [0, 2] }),
+      '{"findingIndexes":[0,2]}',
+    ],
     ['startReview with a model', () => startReview('o/r#1', { model: 'm' }), '{"model":"m"}'],
   ])('sends %s as JSON', async (_label, call, body) => {
     await call();

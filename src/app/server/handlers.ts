@@ -16,6 +16,7 @@ import { GitHubApiError, NotSignedInError } from '../../platform/server/githubAp
 import type { ReviewRunService } from '../../features/reviews/server/index.ts';
 import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
 import { ModelIdSchema, parseBody } from '../../platform/server/validation.ts';
+import { acceptedFindingIndexes } from '../../shared/findingDecisions.ts';
 
 const MAX_COMMENT_LENGTH = 65_536;
 
@@ -42,7 +43,11 @@ const FindingIndexSchema = z.number().int().nonnegative();
 
 const PostReviewSchema = z.object({
   event: z.enum(['comment', 'requestChanges']).optional(),
-  findingIndexes: z.array(FindingIndexSchema).max(1000).optional(),
+  findingIndexes: z
+    .array(FindingIndexSchema, {
+      error: 'Send the accepted findings to post; an empty list posts only the summary',
+    })
+    .max(1000),
 });
 
 const DecideFindingsSchema = z.object({
@@ -229,16 +234,24 @@ function buildDraft(
   if (!result) {
     throw new ApiError(409, 'conflict', 'This review has no result to post');
   }
-  const indexes = request.findingIndexes
-    ? [...new Set(request.findingIndexes)].sort((a, b) => a - b)
-    : undefined;
-  const outOfRange = indexes?.find((index) => index >= result.findings.length);
+  const indexes = [...new Set(request.findingIndexes)].sort((a, b) => a - b);
+  const outOfRange = indexes.find((index) => index >= result.findings.length);
   if (outOfRange !== undefined) {
     throw new ApiError(400, 'badRequest', `findingIndexes: ${outOfRange} is out of range`);
   }
-  const findings = indexes
-    ? indexes.flatMap((index) => result.findings[index] ?? [])
-    : result.findings;
+  // The saved decisions decide what is posted; the request only confirms what the player saw.
+  const accepted = acceptedFindingIndexes(run);
+  if (
+    indexes.length !== accepted.length ||
+    indexes.some((index, position) => index !== accepted[position])
+  ) {
+    throw new ApiError(
+      409,
+      'conflict',
+      'The accepted findings changed since you confirmed. Check them and post again.',
+    );
+  }
+  const findings = accepted.flatMap((index) => result.findings[index] ?? []);
   const draft: ReviewDraft = {
     event: request.event ?? 'comment',
     summary: result.summary,

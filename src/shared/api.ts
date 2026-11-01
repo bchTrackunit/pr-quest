@@ -493,8 +493,13 @@ export interface DecideFindingsRequest {
 export interface PostReviewRequest {
   /** GitHub review event. Defaults to `comment`. Approving is a separate, explicit action. */
   event?: PostReviewEvent;
-  /** Indexes into `result.findings` to post; all findings when omitted. */
-  findingIndexes?: Array<number>;
+  /**
+   * The accepted findings the player confirmed, as indexes into `result.findings`; `[]` posts only
+   * the summary. They must be exactly the run's accepted findings, or the server posts nothing and
+   * answers `conflict`. A request without them is refused with `badRequest` rather than posting
+   * every finding, because that could post findings the player rejected.
+   */
+  findingIndexes: Array<number>;
 }
 
 export interface PostReviewResponse {
