@@ -108,7 +108,8 @@ describe('migrateLegacyState', () => {
     ]);
   });
 
-  test('records the receiving login before copying, so a crash mid-copy hands nothing to another user', async () => {
+  // Root ignores the read-only folder this test uses to stop the migration part-way.
+  test.skipIf(process.getuid?.() === 0)('records the receiving login before copying, so a crash mid-copy hands nothing to another user', async () => {
     await writeFile(join(dir, 'state.json'), LEGACY_STATE);
     await mkdir(join(dir, 'users', 'player'), { recursive: true });
     // A read-only state folder fails the rename of the original right after the copy, like a crash.
@@ -136,6 +137,20 @@ describe('migrateLegacyState', () => {
     const result = await migrateLegacyState(dir, 'player', { now: () => NOW });
 
     expect(result).toEqual({ migrated: ['state.json'] });
+    expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
+  });
+
+  test('keeps the shared state for a receiver who has not got it yet when someone else signs in first', async () => {
+    await mkdir(join(dir, 'users'), { recursive: true });
+    await writeFile(join(dir, 'users', '.legacy-owner'), 'player\n');
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+
+    const other = await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
+    const owner = await migrateLegacyState(dir, 'player', { now: () => NOW });
+
+    expect(other).toEqual({ migrated: [] });
+    await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
+    expect(owner).toEqual({ migrated: ['state.json'] });
     expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
   });
 

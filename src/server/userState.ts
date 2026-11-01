@@ -70,7 +70,7 @@ async function migrate(
   const stamp = timestamp((options.now ?? (() => new Date()))());
   if (owner === undefined && !hasState && (await anyLegacyFile(stateDir))) {
     // Claimed before copying: a crash part-way must not leave the shared state to the next login.
-    await writeFile(ownerFile, `${login}\n`, { mode: 0o600 });
+    await writeOwner(ownerFile, login);
     owner = recorded = login;
   }
   const migrated: Array<string> = [];
@@ -91,7 +91,11 @@ async function migrate(
       await rename(temp, target);
       await rename(legacy, `${legacy}.migrated-to-${login}-${stamp}.bak`);
       migrated.push(name);
-    } else if (owner !== undefined) {
+    } else if (
+      owner !== undefined &&
+      // Left in place for a receiver whose migration stopped before this file reached them.
+      (owner === login || (await exists(join(usersDir, owner, name))))
+    ) {
       const orphan = await setAside(legacy, stamp);
       options.onWarning?.(
         `${name} reappeared after the shared state went to ${owner}; it was moved to ${orphan} and given to nobody`,
@@ -100,9 +104,16 @@ async function migrate(
   }
   const receiver = owner ?? (migrated.length > 0 ? login : undefined);
   if (receiver !== undefined && receiver !== recorded) {
-    await writeFile(ownerFile, `${receiver}\n`, { mode: 0o600 });
+    await writeOwner(ownerFile, receiver);
   }
   return { migrated };
+}
+
+/** Atomically, so a crash can't leave an empty owner file that lets the next login claim the state. */
+async function writeOwner(ownerFile: string, login: string): Promise<void> {
+  const temp = `${ownerFile}.${process.pid}.tmp`;
+  await writeFile(temp, `${login}\n`, { mode: 0o600 });
+  await rename(temp, ownerFile);
 }
 
 async function anyLegacyFile(stateDir: string): Promise<boolean> {

@@ -5,7 +5,10 @@ import type { ResolvedToken } from './githubToken.ts';
 
 /** A failed `/user` lookup is retried after this long rather than on every request. */
 const IDENTITY_FAILURE_TTL_MS = 30_000;
-/** A revoked token stops showing as signed in after at most this long, even without a 401. */
+/**
+ * A revoked token stops showing as signed in after at most this long, even if no other call got a
+ * 401, as long as GitHub can be reached to say so.
+ */
 const IDENTITY_TTL_MS = 10 * 60_000;
 
 /** One player's services: their state, game, reviews and quest polling. */
@@ -159,6 +162,8 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
   private async identify(token: ResolvedToken): Promise<GitHubViewer> {
     try {
       const viewer = await this.lookUp(token.token);
+      // Only the current token is kept, so a signed-out token doesn't stay in memory.
+      this.confirmed.clear();
       this.confirmed.set(token.token, viewer);
       return viewer;
     } catch (error) {
