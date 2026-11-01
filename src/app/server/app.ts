@@ -213,8 +213,11 @@ export async function createApp(options: AppOptions): Promise<App> {
    * must not load a second copy that a run still finishing in the old session would overwrite.
    */
   const stores = new Map<string, Promise<StateStore>>();
-  /** Local games live in a folder per login, hosted ones under the account id, so key by both. */
-  const userKey = ({ id, login }: GitHubUser): string => `${id}:${login}`;
+  /**
+   * Hosted games belong to the account id, so a rename keeps the open store; a local game lives in
+   * a folder per login, so a rename opens that login's folder.
+   */
+  const userKey = ({ id, login }: GitHubUser): string => (hosted ? String(id) : login);
 
   const openUser = async (session: SessionContext): Promise<UserServices> => {
     const { token } = session;

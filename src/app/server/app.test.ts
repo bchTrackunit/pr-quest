@@ -741,6 +741,37 @@ describe('createApp in hosted mode', () => {
     );
   });
 
+  test("keeps one copy of a renamed player's game, as hosted games belong to the account id", async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const games: Array<string> = [];
+    const inner = perUserStorage();
+    await start({
+      config: hostedConfig(),
+      identity: async (given) => {
+        context = given;
+        return headerIdentity(given);
+      },
+      storage: {
+        ...inner,
+        gameState: async (user) => {
+          games.push(user.login);
+          return inner.gameState(user);
+        },
+      },
+    });
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+    const token = async () => GH_TOKEN;
+
+    const before = await context.openUser({ user: { id: 4101, login: 'before' }, token });
+    before.stop();
+    const after = await context.openUser({ user: { id: 4101, login: 'after' }, token });
+    after.stop();
+
+    expect(games).toEqual(['before']);
+  });
+
   test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
     const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
       ...(await headerIdentity(context)),
