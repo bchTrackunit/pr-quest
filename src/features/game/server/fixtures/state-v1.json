@@ -1,0 +1,234 @@
+{
+  "version": 1,
+  "game": {
+    "xp": 90,
+    "achievements": [
+      {
+        "id": "first-blood",
+        "unlockedAt": "2026-10-30T20:56:08.445Z"
+      }
+    ],
+    "counters": {
+      "reviewsPosted": 2,
+      "approvals": 2,
+      "changesRequested": 0,
+      "agentReviews": 5,
+      "teamReviews": 2,
+      "bossesSlain": 0,
+      "quickDraws": 0
+    },
+    "streakDays": 2,
+    "rewardedApprovals": ["Acme/widgets#101", "Acme/gizmos#5"],
+    "lastReviewDate": "2026-10-31"
+  },
+  "runs": [
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000001",
+        "questId": "Acme/widgets#100",
+        "quest": {
+          "title": "Add the widget cache",
+          "repo": { "owner": "Acme", "name": "widgets" },
+          "number": 100,
+          "githubUrl": "https://github.com/Acme/widgets/pull/100"
+        },
+        "agentId": "bc-00000000-0000-0000-0000-000000000001",
+        "runId": "run-00000000-0000-0000-0000-000000000001",
+        "status": "finished",
+        "disposition": "posted",
+        "startedAt": "2026-10-30T15:44:20.290Z",
+        "finishedAt": "2026-10-30T15:45:13.007Z",
+        "result": {
+          "summary": "The cache never expires.",
+          "verdict": "requestChanges",
+          "findings": [
+            { "file": "src/cache.ts", "line": 12, "severity": "major", "body": "No TTL." },
+            { "file": "src/cache.ts", "severity": "nit", "body": "Naming." }
+          ]
+        },
+        "postedReviewUrl": "https://github.com/Acme/widgets/pull/100#pullrequestreview-1"
+      },
+      "quest": {
+        "id": "Acme/widgets#100",
+        "title": "Add the widget cache",
+        "repo": { "owner": "Acme", "name": "widgets" },
+        "number": 100,
+        "githubUrl": "https://github.com/Acme/widgets/pull/100",
+        "sourceBranch": "feature/cache",
+        "targetBranch": "main",
+        "headSha": "b347c2f0bc6d0bc4d7dfc29f0bfb38ddb932b0ae",
+        "difficulty": "Normal",
+        "requestKind": "team",
+        "requestedAt": "2026-10-29T02:56:38Z"
+      }
+    },
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000002",
+        "questId": "Acme/widgets#100",
+        "quest": {
+          "title": "Add the widget cache",
+          "repo": { "owner": "Acme", "name": "widgets" },
+          "number": 100,
+          "githubUrl": "https://github.com/Acme/widgets/pull/100"
+        },
+        "provider": "claude",
+        "model": "claude-sonnet-5-5",
+        "status": "finished",
+        "disposition": "pending",
+        "startedAt": "2026-10-30T16:01:00.000Z",
+        "finishedAt": "2026-10-30T16:02:10.000Z",
+        "result": {
+          "summary": "Same concern about expiry.",
+          "verdict": "comment",
+          "findings": [],
+          "omitted": [{ "file": "yarn.lock", "reason": "lockfile" }]
+        }
+      },
+      "quest": {
+        "id": "Acme/widgets#100",
+        "title": "Add the widget cache",
+        "repo": { "owner": "Acme", "name": "widgets" },
+        "number": 100,
+        "githubUrl": "https://github.com/Acme/widgets/pull/100",
+        "sourceBranch": "feature/cache",
+        "targetBranch": "main",
+        "headSha": "b347c2f0bc6d0bc4d7dfc29f0bfb38ddb932b0ae",
+        "difficulty": "Normal",
+        "requestKind": "team",
+        "requestedAt": "2026-10-29T02:56:38Z"
+      }
+    },
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000003",
+        "questId": "Acme/gadgets#7",
+        "quest": {
+          "title": "Fix a typo",
+          "repo": { "owner": "Acme", "name": "gadgets" },
+          "number": 7,
+          "githubUrl": "https://github.com/Acme/gadgets/pull/7"
+        },
+        "provider": "cursor",
+        "agentId": "bc-00000000-0000-0000-0000-000000000003",
+        "runId": "run-00000000-0000-0000-0000-000000000003",
+        "status": "finished",
+        "disposition": "posted",
+        "startedAt": "2026-10-31T09:10:00.000Z",
+        "finishedAt": "2026-10-31T09:12:00.000Z",
+        "result": {
+          "summary": "Fine.",
+          "verdict": "approve",
+          "findings": [{ "file": "README.md", "severity": "nit", "body": "Another typo." }]
+        },
+        "postedReviewUrl": "https://github.com/Acme/gadgets/pull/7#pullrequestreview-2"
+      },
+      "quest": {
+        "id": "Acme/gadgets#7",
+        "title": "Fix a typo",
+        "repo": { "owner": "Acme", "name": "gadgets" },
+        "number": 7,
+        "githubUrl": "https://github.com/Acme/gadgets/pull/7",
+        "sourceBranch": "fix/typo",
+        "targetBranch": "main",
+        "headSha": "858b68ad68dac14672a6f8883965e4c8d4a49489",
+        "difficulty": "Trivial",
+        "requestKind": "direct",
+        "requestedAt": "2026-10-31T08:00:00Z"
+      }
+    },
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000004",
+        "questId": "Acme/widgets#101",
+        "quest": {
+          "title": "Bump the widget SDK",
+          "repo": { "owner": "Acme", "name": "widgets" },
+          "number": 101,
+          "githubUrl": "https://github.com/Acme/widgets/pull/101"
+        },
+        "provider": "claude",
+        "status": "finished",
+        "disposition": "discarded",
+        "startedAt": "2026-10-31T10:00:00.000Z",
+        "finishedAt": "2026-10-31T10:01:00.000Z",
+        "result": { "summary": "Fine.", "verdict": "approve", "findings": [] }
+      },
+      "quest": {
+        "id": "Acme/widgets#101",
+        "title": "Bump the widget SDK",
+        "repo": { "owner": "Acme", "name": "widgets" },
+        "number": 101,
+        "githubUrl": "https://github.com/Acme/widgets/pull/101",
+        "sourceBranch": "chore/sdk",
+        "targetBranch": "main",
+        "headSha": "7bc27152b62ba15d334b2ed9042af8dae348aaa7",
+        "difficulty": "Trivial",
+        "requestKind": "team",
+        "requestedAt": "2026-10-31T09:30:00Z"
+      }
+    },
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000005",
+        "questId": "Acme/widgets#102",
+        "quest": {
+          "title": "Rewrite the widget engine",
+          "repo": { "owner": "Acme", "name": "widgets" },
+          "number": 102,
+          "githubUrl": "https://github.com/Acme/widgets/pull/102"
+        },
+        "agentId": "bc-00000000-0000-0000-0000-000000000005",
+        "runId": "run-00000000-0000-0000-0000-000000000005",
+        "status": "finished",
+        "disposition": "pending",
+        "startedAt": "2026-10-31T11:00:00.000Z",
+        "finishedAt": "2026-10-31T11:20:00.000Z",
+        "result": { "summary": "Large but sound.", "verdict": "comment", "findings": [] }
+      },
+      "quest": {
+        "id": "Acme/widgets#102",
+        "title": "Rewrite the widget engine",
+        "repo": { "owner": "Acme", "name": "widgets" },
+        "number": 102,
+        "githubUrl": "https://github.com/Acme/widgets/pull/102",
+        "sourceBranch": "feature/engine",
+        "targetBranch": "main",
+        "headSha": "0123456789abcdef0123456789abcdef01234567",
+        "difficulty": "Boss",
+        "requestKind": "direct",
+        "requestedAt": "2026-09-20T10:00:00Z"
+      }
+    },
+    {
+      "run": {
+        "id": "review-00000000-0000-0000-0000-000000000006",
+        "questId": "Acme/gizmos#5",
+        "quest": {
+          "title": "Add gizmo metrics",
+          "repo": { "owner": "Acme", "name": "gizmos" },
+          "number": 5,
+          "githubUrl": "https://github.com/Acme/gizmos/pull/5"
+        },
+        "agentId": "bc-00000000-0000-0000-0000-000000000006",
+        "status": "error",
+        "disposition": "pending",
+        "startedAt": "2026-10-31T12:00:00.000Z",
+        "finishedAt": "2026-10-31T12:00:05.000Z",
+        "error": { "message": "The agent run failed" }
+      },
+      "quest": {
+        "id": "Acme/gizmos#5",
+        "title": "Add gizmo metrics",
+        "repo": { "owner": "Acme", "name": "gizmos" },
+        "number": 5,
+        "githubUrl": "https://github.com/Acme/gizmos/pull/5",
+        "sourceBranch": "feature/metrics",
+        "targetBranch": "main",
+        "difficulty": "Normal",
+        "requestKind": "direct",
+        "requestedAt": "2026-10-31T11:45:00Z"
+      }
+    }
+  ]
+}

@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { GameService } from './game.ts';
 import { initialGameState } from './gamification.ts';
-import { StateStore, type StoredRun } from './store.ts';
+import { backfillLedger, StateStore, type StoredRun } from './store.ts';
 
 let dir: string;
 
@@ -66,7 +67,7 @@ describe('StateStore', () => {
   test('starts from an empty game when there is no state file', async () => {
     const store = await StateStore.open(join(dir, 'nested'));
 
-    expect(store.state).toEqual({ version: 1, game: initialGameState(), runs: [] });
+    expect(store.state).toEqual({ version: 2, game: initialGameState(), runs: [] });
   });
 
   test('persists updates so a reopened store reads them back', async () => {
@@ -189,5 +190,150 @@ describe('StateStore', () => {
     expect(store.state.game).toEqual(initialGameState());
     expect((await readdir(dir)).some((name) => name.startsWith('state.json.corrupt-'))).toBe(true);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('state.json.corrupt-'));
+  });
+
+  test('refuses a state file from a newer PR Quest and leaves it in place', async () => {
+    const newer = JSON.stringify({ version: 3, game: {}, runs: [] });
+    await writeFile(join(dir, 'state.json'), newer);
+
+    await expect(StateStore.open(dir)).rejects.toThrow(/newer version of PR Quest/);
+    expect(await readFile(join(dir, 'state.json'), 'utf8')).toBe(newer);
+    expect(await readdir(dir)).toEqual(['state.json']);
+  });
+});
+
+describe('migrating version 1 state', () => {
+  const FIXTURE = new URL('./fixtures/state-v1.json', import.meta.url);
+  /** The fixture's last action was on Saturday 31 October; this is the Sunday after, at noon. */
+  const NOW = new Date(2026, 10, 1, 12);
+
+  let original: string;
+  let v1: { game: Record<string, unknown>; runs: Array<{ quest: unknown }> };
+
+  beforeEach(async () => {
+    original = await readFile(FIXTURE, 'utf8');
+    v1 = JSON.parse(original);
+    await writeFile(join(dir, 'state.json'), original);
+  });
+
+  const openGame = async () => {
+    const store = await StateStore.open(dir);
+    return {
+      store,
+      game: new GameService(store, { broadcast: () => undefined }, { now: () => NOW }),
+    };
+  };
+
+  test('keeps XP, level, counters, streak, achievements, approvals and runs exactly', async () => {
+    const { store, game } = await openGame();
+
+    expect(game.player()).toEqual({
+      xp: 90,
+      level: 1,
+      xpIntoLevel: 90,
+      xpForNextLevel: 100,
+      streakDays: 2,
+      lastReviewDate: '2026-10-31',
+      achievements: [{ id: 'first-blood', unlockedAt: '2026-10-30T20:56:08.445Z' }],
+      counters: {
+        reviewsPosted: 2,
+        approvals: 2,
+        changesRequested: 0,
+        agentReviews: 5,
+        teamReviews: 2,
+        bossesSlain: 0,
+        quickDraws: 0,
+      },
+    });
+    const { ledger, ...game1 } = store.state.game;
+    expect(game1).toEqual(v1.game);
+    expect(store.state.runs).toHaveLength(6);
+    expect(store.state.runs.map(({ quest }) => quest)).toEqual(v1.runs.map((entry) => entry.quest));
+    expect(store.state.runs.map(({ run }) => run.provider)).toEqual([
+      'cursor',
+      'claude',
+      'cursor',
+      'claude',
+      'cursor',
+      'cursor',
+    ]);
+    expect(ledger).toBeDefined();
+  });
+
+  test('backfills the ledger from the approvals and the stored runs', async () => {
+    const { store } = await openGame();
+
+    expect(store.state.game.ledger).toEqual({
+      repos: ['acme/gizmos', 'acme/widgets', 'acme/gadgets'],
+      authors: [],
+      botPrs: [],
+      changesRequestedPrs: [],
+      bossApprovals: 0,
+      highSeverityReviews: 1,
+      reviewedPrs: ['acme/widgets#100', 'acme/gadgets#7', 'acme/widgets#101', 'acme/widgets#102'],
+      runProviders: {
+        'acme/widgets#100': ['cursor', 'claude'],
+        'acme/gadgets#7': ['cursor'],
+        'acme/widgets#101': ['claude'],
+        'acme/widgets#102': ['cursor'],
+      },
+    });
+  });
+
+  test('shows progress from the backfill but unlocks nothing until the next game event', async () => {
+    const { store, game } = await openGame();
+    const status = (id: string) => game.achievements().find((entry) => entry.id === id);
+
+    expect(status('explorer')).toMatchObject({ progress: 3, target: 10 });
+    expect(status('centurion-bronze')).toMatchObject({ progress: 4, target: 10 });
+    expect(status('agent-commander')).toMatchObject({ progress: 5, target: 10 });
+    expect(status('second-opinion')?.unlockedAt).toBeUndefined();
+    expect(await readFile(join(dir, 'state.json'), 'utf8')).toBe(original);
+
+    await game.recordQueueChecked(3);
+
+    expect(game.player().achievements.map((entry) => entry.id)).toEqual([
+      'first-blood',
+      'eagle-eye',
+      'second-opinion',
+    ]);
+    expect(game.player().xp).toBe(90 + 25 + 50);
+    expect(store.state.game.achievements[0]).toEqual({
+      id: 'first-blood',
+      unlockedAt: '2026-10-30T20:56:08.445Z',
+    });
+  });
+
+  test('writes version 2 on the next change and keeps a copy of the version 1 file', async () => {
+    const { game } = await openGame();
+
+    await game.recordQueueChecked(3);
+
+    const written = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
+    expect(written.version).toBe(2);
+    expect(written.game.ledger.highSeverityReviews).toBe(1);
+    expect(await readFile(join(dir, 'state.json.v1.bak'), 'utf8')).toBe(original);
+    expect((await stat(join(dir, 'state.json.v1.bak'))).mode & 0o777).toBe(0o600);
+    const reopened = await StateStore.open(dir);
+    expect(reopened.state.game.xp).toBe(165);
+    expect(reopened.state.game.ledger).toEqual(written.game.ledger);
+  });
+
+  test('never overwrites the first version 1 copy', async () => {
+    await writeFile(join(dir, 'state.json.v1.bak'), 'first copy');
+
+    await StateStore.open(dir);
+
+    expect(await readFile(join(dir, 'state.json.v1.bak'), 'utf8')).toBe('first copy');
+  });
+
+  test('counts approvals of Boss PRs whose run kept the tier', () => {
+    const boss: StoredRun = {
+      ...storedRun,
+      quest: { ...storedRun.quest, id: 'o/r#1', difficulty: 'Boss' },
+    };
+
+    expect(backfillLedger(['o/r#1', 'o/r#2'], [boss]).bossApprovals).toBe(1);
+    expect(backfillLedger(['o/r#2'], [boss]).bossApprovals).toBe(0);
   });
 });
