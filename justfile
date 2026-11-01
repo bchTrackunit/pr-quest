@@ -12,7 +12,7 @@ install:
 dev:
     yarn dev
 
-# Run the API without file watching, plus the UI dev server
+# Run the production build (`just build` first): the API and the UI on one port
 start:
     yarn start
 
@@ -40,7 +40,7 @@ format-check:
 typecheck:
     yarn typecheck
 
-# Type-check, then build the UI into dist/
+# Type-check, then build the UI into dist/ and the server into dist-server/
 build:
     yarn build
 
