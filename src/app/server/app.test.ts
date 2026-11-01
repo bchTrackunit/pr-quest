@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { copyFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import {
   createServer,
@@ -9,13 +10,16 @@ import {
 } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createApp, type App, type AppOptions, type UserServices } from './app.ts';
 import type { AppSettings, SettingsStore } from '../../features/settings/server/index.ts';
+import { MasterKeyring } from '../../platform/server/envelope.ts';
 import { NotSignedInError } from '../../platform/server/githubApi.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
+import { openTestDatabase, type TestDatabase } from '../../platform/server/test-utils/postgres.ts';
+import { openPostgresStorage } from './postgresStorage.ts';
 import type { IdentityFactory } from './identity.ts';
 import type { Session } from './sessions.ts';
 import {
@@ -775,5 +779,82 @@ describe('createApp in hosted mode', () => {
     await start({ config: hostedConfig(), identity: headerIdentity, storage: perUserStorage() });
 
     expect((await send('GET', '/api/health')).body).toEqual({ ok: true });
+  });
+});
+
+describe('createApp on Postgres storage', () => {
+  const as = (token: string) => ({ 'X-Test-Token': token });
+  const ANTHROPIC_KEY = 'sk-ant-api03-POSTGRES-0000';
+  let database: TestDatabase;
+  let postgres: () => Promise<AppStorage>;
+
+  beforeAll(async () => {
+    database = await openTestDatabase();
+    const keyring = MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') });
+    postgres = () =>
+      openPostgresStorage(database.db, { keyring, warn: (message) => logs.push(message) });
+  });
+
+  beforeEach(async () => {
+    await database.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterAll(async () => {
+    await database.close();
+  });
+
+  test("keeps each player's settings, time zone and encrypted keys apart", async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+
+    await send(
+      'PUT',
+      '/api/settings',
+      { reviewProvider: 'claude', timeZone: 'Asia/Tokyo' },
+      as(GH_TOKEN),
+    );
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+
+    const mine = await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+    const theirs = await send('GET', '/api/settings', undefined, as(OAUTH_TOKEN));
+    expect(mine.body).toMatchObject({
+      reviewProvider: 'claude',
+      timeZone: 'Asia/Tokyo',
+      keys: { anthropic: { set: true, source: 'settings', last4: '0000' } },
+    });
+    expect(mine.text).not.toContain(ANTHROPIC_KEY);
+    expect(theirs.body).toMatchObject({
+      reviewProvider: 'cursor',
+      keys: { anthropic: { set: false } },
+    });
+    expect(theirs.body).not.toHaveProperty('timeZone');
+    const sealed = JSON.stringify(
+      (await database.db.query('SELECT sealed FROM user_secrets')).rows,
+    );
+    expect(sealed).not.toContain(ANTHROPIC_KEY);
+  });
+
+  test("shows the streak by the calendar of the player's time zone", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 07:00 UTC on the 12th is still the 11th in Los Angeles, the day after the last review.
+    vi.setSystemTime(new Date('2026-11-12T07:00:00Z'));
+    const storage = await postgres();
+    const seeded = await storage.gameState('brianchristensen');
+    await seeded.update((state) => ({
+      ...state,
+      game: { ...state.game, streakDays: 3, lastReviewDate: '2026-11-10' },
+    }));
+    await start({ config: hostedConfig(), identity: headerIdentity, storage });
+
+    await send('PUT', '/api/settings', { timeZone: 'UTC' }, as(GH_TOKEN));
+    const inUtc = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('PUT', '/api/settings', { timeZone: 'America/Los_Angeles' }, as(GH_TOKEN));
+    const inLosAngeles = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(inUtc.body).toMatchObject({ player: { streakDays: 0 } });
+    expect(inLosAngeles.body).toMatchObject({ player: { streakDays: 3 } });
   });
 });
