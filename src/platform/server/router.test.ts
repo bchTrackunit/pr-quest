@@ -15,8 +15,7 @@ import {
   type RouterOptions,
   trustedRequests,
 } from './router.ts';
-import type { AppConfig } from './config.ts';
-import { LOCAL_CONFIG } from './test-utils/config.ts';
+import { HOSTED_CONFIG, LOCAL_CONFIG } from './test-utils/config.ts';
 
 interface TestResponse {
   status: number;
@@ -337,13 +336,7 @@ describe('router', () => {
 });
 
 describe('trustedRequests', () => {
-  const HOSTED: AppConfig = {
-    ...LOCAL_CONFIG,
-    mode: 'hosted',
-    host: '0.0.0.0',
-    publicOrigin: 'https://pr-quest.example',
-    allowedHosts: ['pr-quest.example', 'pr-quest.fly.dev'],
-  };
+  const HOSTED = HOSTED_CONFIG;
   const PUBLIC = { Host: 'pr-quest.example', Origin: 'https://pr-quest.example' };
 
   describe('in local mode', () => {

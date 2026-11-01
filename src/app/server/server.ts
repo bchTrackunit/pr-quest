@@ -80,11 +80,6 @@ export async function startServer(
   const info = overrides.info ?? defaultInfo;
   const warn = overrides.warn ?? defaultWarn;
   assertSafeConfig(config);
-  if (config.mode === 'hosted' && (!overrides.identity || !overrides.storage)) {
-    throw new Error(
-      "Hosted mode needs an identity resolver and storage for many users. This build only has local mode's, which would let anyone act as the server's GitHub account.",
-    );
-  }
   const staticDir = usableStaticDir(overrides.staticDir, warn);
 
   const app = await createApp({

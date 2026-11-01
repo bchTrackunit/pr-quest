@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { type AppConfig, loadConfig } from '../../platform/server/config.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
-import { LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
+import { HOSTED_CONFIG, LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import { type RunningServer, startServer, type ServerOverrides } from './server.ts';
 
 vi.mock('@cursor/sdk', () => ({
@@ -140,15 +140,9 @@ describe('startServer', () => {
   });
 
   test('refuses hosted mode without a hosted identity and storage', async () => {
-    await expect(
-      start({
-        ...LOCAL_CONFIG,
-        mode: 'hosted',
-        host: '127.0.0.1',
-        publicOrigin: 'https://pr-quest.example',
-        allowedHosts: ['pr-quest.example'],
-      }),
-    ).rejects.toThrow(/hosted mode needs/i);
+    await expect(start({ ...HOSTED_CONFIG, host: '127.0.0.1' })).rejects.toThrow(
+      /hosted mode needs/i,
+    );
   });
 
   test('stops listening when closed', async () => {

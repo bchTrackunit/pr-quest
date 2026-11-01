@@ -393,8 +393,8 @@ export type ServerEventType = ServerEvent['type'];
 
 export interface HealthResponse {
   ok: true;
-  /** Which credentials are configured. Never carries the secret values. */
-  config: {
+  /** Local mode only: which credentials are configured. Never carries the secret values. */
+  config?: {
     linearApiKey: boolean;
     cursorApiKey: boolean;
     anthropicApiKey: boolean;

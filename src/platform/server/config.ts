@@ -35,9 +35,6 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
 export const DEFAULT_GITHUB_CLIENT_ID = '';
 
 interface BaseConfig {
-  linearApiKey?: string;
-  cursorApiKey?: string;
-  anthropicApiKey?: string;
   /** Enables "Sign in with GitHub"; without it PR Quest relies on the gh CLI's token. */
   githubClientId?: string;
   /** 0 picks a free port when the server starts in-process. */
@@ -50,12 +47,15 @@ interface BaseConfig {
 /** One player on their own machine. The server acts as them, so nothing but loopback may reach it. */
 export interface LocalConfig extends BaseConfig {
   mode: 'local';
+  linearApiKey?: string;
+  cursorApiKey?: string;
+  anthropicApiKey?: string;
   host: LoopbackHost;
   allowedHosts: ReadonlyArray<LoopbackHostname>;
   publicOrigin?: never;
 }
 
-/** Many players behind HTTPS. */
+/** Many players behind HTTPS. Each saves their own API keys, so none come from the environment. */
 export interface HostedConfig extends BaseConfig {
   mode: 'hosted';
   /** The address to listen on. */
@@ -64,9 +64,20 @@ export interface HostedConfig extends BaseConfig {
   publicOrigin: string;
   /** Lower-cased host names, without a port, that the Host header may name. */
   allowedHosts: ReadonlyArray<string>;
+  linearApiKey?: never;
+  cursorApiKey?: never;
+  anthropicApiKey?: never;
 }
 
 export type AppConfig = LocalConfig | HostedConfig;
+
+const ENV_API_KEYS = {
+  cursorApiKey: 'CURSOR_API_KEY',
+  anthropicApiKey: 'ANTHROPIC_API_KEY',
+  linearApiKey: 'LINEAR_API_KEY',
+} as const;
+type ApiKeyField = keyof typeof ENV_API_KEYS;
+const API_KEY_FIELDS = ['cursorApiKey', 'anthropicApiKey', 'linearApiKey'] as const;
 
 export interface LoadConfigOptions {
   env?: NodeJS.ProcessEnv;
@@ -100,15 +111,29 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     pick(env[name] ?? fileEnv[name] ?? legacyEnv[name]);
 
   const base: BaseConfig = {
-    linearApiKey: read('LINEAR_API_KEY'),
-    cursorApiKey: read('CURSOR_API_KEY'),
-    anthropicApiKey: read('ANTHROPIC_API_KEY'),
     githubClientId: read('PR_QUEST_GITHUB_CLIENT_ID') ?? nonEmpty(DEFAULT_GITHUB_CLIENT_ID),
     port: parsePort(read('PR_QUEST_PORT'), DEFAULT_SERVER_PORT, 'PR_QUEST_PORT'),
     uiPort: parsePort(read('PR_QUEST_UI_PORT'), DEFAULT_UI_PORT, 'PR_QUEST_UI_PORT'),
     stateDir,
   };
-  return { ...base, ...trustBoundary(read) };
+  const boundary = trustBoundary(read);
+  if (boundary.mode === 'hosted') {
+    for (const name of Object.values(ENV_API_KEYS)) {
+      if (read(name) !== undefined) {
+        throw new Error(
+          `${name} can't be set in hosted mode: every player would share it. Each player saves their own key in Settings.`,
+        );
+      }
+    }
+    return { ...base, ...boundary };
+  }
+  return {
+    ...base,
+    ...boundary,
+    linearApiKey: read(ENV_API_KEYS.linearApiKey),
+    cursorApiKey: read(ENV_API_KEYS.cursorApiKey),
+    anthropicApiKey: read(ENV_API_KEYS.anthropicApiKey),
+  };
 }
 
 type TrustBoundary =
@@ -131,6 +156,13 @@ export function assertSafeConfig(config: AppConfig): void {
     parseOrigin(config.publicOrigin);
     if (config.allowedHosts.length === 0) {
       throw new Error('Hosted mode needs at least one allowed host');
+    }
+    const keys: Partial<Record<ApiKeyField, unknown>> = config;
+    const shared = API_KEY_FIELDS.filter((field) => keys[field] !== undefined);
+    if (shared.length > 0) {
+      throw new Error(
+        `Hosted mode takes no API keys from the config (${shared.map((field) => ENV_API_KEYS[field]).join(', ')}): every player would share them`,
+      );
     }
     return;
   }

@@ -134,14 +134,27 @@ interface ScopedServices {
 export async function createApp(options: AppOptions): Promise<App> {
   const { config, info, warn } = options;
   assertSafeConfig(config);
+  const hosted = config.mode === 'hosted';
+  if (hosted && (!options.identity || !options.storage)) {
+    throw new Error(
+      "Hosted mode needs an identity resolver and storage for many users. This build only has local mode's, which would let anyone act as the server's GitHub account.",
+    );
+  }
   const storage = options.storage ?? createFileStorage(config.stateDir, { info, warn });
-  const envKeys: Partial<Record<ApiKeyName, string>> = {
-    cursor: config.cursorApiKey,
-    anthropic: config.anthropicApiKey,
-    linear: config.linearApiKey,
-  };
+  const envKeys: Partial<Record<ApiKeyName, string>> = hosted
+    ? {}
+    : {
+        cursor: config.cursorApiKey,
+        anthropic: config.anthropicApiKey,
+        linear: config.linearApiKey,
+      };
 
   const openScope = async (scope: StorageScope): Promise<ScopedServices> => {
+    if (hosted && scope.kind === 'machine') {
+      throw new Error(
+        "Hosted mode keeps keys and settings per player, but the identity resolver asked for the machine's",
+      );
+    }
     const [secrets, settings] = await Promise.all([
       storage.secrets(scope),
       storage.settings(scope),
@@ -177,7 +190,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     return opening;
   };
   // Opened now, so a secrets or settings file this build can't read stops the server at startup.
-  const machine = await servicesFor(MACHINE_SCOPE);
+  const machine = hosted ? undefined : await servicesFor(MACHINE_SCOPE);
 
   const fetchViewer = (token: string) =>
     new GitHubClient(
@@ -198,6 +211,8 @@ export async function createApp(options: AppOptions): Promise<App> {
       }),
       { onWarning: warn },
     );
+    // First, so a scope the app refuses leaves the player's game unopened.
+    const scoped = await servicesFor(identity.scopeFor(login));
     let opening = stores.get(login);
     const firstOpen = opening === undefined;
     if (!opening) {
@@ -205,11 +220,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       stores.set(login, opening);
       opening.catch(() => stores.delete(login));
     }
-    const [store, scoped, cache] = await Promise.all([
-      opening,
-      servicesFor(identity.scopeFor(login)),
-      storage.questCache(login),
-    ]);
+    const [store, cache] = await Promise.all([opening, storage.questCache(login)]);
     const events = new EventHub();
     const game = new GameService(store, events, { login });
     const runs = new ReviewRunService({
@@ -256,6 +267,9 @@ export async function createApp(options: AppOptions): Promise<App> {
   if (options.identity) {
     identity = await options.identity(context);
   } else {
+    if (!machine) {
+      throw new Error('Only local mode has a default identity resolver');
+    }
     local = new LocalIdentityResolver({
       ...context,
       secrets: machine.secrets,
@@ -335,14 +349,18 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   return {
     handlers: {
-      health: () => ({
-        ok: true,
-        config: {
-          linearApiKey: machine.apiKeys.status('linear').set,
-          cursorApiKey: machine.apiKeys.status('cursor').set,
-          anthropicApiKey: machine.apiKeys.status('anthropic').set,
-        },
-      }),
+      // Anyone can reach a hosted health check, so it says nothing about keys.
+      health: () =>
+        machine
+          ? {
+              ok: true,
+              config: {
+                linearApiKey: machine.apiKeys.status('linear').set,
+                cursorApiKey: machine.apiKeys.status('cursor').set,
+                anthropicApiKey: machine.apiKeys.status('anthropic').set,
+              },
+            }
+          : { ok: true },
       authStatus: perRequest('authStatus', authFor),
       startDeviceFlow: perRequest('startDeviceFlow', authFor),
       getDeviceFlow: perRequest('getDeviceFlow', authFor),

@@ -14,14 +14,15 @@ import type { Session } from './sessions.ts';
 import {
   type AppStorage,
   createFileStorage,
+  MACHINE_SCOPE,
   scopeKey,
   type StorageScope,
   userScope,
 } from './storage.ts';
 import type { CreateMessage } from '../../features/reviews/server/index.ts';
-import type { AppConfig } from '../../platform/server/config.ts';
+import type { AppConfig, HostedConfig } from '../../platform/server/config.ts';
 import { createRouter } from '../../platform/server/router.ts';
-import { LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
+import { HOSTED_CONFIG, LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import { SOURCE_DIFF, toolMessage } from '../../features/reviews/server/test-utils/claude.ts';
 import { fixture } from '../../features/quests/server/test-utils/fixtures.ts';
 
@@ -452,7 +453,10 @@ const headerIdentity: IdentityFactory<UserServices> = async ({ openUser, fetchVi
     warmUp: async () => undefined,
     close: () => {
       for (const session of open.values()) {
-        void session.then(({ services }) => services.stop());
+        void session.then(
+          ({ services }) => services.stop(),
+          () => undefined,
+        );
       }
     },
   };
@@ -540,7 +544,7 @@ describe('createApp with an injected identity and storage', () => {
     expect(settings).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
   });
 
-  test("never falls back to the gh CLI's token or offers the device flow", async () => {
+  test("never falls back to the gh CLI's token or offers the device flow (local mode)", async () => {
     ghToken = GH_TOKEN;
     await start({ identity: headerIdentity, storage: perUserStorage() });
 
@@ -554,5 +558,80 @@ describe('createApp with an injected identity and storage', () => {
       clientIdConfigured: false,
       account: { login: 'BrianChristensen' },
     });
+  });
+});
+
+const hostedConfig = (): HostedConfig => ({ ...HOSTED_CONFIG, stateDir: dir });
+
+/** `perUserStorage`, noting every scope whose keys or settings were opened. */
+function recordingStorage(): { storage: AppStorage; scopes: Array<string> } {
+  const inner = perUserStorage();
+  const scopes: Array<string> = [];
+  return {
+    scopes,
+    storage: {
+      ...inner,
+      secrets: async (scope) => {
+        scopes.push(scopeKey(scope));
+        return inner.secrets(scope);
+      },
+      settings: async (scope) => {
+        scopes.push(scopeKey(scope));
+        return inner.settings(scope);
+      },
+    },
+  };
+}
+
+describe('createApp in hosted mode', () => {
+  const as = (token: string) => ({ 'X-Test-Token': token });
+
+  test('refuses to start without an identity and storage for many players', async () => {
+    await expect(start({ config: hostedConfig() })).rejects.toThrow(/hosted mode needs/i);
+    await expect(start({ config: hostedConfig(), identity: headerIdentity })).rejects.toThrow(
+      /hosted mode needs/i,
+    );
+  });
+
+  test('refuses API keys in the config, which every player would share', async () => {
+    const withKey: AppConfig = Object.assign(hostedConfig(), { cursorApiKey: 'key_operator' });
+
+    await expect(
+      start({ config: withKey, identity: headerIdentity, storage: perUserStorage() }),
+    ).rejects.toThrow(/API keys/);
+  });
+
+  test("never opens the machine's keys or settings", async () => {
+    const { storage, scopes } = recordingStorage();
+    await start({ config: hostedConfig(), identity: headerIdentity, storage });
+
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+
+    expect(scopes.length).toBeGreaterThan(0);
+    expect(scopes).not.toContain('machine');
+  });
+
+  test('refuses an identity that puts a player on the machine scope', async () => {
+    const { storage, scopes } = recordingStorage();
+    const machineIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      scope: async () => MACHINE_SCOPE,
+      scopeFor: () => MACHINE_SCOPE,
+    });
+    await start({ config: hostedConfig(), identity: machineIdentity, storage });
+
+    const settings = await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+    const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(settings.status).toBe(500);
+    expect(player.status).toBe(500);
+    expect(scopes).not.toContain('machine');
+  });
+
+  test('answers the health check without saying which keys exist', async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: perUserStorage() });
+
+    expect((await send('GET', '/api/health')).body).toEqual({ ok: true });
   });
 });

@@ -197,6 +197,15 @@ describe('loadConfig', () => {
       expect(config.publicOrigin).toBe('https://pr-quest.example');
     });
 
+    test.each(['CURSOR_API_KEY', 'ANTHROPIC_API_KEY', 'LINEAR_API_KEY'])(
+      'refuses %s, which every player would share',
+      (name) => {
+        expect(() =>
+          loadConfig({ env: { ...hosted, [name]: 'key_operator' }, envFilePath }),
+        ).toThrow(name);
+      },
+    );
+
     test('requires a public origin', () => {
       expect(() => loadConfig({ env: { PR_QUEST_MODE: 'hosted' }, envFilePath })).toThrow(
         /PR_QUEST_PUBLIC_ORIGIN/,
