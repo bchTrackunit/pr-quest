@@ -119,8 +119,20 @@ export class PostgresDocument<TValue> {
   ): Promise<PostgresDocument<TValue>> {
     const onWarning = options.onWarning ?? (() => undefined);
     const row = await selectRow(db, key, '');
-    const value = row ? await decodeRow(db, key, codec, row, onWarning) : codec.empty();
-    return new PostgresDocument(db, key, codec, { value, revision: row?.revision ?? 0 }, onWarning);
+    const value = row && decodeBody(key, codec, row);
+    if (!row || value !== undefined) {
+      const readable = { value: value ?? codec.empty(), revision: row?.revision ?? 0 };
+      return new PostgresDocument(db, key, codec, readable, onWarning);
+    }
+    const loaded = await db.transaction(async (tx) => {
+      const locked = await selectRow(tx, key, 'FOR UPDATE');
+      const readable = locked && decodeBody(key, codec, locked);
+      if (!locked || readable !== undefined) {
+        return { value: readable ?? codec.empty(), revision: locked?.revision ?? 0 };
+      }
+      return await setAside(tx, key, codec, locked, onWarning);
+    });
+    return new PostgresDocument(db, key, codec, loaded, onWarning);
   }
 
   public get value(): TValue {
@@ -153,11 +165,16 @@ export class PostgresDocument<TValue> {
     mutate: (current: TValue) => TValue,
   ): Promise<{ value: TValue; revision: number }> {
     const row = await selectRow(tx, this.key, 'FOR UPDATE');
-    const revision = row?.revision ?? 0;
-    const base =
-      row && row.revision !== this.revision
-        ? await decodeRow(tx, this.key, this.codec, row, this.onWarning)
-        : this.current;
+    let revision = row?.revision ?? 0;
+    let base = this.current;
+    if (row && row.revision !== this.revision) {
+      const decoded = decodeBody(this.key, this.codec, row);
+      if (decoded === undefined) {
+        ({ value: base, revision } = await setAside(tx, this.key, this.codec, row, this.onWarning));
+      } else {
+        base = decoded;
+      }
+    }
     const next = mutate(base);
     if (next === base) {
       return { value: base, revision };
@@ -195,25 +212,42 @@ async function selectRow(
   return rowsOf(result, DocumentRowSchema)[0];
 }
 
-/** The row's value; an unreadable one is copied to the quarantine table and replaced by `empty`. */
-async function decodeRow<TValue>(
-  db: SqlClient,
+const sourceOf = (key: DocumentKey): string => `${userLabel(key.user)}'s ${key.kind} document`;
+
+/** The row's value, or `undefined` when this build can't read it. Throws when a newer one wrote it. */
+function decodeBody<TValue>(
+  key: DocumentKey,
+  codec: DocumentCodec<TValue>,
+  row: DocumentRow,
+): TValue | undefined {
+  refuseNewerVersion(row.body, codec.version, sourceOf(key), 'Deploy that version or newer.');
+  return codec.decode(row.body);
+}
+
+/**
+ * Copies the unreadable `row`, which `tx` holds locked, to the quarantine table and replaces it
+ * with the empty document, so the next open neither copies nor warns about it again.
+ */
+async function setAside<TValue>(
+  tx: SqlClient,
   key: DocumentKey,
   codec: DocumentCodec<TValue>,
   row: DocumentRow,
   onWarning: (message: string) => void,
-): Promise<TValue> {
-  const source = `${userLabel(key.user)}'s ${key.kind} document`;
-  refuseNewerVersion(row.body, codec.version, source, 'Deploy that version or newer.');
-  const value = codec.decode(row.body);
-  if (value !== undefined) {
-    return value;
-  }
-  await db.query(
+): Promise<{ value: TValue; revision: number }> {
+  await tx.query(
     `INSERT INTO user_documents_quarantine (github_id, kind, source_revision, body)
      VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT DO NOTHING`,
     [key.user.id, key.kind, row.revision, JSON.stringify(row.body)],
   );
-  onWarning(`${source} was unreadable; kept a copy in user_documents_quarantine and started fresh`);
-  return codec.empty();
+  const empty = codec.empty();
+  await tx.query(
+    `UPDATE user_documents SET body = $3::jsonb, revision = $4, updated_at = now()
+     WHERE github_id = $1 AND kind = $2 AND revision = $5`,
+    [key.user.id, key.kind, JSON.stringify(codec.encode(empty)), row.revision + 1, row.revision],
+  );
+  onWarning(
+    `${sourceOf(key)} was unreadable; kept a copy in user_documents_quarantine and started fresh`,
+  );
+  return { value: empty, revision: row.revision + 1 };
 }

@@ -173,6 +173,35 @@ describe('PostgresDocument', () => {
     await document.update(increment);
     expect(await storedRow()).toMatchObject({ body: { version: 2, count: 1 } });
   });
+
+  test('sets an unreadable document aside once, replacing it with the fresh one', async () => {
+    await putBody({ version: 2, count: 'many' }, 4);
+    const onWarning = vi.fn();
+
+    await open({ onWarning });
+    const again = await open({ onWarning });
+
+    expect(again.value).toEqual({ count: 0 });
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(await storedRow()).toEqual({ body: { version: 2, count: 0 }, revision: 5 });
+    expect(
+      (await db.query('SELECT source_revision, body FROM user_documents_quarantine')).rows,
+    ).toEqual([{ source_revision: 4, body: { version: 2, count: 'many' } }]);
+  });
+
+  test('sets aside a document another server made unreadable before updating it', async () => {
+    const document = await open();
+    await document.update(increment);
+    await putBody({ version: 2, count: 'lots' }, 7);
+
+    await document.update(increment);
+
+    expect(document.value).toEqual({ count: 1 });
+    expect(await storedRow()).toEqual({ body: { version: 2, count: 1 }, revision: 9 });
+    expect((await db.query('SELECT source_revision FROM user_documents_quarantine')).rows).toEqual([
+      { source_revision: 7 },
+    ]);
+  });
 });
 
 describe('readDocument and writeDocument', () => {
