@@ -27,6 +27,8 @@ export interface Toast {
   title: string;
   message?: string;
   icon?: string;
+  /** Achievement toasts: the rarity and bonus XP, e.g. "Rare · +50 bonus XP". */
+  reward?: string;
   /** Loot toasts link to the finished run's result. */
   runId?: string;
   href?: string;
@@ -149,10 +151,11 @@ export function markAchievementUnlocked(
   unlockedAt: string,
 ): GameState {
   const known = state.achievements.some((entry) => entry.id === achievement.id);
+  // The list held a hidden achievement as "???"; the unlock brings its real name and icon.
   const achievements = known
     ? state.achievements.map((entry) =>
         entry.id === achievement.id
-          ? { ...entry, unlockedAt: entry.unlockedAt ?? unlockedAt }
+          ? { ...entry, ...achievement, unlockedAt: entry.unlockedAt ?? unlockedAt }
           : entry,
       )
     : [...state.achievements, { ...achievement, unlockedAt }];

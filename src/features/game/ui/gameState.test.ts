@@ -159,6 +159,48 @@ describe('applyServerEvent', () => {
     expect(state.player?.achievements.map((entry) => entry.id)).toContain('team-player');
   });
 
+  test('achievementUnlocked reveals a hidden achievement but keeps its progress', () => {
+    const hidden = {
+      id: 'speedrunner' as const,
+      name: '???',
+      description: 'Some quests reward a very fast hand.',
+      hint: 'Some quests reward a very fast hand.',
+      icon: '❔',
+      xpReward: 100,
+      rarity: 'epic' as const,
+      category: 'secret' as const,
+      secret: true,
+      target: 1,
+      progress: 0,
+    };
+    const initial = { ...createInitialGameState('default'), achievements: [hidden] };
+
+    const state = applyServerEvent(initial, {
+      type: 'achievementUnlocked',
+      achievement: {
+        id: 'speedrunner',
+        name: 'Speedrunner',
+        description: 'Approve a PR within 5 minutes of being asked to review it.',
+        icon: '⏱️',
+        xpReward: 100,
+        rarity: 'epic',
+        category: 'secret',
+        secret: true,
+      },
+      unlockedAt: '2026-10-30T10:00:00.000Z',
+    });
+
+    expect(state.achievements).toEqual([
+      {
+        ...hidden,
+        name: 'Speedrunner',
+        description: 'Approve a PR within 5 minutes of being asked to review it.',
+        icon: '⏱️',
+        unlockedAt: '2026-10-30T10:00:00.000Z',
+      },
+    ]);
+  });
+
   test('xpGained replaces the player state', () => {
     const player = makePlayer({ xp: 999 });
     const state = applyServerEvent(createInitialGameState('default'), {

@@ -48,6 +48,7 @@ export const ToastItem = ({ toast, onDismiss, onClickOpenResult }: ToastItemProp
       <div className="toast__text">
         <p className="toast__title">{toast.title}</p>
         {toast.message ? <p className="toast__message">{toast.message}</p> : null}
+        {toast.reward ? <p className="toast__reward">{toast.reward}</p> : null}
         {runId ? (
           <button
             className="button button--loot button--small"

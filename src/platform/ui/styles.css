@@ -1829,10 +1829,94 @@ code {
 }
 
 .achievement__reward {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: end;
   color: var(--xp);
   font-size: 0.8rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.achievements__group + .achievements__group {
+  margin-top: 1.25rem;
+}
+
+.achievements__heading {
+  margin-bottom: 0.6rem;
+  color: var(--gold);
+  font-family: var(--pixel-font);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.achievement--series {
+  grid-template-columns: auto 1fr;
+}
+
+.achievement__tiers {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.tier {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tier--unlocked {
+  border-color: var(--gold);
+}
+
+.tier--locked .tier__name {
+  color: var(--muted);
+}
+
+.tier__name {
+  font-weight: 700;
+}
+
+.tier__xp {
+  color: var(--xp);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rarity {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid currentcolor;
+  border-radius: var(--radius);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rarity--common {
+  color: var(--muted);
+}
+
+.rarity--rare {
+  color: var(--mana);
+}
+
+.rarity--epic {
+  color: #d29bff;
+}
+
+.rarity--legendary {
+  color: var(--gold);
 }
 
 /* ------------------------------------------------------------------ toasts */
@@ -1906,6 +1990,12 @@ code {
 .toast__message {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.toast__reward {
+  color: var(--xp);
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
 /* ------------------------------------------------------------------ animation */

@@ -1,3 +1,4 @@
+export { rewardLabel } from './achievementLabels.ts';
 export { ConnectionIndicator } from './ConnectionIndicator.tsx';
 export {
   activeRateLimit,
