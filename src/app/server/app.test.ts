@@ -476,6 +476,7 @@ const headerIdentity: IdentityFactory<UserServices> = async ({
         return undefined;
       }
       const key = session.account.login.toLowerCase();
+      res.removeHeader('X-Test-Session');
       open.delete(key);
       session.services.stop();
       releaseUser(key);
@@ -744,6 +745,30 @@ describe('createApp in hosted mode', () => {
     });
 
     expect(response.status).toBe(302);
+  });
+
+  test('answers a sign-out as signed out, without reopening the session', async () => {
+    let gameStates = 0;
+    const storage = perUserStorage();
+    await start({
+      config: hostedConfig(),
+      identity: headerIdentity,
+      storage: {
+        ...storage,
+        gameState: async (login) => {
+          gameStates += 1;
+          return storage.gameState(login);
+        },
+      },
+    });
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    const signedOut = await send('POST', '/api/auth/sign-out', {}, as(GH_TOKEN));
+
+    expect(signedOut.status).toBe(200);
+    expect(signedOut.body).not.toHaveProperty('account');
+    expect(signedOut.headers['x-test-session']).toBeUndefined();
+    expect(gameStates).toBe(1);
   });
 
   test('answers the health check without saying which keys exist', async () => {

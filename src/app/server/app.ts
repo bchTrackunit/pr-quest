@@ -305,20 +305,29 @@ export async function createApp(options: AppOptions): Promise<App> {
     );
   }
 
-  const auth = (req: IncomingMessage, res: ServerResponse): AuthServices['auth'] => ({
-    current: async () => {
-      try {
-        const session = await identity.resolve(req, res);
-        return session ? { account: session.account } : {};
-      } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) };
-      }
-    },
-    signOut: async () => {
-      const signedOut = await identity.signOut(req, res);
-      return signedOut?.tokenSource === 'oauth' ? { signedOutLogin: signedOut.login } : {};
-    },
-  });
+  const auth = (req: IncomingMessage, res: ServerResponse): AuthServices['auth'] => {
+    let signedOut = false;
+    return {
+      current: async () => {
+        // Only local mode has another sign-in to fall back to; a hosted resolver asked again would
+        // still find the signed-out session's cookie on this request.
+        if (signedOut && hosted) {
+          return {};
+        }
+        try {
+          const session = await identity.resolve(req, res);
+          return session ? { account: session.account } : {};
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+      signOut: async () => {
+        const account = await identity.signOut(req, res);
+        signedOut = true;
+        return account?.tokenSource === 'oauth' ? { signedOutLogin: account.login } : {};
+      },
+    };
+  };
   const authFor: HandlersFor = async (req, res) =>
     createAuthHandlers({ deviceFlow: identity.deviceFlow, auth: auth(req, res) });
 

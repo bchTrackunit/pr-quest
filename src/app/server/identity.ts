@@ -39,7 +39,12 @@ export interface IdentityResolver<TServices extends SessionServices = SessionSer
   scope: (req: IncomingMessage, res: ServerResponse) => Promise<StorageScope>;
   /** Whose API keys and settings the session of `login` uses, for its reviews and quests. */
   scopeFor: (login: string) => StorageScope;
-  /** Forgets `req`'s sign-in and stops its session; resolves to the account that was signed in. */
+  /**
+   * Forgets `req`'s sign-in and stops its session; resolves to the account that was signed in. A
+   * hosted resolver clears its cookie on `res`. Local mode then calls `resolve` on the same request
+   * to report who is signed in now: that must never return the signed-out session or set a cookie
+   * for it, only a sign-in that still holds, such as the gh CLI's token.
+   */
   signOut: (req: IncomingMessage, res: ServerResponse) => Promise<GitHubAccount | undefined>;
   /** GitHub answered 401 for `token`: stop any session acting with it. */
   rejected: (token: string) => void;
