@@ -14,11 +14,13 @@ import {
 const SECRETS_FILE = 'secrets.json';
 
 /** The GitHub OAuth token plus the API keys the settings popup manages. */
-export type SecretName = 'github' | 'cursor' | 'anthropic' | 'linear';
+export const SECRET_NAMES = ['github', 'cursor', 'anthropic', 'linear'] as const;
+
+export type SecretName = (typeof SECRET_NAMES)[number];
 
 const SecretsFileSchema = z.object({
   version: z.literal(1),
-  secrets: z.partialRecord(z.enum(['github', 'cursor', 'anthropic', 'linear']), z.string()),
+  secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
 });
 
 type Secrets = Partial<Record<SecretName, string>>;

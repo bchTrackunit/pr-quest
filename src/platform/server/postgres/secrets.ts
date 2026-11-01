@@ -1,0 +1,222 @@
+import { z } from 'zod';
+
+import { type MasterKeyring, newDataKey, openSealed, seal } from '../envelope.ts';
+import { WriteQueue } from '../privateFiles.ts';
+import { SECRET_NAMES, type SecretName, type SecretStore } from '../secrets.ts';
+import { BytesSchema, type Database, rowsOf, type SqlClient } from './database.ts';
+import { ensureUser } from './documents.ts';
+
+const DataKeyRowSchema = z.object({
+  login: z.string(),
+  version: z.number().int().positive(),
+  master_key_id: z.string(),
+  wrapped_key: BytesSchema,
+});
+
+type DataKeyRow = z.infer<typeof DataKeyRowSchema>;
+
+const SecretRowSchema = DataKeyRowSchema.extend({
+  name: z.enum(SECRET_NAMES),
+  sealed: BytesSchema,
+});
+
+interface DataKey {
+  version: number;
+  key: Buffer;
+}
+
+/** Binds a wrapped data key to its user and version. */
+const dataKeyContext = (login: string, version: number): string => `${login}:data-key:${version}`;
+/** Binds a sealed secret to its user and name, so it can't be moved to another row. */
+const secretContext = (login: string, name: SecretName): string => `${login}:secret:${name}`;
+
+/**
+ * One user's secrets in `user_secrets`, each sealed with the user's data key, which the master key
+ * wraps (see `envelope.ts`). Values are decrypted once on open and held in this process, never
+ * logged or returned to the UI. A data key wrapped by a previous master key is rewrapped on open.
+ */
+export class PostgresSecretStore implements SecretStore {
+  private readonly db: Database;
+  private readonly login: string;
+  private readonly keyring: MasterKeyring;
+  private readonly writes = new WriteQueue();
+  private readonly secrets: Map<SecretName, string>;
+  private dataKey: DataKey | undefined;
+
+  private constructor(
+    db: Database,
+    login: string,
+    keyring: MasterKeyring,
+    secrets: Map<SecretName, string>,
+  ) {
+    this.db = db;
+    this.login = login;
+    this.keyring = keyring;
+    this.secrets = secrets;
+  }
+
+  /** `login` must be lower-cased. Throws when a secret can't be decrypted with `keyring`. */
+  public static async open(
+    db: Database,
+    login: string,
+    keyring: MasterKeyring,
+  ): Promise<PostgresSecretStore> {
+    await ensureUser(db, login);
+    const rows = rowsOf(
+      await db.query(
+        `SELECT s.name, s.sealed, k.login, k.version, k.master_key_id, k.wrapped_key
+         FROM user_secrets s
+         JOIN user_data_keys k ON k.login = s.login AND k.version = s.data_key_version
+         WHERE s.login = $1`,
+        [login],
+      ),
+      SecretRowSchema,
+    );
+    const keys = new Map<number, Buffer>();
+    const secrets = new Map<SecretName, string>();
+    for (const row of rows) {
+      let key = keys.get(row.version);
+      if (!key) {
+        key = await unwrapDataKey(db, keyring, row);
+        keys.set(row.version, key);
+      }
+      secrets.set(row.name, openSecret(key, row.sealed, login, row.name));
+    }
+    return new PostgresSecretStore(db, login, keyring, secrets);
+  }
+
+  public get(name: SecretName): string | undefined {
+    return this.secrets.get(name);
+  }
+
+  public set(name: SecretName, value: string): Promise<void> {
+    return this.writes.run(async () => {
+      const dataKey = await this.db.transaction(async (tx) => {
+        const current = this.dataKey ?? (await latestDataKey(tx, this.login, this.keyring));
+        await tx.query(
+          `INSERT INTO user_secrets (login, name, data_key_version, sealed) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (login, name) DO UPDATE
+             SET data_key_version = EXCLUDED.data_key_version, sealed = EXCLUDED.sealed,
+                 updated_at = now()`,
+          [
+            this.login,
+            name,
+            current.version,
+            seal(current.key, value, secretContext(this.login, name)),
+          ],
+        );
+        return current;
+      });
+      this.dataKey = dataKey;
+      this.secrets.set(name, value);
+    });
+  }
+
+  public delete(name: SecretName): Promise<void> {
+    return this.writes.run(async () => {
+      await this.db.query('DELETE FROM user_secrets WHERE login = $1 AND name = $2', [
+        this.login,
+        name,
+      ]);
+      this.secrets.delete(name);
+    });
+  }
+}
+
+/**
+ * Rewraps every data key that a previous master key wrapped, so that key can be retired. Resolves
+ * to how many it rewrapped; running it again rewraps none.
+ */
+export async function rewrapDataKeys(
+  db: Database,
+  keyring: MasterKeyring,
+): Promise<{ rewrapped: number }> {
+  const rows = rowsOf(
+    await db.query(
+      'SELECT login, version, master_key_id, wrapped_key FROM user_data_keys WHERE master_key_id <> $1',
+      [keyring.currentId],
+    ),
+    DataKeyRowSchema,
+  );
+  let rewrapped = 0;
+  for (const row of rows) {
+    rewrapped += await rewrap(db, keyring, row, keyring.unwrap(wrappedOf(row), contextOf(row)));
+  }
+  return { rewrapped };
+}
+
+/** The user's newest data key, creating version 1 when they have none yet. */
+async function latestDataKey(
+  tx: SqlClient,
+  login: string,
+  keyring: MasterKeyring,
+): Promise<DataKey> {
+  const select = async () =>
+    rowsOf(
+      await tx.query(
+        `SELECT login, version, master_key_id, wrapped_key FROM user_data_keys
+         WHERE login = $1 ORDER BY version DESC LIMIT 1`,
+        [login],
+      ),
+      DataKeyRowSchema,
+    )[0];
+  let row = await select();
+  if (!row) {
+    const { masterKeyId, wrapped } = keyring.wrap(newDataKey(), dataKeyContext(login, 1));
+    // A second server creating the key at the same time wins; this one then uses its key.
+    await tx.query(
+      `INSERT INTO user_data_keys (login, version, master_key_id, wrapped_key)
+       VALUES ($1, 1, $2, $3) ON CONFLICT (login, version) DO NOTHING`,
+      [login, masterKeyId, wrapped],
+    );
+    row = await select();
+  }
+  if (!row) {
+    throw new Error(`Could not create a data key for ${login}`);
+  }
+  return { version: row.version, key: await unwrapDataKey(tx, keyring, row) };
+}
+
+async function unwrapDataKey(
+  db: SqlClient,
+  keyring: MasterKeyring,
+  row: DataKeyRow,
+): Promise<Buffer> {
+  const key = keyring.unwrap(wrappedOf(row), contextOf(row));
+  if (!keyring.isCurrent(row.master_key_id)) {
+    await rewrap(db, keyring, row, key);
+  }
+  return key;
+}
+
+/** Wraps `key` with the current master key, unless another process changed the row meanwhile. */
+async function rewrap(
+  db: SqlClient,
+  keyring: MasterKeyring,
+  row: DataKeyRow,
+  key: Buffer,
+): Promise<number> {
+  const { masterKeyId, wrapped } = keyring.wrap(key, contextOf(row));
+  const result = await db.query(
+    `UPDATE user_data_keys SET master_key_id = $3, wrapped_key = $4, rewrapped_at = now()
+     WHERE login = $1 AND version = $2 AND master_key_id = $5`,
+    [row.login, row.version, masterKeyId, wrapped, row.master_key_id],
+  );
+  return result.rowCount;
+}
+
+const wrappedOf = (row: DataKeyRow) => ({
+  masterKeyId: row.master_key_id,
+  wrapped: row.wrapped_key,
+});
+const contextOf = (row: DataKeyRow): string => dataKeyContext(row.login, row.version);
+
+function openSecret(key: Buffer, sealed: Buffer, login: string, name: SecretName): string {
+  try {
+    return openSealed(key, sealed, secretContext(login, name));
+  } catch (error) {
+    throw new Error(
+      `${login}'s ${name} key could not be decrypted: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
