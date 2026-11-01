@@ -120,29 +120,40 @@ the token again at most every 5 minutes, so `gh auth switch` can take that long 
 you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
 Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
 account, PR Quest says so after you sign out. The account chip in the page's top-right corner
-shows who PR Quest acts as; its menu shows where the token came from (**OAuth** or **gh CLI**)
-and offers **Settings** and, for OAuth, **Sign out**. While nobody is signed in, the chip is a
-**Sign in with GitHub** button.
+shows who PR Quest acts as; its popout shows where the token came from (**OAuth** or **gh CLI**)
+and, for OAuth, offers **Sign out**. While nobody is signed in, the chip reads **🔑 Sign in**,
+and its popout starts with a **Sign in with GitHub** button.
 
 ## The header
 
-The top-right corner of the page holds the utility controls, so the player box below it shows
-only game info: level, XP, streak and achievements. From left to right:
+The top-right corner of the page holds just two things, so the player box below it shows only
+game info (level, XP, streak and achievements):
 
 - **Live** says whether the live updates stream is connected.
-- 🔔 turns browser notifications on or off. The first click asks the browser for permission.
-- 🔊 turns sound on or off.
-- ⚙️ opens the [settings](#settings).
-- The **account chip** opens the account menu, described above.
+- The **account chip** shows your avatar and login, or **🔑 Sign in** while nobody is signed in.
+  On narrow screens it shows only the avatar.
 
-The account menu and the quest board's presets list are small popovers: they open below their
+The chip opens the account popout. It has the same layout whether you're signed in or not:
+
+1. The account: who PR Quest acts as and the token source, or **Sign in with GitHub**.
+2. **Notifications** and **Sound**, each a switch that shows whether it's on. The first time you
+   turn notifications on, the browser asks for permission; if you blocked them, the switch is
+   off and disabled and says how to allow them again.
+3. **Settings**, the only way into the [settings](#settings) from the header.
+4. **Sign out**, for OAuth sign-ins.
+
+The account popout and the quest board's presets list are small popovers: they open below their
 button and move focus into themselves. `Escape` closes them and returns focus to the button;
-clicking or tabbing outside also closes them.
+clicking or tabbing outside also closes them. Turning a switch leaves the popout open.
+
+Every control that shows only an icon has a tooltip saying what it does: the account chip, the
+✕ that closes dialogs, dismisses toasts and deletes presets, and the badges of your recent
+achievements. Tooltips show while the mouse hovers or keyboard focus is on the control, and
+`Escape` hides them.
 
 ## Settings
 
-The ⚙️ button in the header, or **Settings** in the account menu, opens the settings popup. It
-has three sections:
+**Settings** in the account popout opens the settings popup. It has three sections:
 
 - **GitHub account**: who PR Quest acts as and the token source, with sign-in and sign-out.
 - **Review provider**: who reviews your quests, and with which model.
@@ -226,8 +237,8 @@ Each feature owns its server and UI code. Tests sit next to the code they test.
 src/
   app/          composition roots: they wire the features together
     server/     main.ts (entry), app.ts, the HTTP route tables, per-player sessions and state dirs
-    ui/         main.tsx (entry), App.tsx, the header controls, the game controller hook and the
-                live event stream
+    ui/         main.tsx (entry), App.tsx, the header controls and preferences, the game
+                controller hook and the live event stream
   features/
     auth/       GitHub device flow, token resolution, the GitHub account control
     settings/   API keys, review provider and model settings, the settings dialog
@@ -237,8 +248,8 @@ src/
   platform/
     server/     router and security guards, config, SSE events, GitHub API wrapper, rate limits,
                 private files and secrets
-    ui/         API client, store, Modal, Popover, formatting and clock helpers, notifications,
-                styles
+    ui/         API client, store, Modal, Popover, Tooltip, formatting and clock helpers,
+                notifications, styles
   shared/       the API contract (api.ts) and the review prompt and result schema (reviewResult.ts)
 ```
 
