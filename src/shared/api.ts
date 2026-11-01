@@ -52,6 +52,8 @@ export interface Quest {
    * `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, ...), when known.
    */
   authorAssociation?: string;
+  /** The source branch lives in a fork rather than the PR's repo, when known. */
+  isCrossRepository?: boolean;
   sourceBranch: string;
   targetBranch: string;
   /** Head commit of the source branch, when known. */

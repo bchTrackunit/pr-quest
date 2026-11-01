@@ -126,6 +126,11 @@ describe('isPromptSafeBranch', () => {
   test.each([
     '',
     '-x',
+    '+main',
+    'feature/ü',
+    'a#b',
+    'a:b',
+    'main\n',
     'main;id',
     'a$(id)',
     'a`id`',

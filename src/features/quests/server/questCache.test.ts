@@ -12,6 +12,8 @@ const QUEST: Quest = {
   repo: { owner: 'Trackunit', name: 'manager' },
   number: 7,
   author: { name: 'Ada', githubLogin: 'ada' },
+  authorAssociation: 'MEMBER',
+  isCrossRepository: false,
   sourceBranch: 'fix/map',
   targetBranch: 'main',
   headSha: 'abc',

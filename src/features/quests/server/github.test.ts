@@ -150,6 +150,7 @@ describe('toQuest', () => {
       number: 930,
       author: { name: 'kfr-example', githubLogin: 'kfr-example' },
       authorAssociation: 'COLLABORATOR',
+      isCrossRepository: false,
       sourceBranch: 'kfr-example/ins-2967-register-ci',
       targetBranch: 'master',
       headSha: 'd77c66a89e0707ccc917203251d3a3a1efce4182',
@@ -192,10 +193,13 @@ describe('toQuest', () => {
     });
   });
 
-  test("leaves out the author's role when GitHub did not return it", () => {
-    const details = { ...TEAM.details, authorAssociation: undefined };
+  test("leaves out the author's role and the fork flag when GitHub did not return them", () => {
+    const details = { ...TEAM.details, authorAssociation: undefined, isCrossRepository: undefined };
 
-    expect(toQuest({ ...TEAM, details })).not.toHaveProperty('authorAssociation');
+    const quest = toQuest({ ...TEAM, details });
+
+    expect(quest).not.toHaveProperty('authorAssociation');
+    expect(quest).not.toHaveProperty('isCrossRepository');
   });
 
   test("ignores the player's own approval whatever its letter case", () => {
@@ -259,6 +263,7 @@ describe('GitHubClient.fetchReviewRequests', () => {
     expect(query).toContain('viewer { login }');
     expect(query).toContain('isDraft');
     expect(query).toContain('authorAssociation');
+    expect(query).toContain('isCrossRepository');
     expect(query).toContain('latestReviews(first: 100) { nodes { state author { login } } }');
     expect(data.map((entry) => entry.viewerLogin)).toEqual(['player-login', 'player-login']);
     expect(github.calls.some((call) => call.path === '/user')).toBe(false);
@@ -446,10 +451,10 @@ describe('parsePullRequestBatch', () => {
     expect(parsePullRequestBatch(BATCH, 2).viewerLogin).toBe('player-login');
   });
 
-  test("reads the author's role on the repo", () => {
+  test("reads the author's role on the repo and whether the branch is in a fork", () => {
     expect(parsePullRequestBatch(BATCH, 2).entries).toMatchObject([
-      { details: { authorAssociation: 'COLLABORATOR' } },
-      { details: { authorAssociation: 'MEMBER' } },
+      { details: { authorAssociation: 'COLLABORATOR', isCrossRepository: false } },
+      { details: { authorAssociation: 'MEMBER', isCrossRepository: false } },
     ]);
   });
 });

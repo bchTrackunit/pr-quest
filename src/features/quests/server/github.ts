@@ -27,6 +27,7 @@ const BATCH_FIELDS = `
   changedFiles
   author { login ... on User { name } }
   authorAssociation
+  isCrossRepository
   reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on Team { slug } } } }
   latestReviews(first: 100) { nodes { state author { login } } }`;
 
@@ -62,6 +63,7 @@ const PullRequestCoreSchema = z.object({
   changedFiles: z.number().int().nonnegative(),
   author: z.object({ login: z.string(), name: z.string().nullish() }).nullish(),
   authorAssociation: z.string().nullish(),
+  isCrossRepository: z.boolean().nullish(),
 });
 
 const BatchPullRequestSchema = PullRequestCoreSchema.extend({
@@ -131,6 +133,8 @@ export interface PullRequestDetails {
   authorName?: string;
   /** GitHub's `CommentAuthorAssociation` for the PR author, e.g. `MEMBER` or `CONTRIBUTOR`. */
   authorAssociation?: string;
+  /** The head branch lives in a fork rather than the base repo. */
+  isCrossRepository?: boolean;
   /** Team slugs without the org prefix, e.g. `team-gluon`. */
   requestedTeams: Array<string>;
   /** Logins whose latest review is `APPROVED`, the player included. */
@@ -224,6 +228,7 @@ function toDetails(
     changedFiles: raw.changedFiles,
     authorName: raw.author?.name || undefined,
     authorAssociation: raw.authorAssociation || undefined,
+    isCrossRepository: raw.isCrossRepository ?? undefined,
     requestedTeams: reviewers.flatMap((reviewer) =>
       reviewer.__typename === 'Team' && reviewer.slug
         ? [reviewer.slug.split('/').at(-1) ?? reviewer.slug]
@@ -343,6 +348,9 @@ export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInp
   };
   if (details.authorAssociation) {
     quest.authorAssociation = details.authorAssociation;
+  }
+  if (details.isCrossRepository !== undefined) {
+    quest.isCrossRepository = details.isCrossRepository;
   }
   if (linear?.appUrl) {
     quest.linearUrl = linear.appUrl;

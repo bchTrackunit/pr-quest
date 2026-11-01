@@ -402,13 +402,19 @@ works for PRs from forks. The agent:
 **Which PRs the Cursor agent reviews.** The server refuses a Cursor review, before anything is
 queued, and suggests Claude instead, when:
 
-- the PR's author has no write access to the repo: GitHub's `authorAssociation` isn't `OWNER`,
-  `MEMBER` or `COLLABORATOR`. Outside contributors, first-time contributors and most bots are
-  refused, since steering the agent could give them access they don't have. While the role is
-  unknown, for example on a board cached by an older version, refreshing the board fixes it;
-- either branch name contains anything but letters, digits and `. _ / + @ = -`, or starts with
-  `-`. Git allows `;`, `$`, `|`, backticks and quotes in branch names, and the prompt asks the
-  agent to run commands that contain them. The names that pass are also quoted in the prompt.
+- the PR's author isn't in the repo's org or one of its collaborators: GitHub's
+  `authorAssociation` isn't `OWNER`, `MEMBER` or `COLLABORATOR`. Outside contributors,
+  first-time contributors and most bots are refused;
+- the PR comes from a fork (`isCrossRepository`). None of the roles above implies write access,
+  but a branch in the base repo can only have been pushed by someone who has it, so steering the
+  agent gains them nothing they can't already do. Members and collaborators who work from forks
+  are refused too.
+
+While either is unknown, for example on a board cached by an older version, refreshing the board
+fixes it. The server also refuses a Cursor review when either branch name contains anything but
+letters, digits and `. _ / + @ = -`, or starts with `-` or `+`. Git allows `;`, `$`, `|`,
+backticks and quotes in branch names, and the prompt asks the agent to run commands that contain
+them. The names that pass are also quoted in the prompt.
 
 **What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
 GitHub integration, on PR content that the PR's author controls: the code, the title and the

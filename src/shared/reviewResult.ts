@@ -162,9 +162,10 @@ export const REVIEW_GUIDELINES: ReadonlyArray<string> = [
 
 /**
  * Git allows `;`, `$`, `|`, backticks and quotes in branch names, and the PR author picks them,
- * so only names made of these characters may appear in the commands the agent is told to run.
+ * so only names made of these characters may appear in the commands the agent is told to run. A
+ * leading `-` would read as an option and a leading `+` as a forced refspec.
  */
-const PROMPT_SAFE_BRANCH = /^(?!-)[\w./+@=-]{1,255}$/;
+const PROMPT_SAFE_BRANCH = /^(?![-+])[\w./+@=-]{1,255}$/;
 
 export function isPromptSafeBranch(name: string): boolean {
   return PROMPT_SAFE_BRANCH.test(name);

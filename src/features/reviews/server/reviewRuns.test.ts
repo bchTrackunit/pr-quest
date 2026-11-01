@@ -84,6 +84,7 @@ const quest: Quest = {
   number: 7,
   author: { name: 'a' },
   authorAssociation: 'MEMBER',
+  isCrossRepository: false,
   sourceBranch: 'feature/cache',
   targetBranch: 'master',
   headSha: HEAD_SHA,
@@ -263,15 +264,31 @@ describe('ReviewRunService.start', () => {
     },
   );
 
-  test('refuses a Cursor review while the author role is unknown, asking for a refresh', async () => {
+  test('refuses a Cursor review of a PR from a fork, even by a member', async () => {
     fakeAgent();
 
-    await expect(service().start({ ...quest, authorAssociation: undefined })).rejects.toMatchObject(
-      { status: 409, message: expect.stringContaining('Refresh') },
-    );
+    await expect(service().start({ ...quest, isCrossRepository: true })).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+      message: expect.stringContaining('fork'),
+    });
     expect(createMock).not.toHaveBeenCalled();
     expect(store.state.runs).toEqual([]);
   });
+
+  test.each([{ authorAssociation: undefined }, { isCrossRepository: undefined }])(
+    'refuses a Cursor review while it is unknown who could push the branch: %o',
+    async (unknown) => {
+      fakeAgent();
+
+      await expect(service().start({ ...quest, ...unknown })).rejects.toMatchObject({
+        status: 409,
+        message: expect.stringContaining('Refresh'),
+      });
+      expect(createMock).not.toHaveBeenCalled();
+      expect(store.state.runs).toEqual([]);
+    },
+  );
 
   test.each([
     { targetBranch: 'main;curl$IFS/x.sh|sh' },
@@ -506,7 +523,12 @@ describe('ReviewRunService with Claude', () => {
   test('reviews PRs the Cursor agent refuses: outside authors and unusual branch names', async () => {
     const { runs, claude } = claudeService();
 
-    await runs.start({ ...quest, authorAssociation: 'NONE', sourceBranch: 'x`id`' });
+    await runs.start({
+      ...quest,
+      authorAssociation: 'NONE',
+      isCrossRepository: true,
+      sourceBranch: 'x`id`',
+    });
     await runs.whenIdle();
 
     expect(claude.review).toHaveBeenCalledOnce();
