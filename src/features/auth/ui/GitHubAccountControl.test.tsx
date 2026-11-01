@@ -46,24 +46,42 @@ function pendingDevice(overrides: Partial<DeviceFlowStatus> = {}): DeviceFlowSta
 
 interface HarnessProps {
   onAccountChanged: () => void;
-  onClickSettings?: () => void;
 }
 
-const Harness = ({ onAccountChanged, onClickSettings = undefined }: HarnessProps) => {
+/** Stands in for the app's preferences, which the popout shows below the account. */
+const PREFERENCE = <button type="button">A preference</button>;
+
+const Harness = ({ onAccountChanged }: HarnessProps) => {
   const { state, actions } = useGitHubAccount(onAccountChanged);
-  return <GitHubAccountControl actions={actions} onClickSettings={onClickSettings} state={state} />;
+  return (
+    <GitHubAccountControl actions={actions} state={state}>
+      {PREFERENCE}
+    </GitHubAccountControl>
+  );
 };
 
-function renderControl(onClickSettings?: () => void) {
+function renderControl() {
   const onAccountChanged = vi.fn();
-  render(<Harness onAccountChanged={onAccountChanged} onClickSettings={onClickSettings} />);
+  render(<Harness onAccountChanged={onAccountChanged} />);
   return { onAccountChanged };
 }
 
-/** Opens the account chip's menu and returns it. */
-async function openAccountMenu(user: ReturnType<typeof userEvent.setup>, login = 'octocat') {
+type User = ReturnType<typeof userEvent.setup>;
+
+const popout = () => screen.getByRole('dialog', { name: 'Account and settings' });
+
+/** Opens the account chip's popout and returns it. */
+async function openAccountMenu(user: User, login = 'octocat') {
   await user.click(await screen.findByRole('button', { name: `GitHub account @${login}` }));
-  return screen.getByRole('dialog', { name: 'GitHub account' });
+  return popout();
+}
+
+/** Signed out, the chip opens the popout and its "Sign in with GitHub" opens the dialog. */
+async function startSignIn(user: User) {
+  await user.click(await screen.findByRole('button', { name: /^(Sign in|Finish signing in)$/ }));
+  await user.click(
+    within(popout()).getByRole('button', { name: /Sign in with GitHub|Finish signing in/ }),
+  );
 }
 
 async function poll(): Promise<void> {
@@ -91,7 +109,7 @@ describe('GitHubAccountControl', () => {
     const user = setupUser();
     const { onAccountChanged } = renderControl();
 
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     expect(api.startDeviceFlow).toHaveBeenCalledTimes(1);
 
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
@@ -129,29 +147,49 @@ describe('GitHubAccountControl', () => {
     expect(within(menu).getByRole('button', { name: 'Sign out' })).toBeTruthy();
   });
 
-  test('the account chip opens a menu with the account, Settings, and closes on Escape', async () => {
+  test('the account chip opens a popout with the account, the preferences and Sign out', async () => {
     const user = setupUser();
-    const onClickSettings = vi.fn();
     api.fetchAuthStatus.mockResolvedValue(authStatus({ account: OCTOCAT }));
-    renderControl(onClickSettings);
+    renderControl();
 
     const chip = await screen.findByRole('button', { name: 'GitHub account @octocat' });
     expect(chip.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    const tooltip = screen.getByRole('tooltip', { hidden: true });
+    expect(chip.getAttribute('aria-describedby')).toBe(tooltip.id);
+    expect(tooltip.textContent).toBe('Account and settings for @octocat');
 
     const menu = await openAccountMenu(user);
     expect(chip.getAttribute('aria-expanded')).toBe('true');
     expect(within(menu).getByText('The Octocat')).toBeTruthy();
     expect(within(menu).getByText('Signed in with GitHub (OAuth)')).toBeTruthy();
-    expect(document.activeElement).toBe(within(menu).getByRole('button', { name: 'Settings' }));
+    const controls = within(menu).getAllByRole('button');
+    expect(controls.map((control) => control.textContent)).toEqual(['A preference', 'Sign out']);
+    expect(document.activeElement).toBe(controls.at(0));
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(chip);
+  });
 
-    await openAccountMenu(user);
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(onClickSettings).toHaveBeenCalledTimes(1);
+  test('signed out, the chip offers Sign in with GitHub next to the preferences', async () => {
+    const user = setupUser();
+    renderControl();
+
+    const chip = await screen.findByRole('button', { name: 'Sign in' });
+    await user.click(chip);
+    const menu = popout();
+    expect(within(menu).getByText('Not signed in')).toBeTruthy();
+    const signIn = within(menu).getByRole('button', { name: /Sign in with GitHub/ });
+    expect(document.activeElement).toBe(signIn);
+    expect(within(menu).getByRole('button', { name: 'A preference' })).toBeTruthy();
+    expect(within(menu).queryByRole('button', { name: 'Sign out' })).toBeNull();
+
+    await user.click(signIn);
+    expect(screen.queryByRole('dialog', { name: 'Account and settings' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Sign in with GitHub' })).toBeTruthy();
+
+    await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });
@@ -161,13 +199,13 @@ describe('GitHubAccountControl', () => {
     renderControl();
 
     expect(await screen.findByText('GitHub rejected the token: Bad credentials')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
   });
 
   test('focuses Done when sign-in completes, and returns focus to the account on close', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     within(dialog)
       .getByRole('button', { name: /Copy code/ })
@@ -192,7 +230,7 @@ describe('GitHubAccountControl', () => {
   test('Escape still closes the dialog after Cancel and Try again replace the focused button', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
 
@@ -215,7 +253,7 @@ describe('GitHubAccountControl', () => {
   test('unmounting while a code is pending stops polling', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     await screen.findByLabelText('Sign-in code WDJB-MJHT');
 
     cleanup();
@@ -231,7 +269,7 @@ describe('GitHubAccountControl', () => {
   ] as const)('a %s flow says so and offers a retry', async (state, message) => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
 
@@ -252,7 +290,7 @@ describe('GitHubAccountControl', () => {
   test('shows a failed flow with its error and a retry', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
 
@@ -273,7 +311,7 @@ describe('GitHubAccountControl', () => {
       device: pendingDevice({ expiresAt: new Date(Date.now() + 1000).toISOString() }),
     });
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
 
@@ -286,7 +324,7 @@ describe('GitHubAccountControl', () => {
   test('cancelling stops the flow on the server', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     await within(dialog).findByLabelText('Sign-in code WDJB-MJHT');
 
@@ -301,7 +339,7 @@ describe('GitHubAccountControl', () => {
   test('keeps polling after the dialog closes and offers to finish signing in', async () => {
     const user = setupUser();
     renderControl();
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
     await screen.findByLabelText('Sign-in code WDJB-MJHT');
 
     await user.keyboard('{Escape}');
@@ -309,7 +347,7 @@ describe('GitHubAccountControl', () => {
     await poll();
     expect(api.fetchDeviceFlow).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole('button', { name: /Finish signing in/ }));
+    await startSignIn(user);
     expect(api.startDeviceFlow).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText('Sign-in code WDJB-MJHT')).toBeTruthy();
   });
@@ -318,7 +356,7 @@ describe('GitHubAccountControl', () => {
     api.fetchAuthStatus.mockResolvedValue(authStatus({ device: pendingDevice() }));
     renderControl();
 
-    expect(await screen.findByRole('button', { name: /Finish signing in/ })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Finish signing in' })).toBeTruthy();
     await poll();
     expect(api.fetchDeviceFlow).toHaveBeenCalledTimes(1);
   });
@@ -328,8 +366,10 @@ describe('GitHubAccountControl', () => {
     api.fetchAuthStatus.mockResolvedValue(authStatus({ clientIdConfigured: false }));
     renderControl();
 
-    const button = await screen.findByRole('button', { name: /Sign in with GitHub/ });
-    expect(button.getAttribute('aria-describedby')).toBeTruthy();
+    await user.click(await screen.findByRole('button', { name: 'Sign in' }));
+    const button = within(popout()).getByRole('button', { name: /Sign in with GitHub/ });
+    const hint = document.getElementById(button.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe('Needs PR_QUEST_GITHUB_CLIENT_ID; opens setup steps.');
     await user.click(button);
 
     expect(api.startDeviceFlow).not.toHaveBeenCalled();
@@ -346,7 +386,7 @@ describe('GitHubAccountControl', () => {
     );
     renderControl();
 
-    await user.click(await screen.findByRole('button', { name: /Sign in with GitHub/ }));
+    await startSignIn(user);
 
     const dialog = screen.getByRole('dialog', { name: 'Sign in with GitHub' });
     expect(await within(dialog).findByText('PR_QUEST_GITHUB_CLIENT_ID')).toBeTruthy();
@@ -428,13 +468,30 @@ describe('GitHubAccountControl', () => {
     expect(screen.queryByText(/now acts as/)).toBeNull();
   });
 
-  test('hides itself when the server has no auth routes yet', async () => {
+  test('without auth routes the chip still opens the preferences, with no sign-in', async () => {
+    const user = setupUser();
     api.fetchAuthStatus.mockRejectedValue(
       new ApiRequestError(501, 'notImplemented', 'Not implemented'),
     );
-    const { container } = render(<Harness onAccountChanged={vi.fn()} />);
-
+    renderControl();
     await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(container.textContent).toBe('');
+
+    await user.click(screen.getByRole('button', { name: 'Account' }));
+    expect(
+      within(popout())
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['A preference']);
+  });
+
+  test('when the account fails to load the popout says so and keeps the preferences', async () => {
+    const user = setupUser();
+    api.fetchAuthStatus.mockRejectedValue(new ApiRequestError(500, 'internal', 'Disk full'));
+    renderControl();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    await user.click(screen.getByRole('button', { name: 'Account' }));
+    expect(within(popout()).getByText(/GitHub account unknown/)).toBeTruthy();
+    expect(within(popout()).getByRole('button', { name: 'A preference' })).toBeTruthy();
   });
 });

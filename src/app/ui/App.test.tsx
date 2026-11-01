@@ -114,40 +114,65 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: 'GitHub account @octocat' })).toBeTruthy();
   });
 
-  test('puts the account and settings in the header corner and keeps the HUD to game info', async () => {
+  test('the header corner holds only Live and the account; its popout holds the rest', async () => {
     const user = userEvent.setup();
     await renderApp();
-    const corner = screen.getByRole('group', { name: 'Account and settings' });
+    const corner = screen.getByRole('group', { name: 'Status and account' });
     const hud = screen.getByRole('region', { name: 'Player' });
 
     const chip = await within(corner).findByRole('button', { name: 'GitHub account @octocat' });
-    for (const name of ['Settings', 'Sound', 'Enable notifications']) {
-      expect(within(corner).getByRole('button', { name })).toBeTruthy();
-      expect(within(hud).queryByRole('button', { name })).toBeNull();
-    }
+    expect(within(corner).getAllByRole('button')).toEqual([chip]);
     expect(within(corner).getByRole('status').textContent).toContain('Live');
-    expect(within(hud).getByRole('button', { name: /Achievements/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
+    expect(
+      within(hud)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['🏅 Achievements 1/3']);
 
     await user.click(chip);
-    const menu = screen.getByRole('dialog', { name: 'GitHub account' });
+    const menu = screen.getByRole('dialog', { name: 'Account and settings' });
     expect(within(menu).getByText('gh CLI')).toBeTruthy();
+    expect(within(menu).getByRole('switch', { name: 'Notifications' })).toBeTruthy();
+    expect(within(menu).getByRole('switch', { name: 'Sound' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Settings' })).toHaveLength(1);
+
     await user.click(within(menu).getByRole('button', { name: 'Settings' }));
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
-    expect(screen.queryByRole('dialog', { name: 'GitHub account' })).toBeNull();
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(screen.queryByRole('dialog', { name: 'Account and settings' })).toBeNull();
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole('heading', { name: 'GitHub account' }),
+    );
+    expect(within(dialog).getByText('Using the GitHub CLI login (gh fallback)')).toBeTruthy();
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });
 
-  test('never asks for notification permission on load, only from the HUD toggle', async () => {
+  test('never asks for notification permission on load, only from the popout switch', async () => {
     const user = userEvent.setup();
     await renderApp();
     expect(MockNotification.requestPermission).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: /Enable notifications/ }));
+    await user.click(await screen.findByRole('button', { name: 'GitHub account @octocat' }));
+    const notifications = screen.getByRole('switch', { name: 'Notifications' });
+    expect(notifications.getAttribute('aria-checked')).toBe('false');
+    await user.click(notifications);
     expect(MockNotification.requestPermission).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole('button', { name: /Notifications on/ })).toBeTruthy();
+    await vi.waitFor(() => expect(notifications.getAttribute('aria-checked')).toBe('true'));
+  });
+
+  test('the sound switch toggles sound and leaves the popout open', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.click(await screen.findByRole('button', { name: 'GitHub account @octocat' }));
+    const sound = screen.getByRole('switch', { name: 'Sound' });
+    expect(sound.getAttribute('aria-checked')).toBe('true');
+    await user.click(sound);
+    expect(sound.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('dialog', { name: 'Account and settings' })).toBeTruthy();
   });
 
   test('runs a review from send to loot: toast, browser notification and result', async () => {
@@ -217,19 +242,6 @@ describe('App', () => {
     expect(within(error).queryByRole('button')).toBeNull();
   });
 
-  test('the header gear opens the settings at the GitHub account', async () => {
-    const user = userEvent.setup();
-    await renderApp();
-
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
-
-    const dialog = screen.getByRole('dialog', { name: 'Settings' });
-    expect(document.activeElement).toBe(
-      within(dialog).getByRole('heading', { name: 'GitHub account' }),
-    );
-    expect(within(dialog).getByText('Using the GitHub CLI login (gh fallback)')).toBeTruthy();
-  });
-
   test('clicking the browser notification opens the result', async () => {
     MockNotification.permission = 'granted';
     const focus = vi.spyOn(window, 'focus').mockImplementation(() => undefined);
@@ -248,10 +260,14 @@ describe('App', () => {
       type: 'runUpdated',
       run: makeRun({ status: 'error', error: { message: 'Agent crashed' } }),
     });
-    expect(
-      within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'),
-    ).toBeTruthy();
+    const errors = screen.getByRole('list', { name: 'Errors' });
+    expect(within(errors).getByText('Agent crashed')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+
+    const dismiss = within(errors).getByRole('button', { name: 'Dismiss notification' });
+    const tooltip = document.getElementById(dismiss.getAttribute('aria-describedby') ?? '');
+    expect(tooltip?.getAttribute('role')).toBe('tooltip');
+    expect(tooltip?.textContent).toBe('Dismiss');
   });
 
   test('approving needs confirmation and clears the quest', async () => {

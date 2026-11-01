@@ -255,12 +255,6 @@ code {
   background: linear-gradient(180deg, #6e5414, #4a370a);
 }
 
-.button--icon {
-  justify-content: center;
-  min-width: 2rem;
-  padding: 0.25rem;
-}
-
 .caret {
   color: var(--muted);
   font-size: 0.75em;
@@ -390,6 +384,11 @@ code {
   right: 0;
 }
 
+.popover__footer {
+  padding-top: 0.75rem;
+  border-top: 2px dashed var(--border);
+}
+
 /* ------------------------------------------------------------------ tooltip */
 
 .tooltip {
@@ -452,6 +451,106 @@ code {
   from {
     opacity: 0;
   }
+}
+
+/* ------------------------------------------------------------------ preferences */
+
+.account__section {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.preferences {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.account__section + .preferences {
+  padding-top: 0.75rem;
+  border-top: 2px dashed var(--border);
+}
+
+.preferences__settings {
+  justify-self: start;
+}
+
+.switch-row__button {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.switch-row__button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-deep);
+}
+
+.switch-row__button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.switch-row__label {
+  flex: 1;
+}
+
+.switch-row__state {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.switch-row__button[aria-checked='true'] .switch-row__state {
+  color: var(--gold);
+}
+
+.switch-row__track {
+  position: relative;
+  flex: none;
+  width: 2.4rem;
+  height: 1.3rem;
+  border: 2px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-deep);
+  transition: background 120ms ease-out;
+}
+
+.switch-row__thumb {
+  position: absolute;
+  top: 50%;
+  left: 0.15rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateY(-50%);
+  transition: left 120ms ease-out;
+}
+
+.switch-row__button[aria-checked='true'] .switch-row__track {
+  border-color: var(--gold);
+  background: #3b2c08;
+}
+
+.switch-row__button[aria-checked='true'] .switch-row__thumb {
+  left: calc(100% - 0.95rem);
+  background: var(--gold);
+}
+
+.switch-row__hint {
+  margin: 0.1rem 0.5rem 0.25rem;
+  font-size: 0.8rem;
 }
 
 /* ------------------------------------------------------------------ HUD */

@@ -11,6 +11,7 @@ import { QuestBoard } from '../../features/quests/ui/index.ts';
 import { SettingsDialog } from '../../features/settings/ui/index.ts';
 import { useStoreState } from '../../platform/ui/store.ts';
 import { HeaderControls } from './HeaderControls.tsx';
+import { PreferencesMenu } from './PreferencesMenu.tsx';
 import { useGameController } from './useGameController.ts';
 
 const selectState = (state: GameState): GameState => state;
@@ -34,19 +35,18 @@ export const App = () => {
           </h1>
           <HeaderControls
             account={
-              <GitHubAccountControl
-                actions={github.actions}
-                onClickSettings={() => actions.openSettings()}
-                state={github.state}
-              />
+              <GitHubAccountControl actions={github.actions} state={github.state}>
+                <PreferencesMenu
+                  notificationAccess={state.notificationAccess}
+                  notificationsEnabled={state.notificationsEnabled}
+                  onClickNotifications={actions.toggleNotifications}
+                  onClickSettings={() => actions.openSettings()}
+                  onClickSound={actions.toggleSound}
+                  soundEnabled={state.soundEnabled}
+                />
+              </GitHubAccountControl>
             }
             connection={state.connection}
-            notificationAccess={state.notificationAccess}
-            notificationsEnabled={state.notificationsEnabled}
-            onClickNotifications={actions.toggleNotifications}
-            onClickSettings={() => actions.openSettings()}
-            onClickSound={actions.toggleSound}
-            soundEnabled={state.soundEnabled}
           />
         </div>
         <div className="app__hud">
