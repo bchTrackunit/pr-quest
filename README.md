@@ -396,8 +396,19 @@ works for PRs from forks. The agent:
 - is told never to commit, push, create branches, open or update a PR, approve or comment;
 - returns a JSON report (`summary`, advisory `verdict`, `findings` with file, line, severity and
   body, and `reviewedSha`, the commit it reviewed), which the server validates. If `reviewedSha`
-  isn't the commit it was sent to, the run fails instead of offering findings whose line numbers
-  may be wrong.
+  is missing or isn't the commit it was sent to, the run fails instead of offering findings whose
+  line numbers may be wrong.
+
+**Which PRs the Cursor agent reviews.** The server refuses a Cursor review, before anything is
+queued, and suggests Claude instead, when:
+
+- the PR's author has no write access to the repo: GitHub's `authorAssociation` isn't `OWNER`,
+  `MEMBER` or `COLLABORATOR`. Outside contributors, first-time contributors and most bots are
+  refused, since steering the agent could give them access they don't have. While the role is
+  unknown, for example on a board cached by an older version, refreshing the board fixes it;
+- either branch name contains anything but letters, digits and `. _ / + @ = -`, or starts with
+  `-`. Git allows `;`, `$`, `|`, backticks and quotes in branch names, and the prompt asks the
+  agent to run commands that contain them. The names that pass are also quoted in the prompt.
 
 **What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
 GitHub integration, on PR content that the PR's author controls: the code, the title and the
@@ -693,5 +704,6 @@ anyone.
   [The review agent and its safety limits](#the-review-agent-and-its-safety-limits).
 - **Starting the agent on a commit SHA is untested against the live Cursor API.** The SDK types
   allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
-  elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
+  elsewhere, the prompt has it check out the commit, and a missing or mismatched `reviewedSha`
+  fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
