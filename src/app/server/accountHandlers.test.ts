@@ -6,7 +6,9 @@ import { createAccountHandlers, type AccountServices } from './accountHandlers.t
 import {
   ApiKeys,
   type AppSettings,
+  applySettingsPatch,
   type SettingsPatch,
+  type SettingsUpdateOptions,
 } from '../../features/settings/server/index.ts';
 import { createRouter, loopbackOrigins } from '../../platform/server/router.ts';
 import type { SecretName } from '../../platform/server/secrets.ts';
@@ -51,22 +53,8 @@ function fakeServices(): FakeServices {
     apiKeys,
     settings: {
       get: () => settings,
-      update: vi.fn(async (patch: SettingsPatch) => {
-        const models = { ...settings.models };
-        for (const [provider, model] of Object.entries(patch.models ?? {})) {
-          if (provider === 'cursor' || provider === 'claude') {
-            if (model) {
-              models[provider] = model;
-            } else {
-              delete models[provider];
-            }
-          }
-        }
-        const timeZone = patch.timeZone === undefined ? settings.timeZone : patch.timeZone;
-        settings = { reviewProvider: patch.reviewProvider ?? settings.reviewProvider, models };
-        if (timeZone) {
-          settings.timeZone = timeZone;
-        }
+      update: vi.fn(async (patch: SettingsPatch, options?: SettingsUpdateOptions) => {
+        settings = applySettingsPatch(settings, patch, options);
         return settings;
       }),
     },
@@ -229,7 +217,16 @@ describe('settings', () => {
       await expect(
         send('PUT', '/api/settings', { body: { timeZone: null } }),
       ).resolves.toMatchObject({ status: 429 });
-      expect(services.settings.update).not.toHaveBeenCalled();
+      expect(settings.timeZone).toBe('Asia/Tokyo');
+    });
+
+    test('checks the limit inside the update, against the stored settings', async () => {
+      await send('PUT', '/api/settings', { body: { timeZone: 'Europe/Copenhagen' } });
+
+      expect(services.settings.update).toHaveBeenCalledWith(
+        { timeZone: 'Europe/Copenhagen' },
+        { now, minTimeZoneIntervalMs: DAY },
+      );
     });
 
     test('still saves the same zone and the other settings', async () => {
@@ -249,6 +246,7 @@ describe('settings', () => {
       });
 
       expect(response).toMatchObject({ status: 200, body: { timeZone: 'Europe/Copenhagen' } });
+      expect(settings.timeZoneChangedAt).toBe('2026-11-02T10:00:00.000Z');
     });
   });
 

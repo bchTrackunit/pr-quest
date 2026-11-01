@@ -10,7 +10,7 @@ import {
   type ApiKeys,
   type ModelCatalog,
   type SettingsStore,
-  timeZoneChangeAllowedAt,
+  TimeZoneChangeTooSoon,
 } from '../../features/settings/server/index.ts';
 import type { DeviceFlow } from '../../features/auth/server/index.ts';
 import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
@@ -176,20 +176,19 @@ export function createSettingsHandlers(services: SettingsServices): RouteHandler
 
     updateSettings: async ({ body }) => {
       const patch = parseOrReject(UpdateSettingsSchema, body, 'Invalid settings');
-      const allowedAt =
-        timeZoneChanges &&
-        timeZoneChangeAllowedAt(settings.get(), patch, {
-          minIntervalMs: timeZoneChanges.minIntervalMs,
-          now: timeZoneChanges.now?.() ?? new Date(),
-        });
-      if (allowedAt) {
-        throw new ApiError(
-          429,
-          'rateLimited',
-          `The time zone can change once a day; try again after ${allowedAt.toISOString()}`,
-        );
+      try {
+        await (timeZoneChanges
+          ? settings.update(patch, {
+              now: timeZoneChanges.now?.() ?? new Date(),
+              minTimeZoneIntervalMs: timeZoneChanges.minIntervalMs,
+            })
+          : settings.update(patch));
+      } catch (error) {
+        if (error instanceof TimeZoneChangeTooSoon) {
+          throw new ApiError(429, 'rateLimited', error.message);
+        }
+        throw error;
       }
-      await settings.update(patch);
       return settingsResponse();
     },
 

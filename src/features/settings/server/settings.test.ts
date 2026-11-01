@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { FileSettingsStore } from './settings.ts';
+import { FileSettingsStore, TimeZoneChangeTooSoon } from './settings.ts';
 
 let dir: string;
 
@@ -82,6 +82,33 @@ describe('FileSettingsStore', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test('refuses a time zone change sooner than the limit, saving nothing', async () => {
+    const settings = await FileSettingsStore.open(dir);
+    const day = { minTimeZoneIntervalMs: 24 * 60 * 60_000 };
+    await settings.update(
+      { timeZone: 'Asia/Tokyo' },
+      { ...day, now: new Date('2026-11-01T10:00:00Z') },
+    );
+
+    await expect(
+      settings.update(
+        { timeZone: 'Europe/Copenhagen', reviewProvider: 'claude' },
+        { ...day, now: new Date('2026-11-02T09:59:59Z') },
+      ),
+    ).rejects.toBeInstanceOf(TimeZoneChangeTooSoon);
+    await settings.update(
+      { timeZone: 'Europe/Copenhagen' },
+      { ...day, now: new Date('2026-11-02T10:00:00Z') },
+    );
+
+    expect((await FileSettingsStore.open(dir)).get()).toEqual({
+      reviewProvider: 'cursor',
+      models: {},
+      timeZone: 'Europe/Copenhagen',
+      timeZoneChangedAt: '2026-11-02T10:00:00.000Z',
+    });
   });
 
   test('keeps the time zone when a patch leaves it out', async () => {

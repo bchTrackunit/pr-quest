@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { MasterKeyring } from '../../platform/server/envelope.ts';
 import type { Database } from '../../platform/server/postgres/database.ts';
 import { openTestDatabase, type TestDatabase } from '../../platform/server/test-utils/postgres.ts';
+import { TimeZoneChangeTooSoon } from '../../features/settings/server/index.ts';
 import { openPostgresStorage } from './postgresStorage.ts';
 import { type AppStorage, MACHINE_SCOPE, userScope } from './storage.ts';
 
@@ -88,6 +89,27 @@ describe('settings', () => {
 
   test('refuses the machine scope, which hosted mode never has', async () => {
     await expect((await open()).settings(MACHINE_SCOPE)).rejects.toThrow(/per user/);
+  });
+
+  test("limits time zone changes against the stored settings, not a server's stale copy", async () => {
+    const limit = {
+      now: new Date('2026-11-02T09:00:00Z'),
+      minTimeZoneIntervalMs: 24 * 60 * 60_000,
+    };
+    const mine = await (await open()).settings(userScope(ALICE));
+    const theirs = await (await open()).settings(userScope(ALICE));
+
+    await mine.update({ timeZone: 'Asia/Tokyo' }, limit);
+    const refused = await theirs
+      .update({ timeZone: 'Europe/Copenhagen' }, limit)
+      .catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(TimeZoneChangeTooSoon);
+    expect(refused).toMatchObject({ allowedAt: new Date('2026-11-03T09:00:00Z') });
+    expect((await (await open()).settings(userScope(ALICE))).get()).toMatchObject({
+      timeZone: 'Asia/Tokyo',
+      timeZoneChangedAt: '2026-11-02T09:00:00.000Z',
+    });
   });
 });
 

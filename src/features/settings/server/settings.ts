@@ -72,15 +72,44 @@ export const SETTINGS_DOCUMENT: DocumentCodec<AppSettings> = {
   encode: (settings) => ({ version: 1, ...settings }),
 };
 
+export interface SettingsUpdateOptions {
+  /** When the update happens, for stamping a changed time zone; defaults to the clock. */
+  now?: Date;
+  /** Refuses a time zone change sooner than this after the previous one. */
+  minTimeZoneIntervalMs?: number;
+}
+
+/** A time zone change came sooner than `SettingsUpdateOptions.minTimeZoneIntervalMs` allows. */
+export class TimeZoneChangeTooSoon extends Error {
+  public readonly allowedAt: Date;
+
+  public constructor(allowedAt: Date) {
+    super(`The time zone can change once a day; try again after ${allowedAt.toISOString()}`);
+    this.name = 'TimeZoneChangeTooSoon';
+    this.allowedAt = allowedAt;
+  }
+}
+
 /**
  * `current` with `patch` applied; models set to `null` and a `null` zone are cleared. A zone that
- * changes is stamped with `now`.
+ * changes is stamped with `options.now`. Throws `TimeZoneChangeTooSoon` when the zone changes
+ * sooner than `options.minTimeZoneIntervalMs` allows.
  */
 export function applySettingsPatch(
   current: AppSettings,
   patch: SettingsPatch,
-  now: Date = new Date(),
+  options: SettingsUpdateOptions = {},
 ): AppSettings {
+  const now = options.now ?? new Date();
+  if (options.minTimeZoneIntervalMs !== undefined) {
+    const allowedAt = timeZoneChangeAllowedAt(current, patch, {
+      minIntervalMs: options.minTimeZoneIntervalMs,
+      now,
+    });
+    if (allowedAt) {
+      throw new TimeZoneChangeTooSoon(allowedAt);
+    }
+  }
   const models = { ...current.models };
   for (const [provider, model] of Object.entries(patch.models ?? {})) {
     const name = ProviderSchema.parse(provider);
@@ -109,7 +138,7 @@ export function applySettingsPatch(
  * When `patch` may change `current`'s time zone, if it changes the zone sooner than `minIntervalMs`
  * after the last change; otherwise `undefined`.
  */
-export function timeZoneChangeAllowedAt(
+function timeZoneChangeAllowedAt(
   current: AppSettings,
   patch: SettingsPatch,
   limit: { minIntervalMs: number; now: Date },
@@ -125,7 +154,8 @@ export function timeZoneChangeAllowedAt(
 /** The review provider, models and time zone. `get` is synchronous, so an implementation loads on open. */
 export interface SettingsStore {
   get: () => AppSettings;
-  update: (patch: SettingsPatch) => Promise<AppSettings>;
+  /** Applies `patch` to the latest saved settings with `applySettingsPatch`, and saves them. */
+  update: (patch: SettingsPatch, options?: SettingsUpdateOptions) => Promise<AppSettings>;
 }
 
 export interface SettingsStoreOptions {
@@ -167,9 +197,9 @@ export class FileSettingsStore implements SettingsStore {
     return this.current;
   }
 
-  public update(patch: SettingsPatch): Promise<AppSettings> {
+  public update(patch: SettingsPatch, options?: SettingsUpdateOptions): Promise<AppSettings> {
     return this.writes.run(async () => {
-      const next = applySettingsPatch(this.current, patch);
+      const next = applySettingsPatch(this.current, patch, options);
       await writePrivateJson(this.file, SETTINGS_DOCUMENT.encode(next));
       this.current = next;
       return next;

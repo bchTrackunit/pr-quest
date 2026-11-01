@@ -123,7 +123,8 @@ function userOf(scope: StorageScope): GitHubUser {
 function settingsStore(document: PostgresDocument<AppSettings>): SettingsStore {
   return {
     get: () => document.value,
-    update: (patch) => document.update((current) => applySettingsPatch(current, patch)),
+    update: (patch, options) =>
+      document.update((current) => applySettingsPatch(current, patch, options)),
   };
 }
 
