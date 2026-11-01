@@ -557,7 +557,7 @@ local clock.
 | Clean Sweep      | Act on 5 direct requests in a day, and leave no direct request on the board   | Epic      |
 | Necromancer      | A review action on a PR requested 30 days or more ago                         | Rare      |
 | The Long Read    | A review action on a PR with 2,000 or more changed lines                      | Rare      |
-| Eagle Eye        | Post a review with at least one critical or major finding                     | Common    |
+| Eagle Eye        | Post a review with at least one accepted critical or major finding            | Common    |
 | Featherweight    | Approve 10 Trivial PRs in a day, each after a posted review or finished agent | Rare      |
 | Second Opinion   | A finished Claude review and a finished Cursor review on the same PR          | Rare      |
 | **Variety**      |                                                                               |           |
