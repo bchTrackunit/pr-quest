@@ -25,7 +25,10 @@ export function childProcessEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEn
   return env;
 }
 
-/** `path` followed by the usual gh install folders it lacks. Windows installers set PATH themselves. */
+/**
+ * The absolute folders in `path`, followed by the usual gh install folders it lacks. Windows
+ * installers set PATH themselves.
+ */
 export function ghSearchPath(
   path: string | undefined,
   platform: NodeJS.Platform,
@@ -33,7 +36,8 @@ export function ghSearchPath(
   if (platform === 'win32') {
     return path;
   }
-  const entries = (path ?? '').split(posix.delimiter).filter((entry) => entry !== '');
+  // An empty or relative entry is searched from the working directory, which may hold anything.
+  const entries = (path ?? '').split(posix.delimiter).filter((entry) => posix.isAbsolute(entry));
   const missing = COMMON_BIN_DIRS.filter((dir) => !entries.includes(dir));
   return [...entries, ...missing].join(posix.delimiter);
 }

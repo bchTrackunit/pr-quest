@@ -97,6 +97,12 @@ describe('ghSearchPath', () => {
     );
   });
 
+  test('drops relative entries, which would find a gh in whatever folder PR Quest runs in', () => {
+    expect(ghSearchPath('.:bin:/usr/bin:./node_modules/.bin', 'darwin')).toBe(
+      '/usr/bin:/opt/homebrew/bin:/usr/local/bin',
+    );
+  });
+
   test('works without an inherited PATH', () => {
     expect(ghSearchPath(undefined, 'darwin')).toBe('/opt/homebrew/bin:/usr/local/bin');
   });
