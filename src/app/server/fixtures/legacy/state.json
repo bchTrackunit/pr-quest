@@ -18,7 +18,9 @@
       "quickDraws": 0
     },
     "streakDays": 1,
-    "rewardedApprovals": ["Acme/widgets#99"],
+    "rewardedApprovals": [
+      "Acme/widgets#99"
+    ],
     "lastReviewDate": "2026-10-30"
   },
   "runs": [
