@@ -8,15 +8,21 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { inspect } from 'node:util';
 
-import { loadConfig, REQUEST_SECRET_COOKIE, type RunningServer } from '../app/server/server.ts';
+import {
+  loadConfig,
+  REQUEST_SECRET_COOKIE,
+  type RunningServer,
+  type SecretStore,
+} from '../app/server/server.ts';
 import { RELEASE_BUILD } from './buildFlags.ts';
 import { startDesktopServer } from './desktopServer.ts';
-import { type Encryptor, openDesktopSecrets } from './keychainSecrets.ts';
+import { type Encryptor, keychainUsable, openDesktopSecrets } from './keychainSecrets.ts';
 import { type LogFile, openLogFile } from './logFile.ts';
 import { menuTemplate } from './menu.ts';
 import { externalUrl, isAllowedPermission, isAppUrl } from './navigation.ts';
-import { readPreferences, writePreferences } from './preferences.ts';
+import { type DesktopPreferences, readPreferences, writePreferences } from './preferences.ts';
 import { README_URL, RELEASE_REPO } from './release.ts';
+import { secretsNotice } from './secretsNotice.ts';
 import { scheduleUpdateChecks, updatesEnabled } from './updates.ts';
 
 /** `PR_QUEST_SMOKE_TEST=1` checks a build, prints the results and exits; see smoke.ts. */
@@ -100,15 +106,10 @@ function run(): void {
 
       // State stays in ~/.pr-quest (or PR_QUEST_STATE_DIR), shared with the CLI.
       const base = loadConfig({ onWarning: log.warn });
-      const secrets = await openDesktopSecrets(base.stateDir, {
-        // macOS asks before a rebuilt, unsigned app may read its keychain entry, and the question
-        // blocks the main process, so a smoke test leaves the keychain alone.
-        encryptor: smokeTest ? undefined : keychain(),
-        info: log.info,
-        warn: log.warn,
-      });
       const preferencesFile = join(app.getPath('userData'), 'desktop.json');
-      const { port } = await readPreferences(preferencesFile);
+      const preferences = await readPreferences(preferencesFile);
+      const secrets = await openSecrets(base.stateDir, preferences, preferencesFile, log);
+      const { port } = preferences;
       const requestSecret = randomBytes(32).toString('base64url');
       const running = await startDesktopServer(base, port, {
         secrets,
@@ -118,7 +119,8 @@ function run(): void {
         warn: log.warn,
       });
       server = running;
-      await writePreferences(preferencesFile, { port: running.port });
+      preferences.port = running.port;
+      await writePreferences(preferencesFile, preferences);
 
       // Only this window may call the server; every request it makes, EventSource too, sends this.
       await session.defaultSession.cookies.set({
@@ -161,17 +163,60 @@ function run(): void {
 }
 
 /**
- * The OS keychain through Electron's safeStorage. Without a keyring, Linux "encrypts" with a fixed
- * built-in password, which is no safer than the plain file, so that counts as no keychain.
+ * Opens the saved keys and tells the player when they can't be encrypted, saved or read, asking
+ * once whether to save them unencrypted without a keychain. Records that answer in `preferences`.
  */
+async function openSecrets(
+  stateDir: string,
+  preferences: DesktopPreferences,
+  preferencesFile: string,
+  log: LogFile,
+): Promise<SecretStore> {
+  // macOS asks before a rebuilt, unsigned app may read its keychain entry, and the question
+  // blocks the main process, so a smoke test leaves the keychain alone.
+  const encryptor = smokeTest ? undefined : keychain();
+  for (;;) {
+    const { store, storage } = await openDesktopSecrets(stateDir, {
+      encryptor,
+      allowPlaintext: preferences.plaintextSecrets === true,
+      info: log.info,
+      warn: log.warn,
+    });
+    const notice = smokeTest ? undefined : secretsNotice(storage, preferences.plaintextSecrets);
+    if (!notice) {
+      return store;
+    }
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      message: notice.message,
+      detail: notice.detail,
+      buttons: notice.buttons.map((button) => button.label),
+      defaultId: 0,
+      cancelId: 0,
+    });
+    const action = notice.buttons[response]?.action ?? 'continue';
+    if (action === 'retry') {
+      continue;
+    }
+    if (action === 'keepInMemory' || action === 'savePlaintext') {
+      preferences.plaintextSecrets = action === 'savePlaintext';
+      await writePreferences(preferencesFile, preferences);
+      if (preferences.plaintextSecrets) {
+        continue;
+      }
+    }
+    return store;
+  }
+}
+
+/** The OS keychain through Electron's safeStorage, when it protects anything; see keychainUsable. */
 function keychain(): Encryptor | undefined {
-  if (!safeStorage.isEncryptionAvailable()) {
-    return undefined;
-  }
-  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
-    return undefined;
-  }
-  return safeStorage;
+  const usable = keychainUsable({
+    platform: process.platform,
+    isAvailable: safeStorage.isEncryptionAvailable(),
+    backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined,
+  });
+  return usable ? safeStorage : undefined;
 }
 
 /** The UI gets the permissions it uses, and only on its own origin. */

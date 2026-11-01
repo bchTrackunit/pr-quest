@@ -29,6 +29,12 @@ describe('desktop preferences', () => {
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, port: 53124 });
   });
 
+  test('remember whether keys may be saved unencrypted without a keychain', async () => {
+    await writePreferences(file, { port: 53124, plaintextSecrets: false });
+
+    await expect(readPreferences(file)).resolves.toEqual({ port: 53124, plaintextSecrets: false });
+  });
+
   test.each([
     ['unreadable', '{ nope'],
     ['an invalid port', JSON.stringify({ version: 1, port: 70000 })],

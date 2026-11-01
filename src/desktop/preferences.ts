@@ -12,17 +12,27 @@ import {
 export interface DesktopPreferences {
   /** The server's last port. */
   port?: number;
+  /** Without a keychain: whether the player chose to save keys unencrypted, once they've chosen. */
+  plaintextSecrets?: boolean;
 }
 
 const PreferencesFileSchema = z.object({
   version: z.literal(1),
   port: z.number().int().min(1).max(65535).optional(),
+  plaintextSecrets: z.boolean().optional(),
 });
 
-/** The saved preferences; an unreadable or newer file counts as none, since they are only hints. */
+/**
+ * The saved preferences. An unreadable or newer file counts as none, which at worst asks the
+ * keychain question again.
+ */
 export async function readPreferences(file: string): Promise<DesktopPreferences> {
   const parsed = PreferencesFileSchema.safeParse(safeJson((await readIfExists(file)) ?? ''));
-  return parsed.success && parsed.data.port !== undefined ? { port: parsed.data.port } : {};
+  if (!parsed.success) {
+    return {};
+  }
+  const { version: _version, ...preferences } = parsed.data;
+  return Object.fromEntries(Object.entries(preferences).filter(([, value]) => value !== undefined));
 }
 
 export async function writePreferences(
