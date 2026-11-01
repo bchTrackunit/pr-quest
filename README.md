@@ -442,9 +442,10 @@ GitHub user PR Quest sees gets them: each file is copied into `users/<login>/`, 
 is renamed to `<file>.migrated-to-<login>-<UTC time>.bak`, for example
 `state.json.migrated-to-octocat-20261031T091500Z.bak`. Nothing reads the `.bak` files, so the
 old state can't be handed to a second user; delete them once you've checked your XP. A user who
-already has a `state.json` keeps it. An interrupted migration is finished on the next start, and
-the server logs which files it moved. The login that got the old state is recorded in
-`users/.legacy-owner`. If a `state.json` or `quests.json` shows up in `~/.pr-quest` again later,
+already has a `state.json` keeps it. The login that gets the old state is recorded in
+`users/.legacy-owner` before anything is copied, so an interrupted migration is finished for that
+login on the next start and never handed to someone else. The server logs which files it moved.
+If a `state.json` or `quests.json` shows up in `~/.pr-quest` again later,
 it is renamed to `<file>.orphaned-<UTC time>.bak` with a warning instead of being given to
 anyone.
 

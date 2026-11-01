@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -20,6 +20,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await chmod(dir, 0o700);
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -28,7 +29,11 @@ describe('userStateDir', () => {
     expect(userStateDir(dir, 'Player-One')).toBe(join(dir, 'users', 'player-one'));
   });
 
-  test.each(['', '../x', 'a/b', '-lead', 'x'.repeat(40), 'dot.name'])(
+  test('accepts Enterprise Managed User logins, which end in _<shortcode>', () => {
+    expect(userStateDir(dir, 'Octo-Cat_acme')).toBe(join(dir, 'users', 'octo-cat_acme'));
+  });
+
+  test.each(['', '../x', 'a/b', '-lead', '_lead', 'x'.repeat(40), 'dot.name'])(
     'rejects the login %j',
     (login) => {
       expect(() => userStateDir(dir, login)).toThrow(/GitHub login/);
@@ -101,6 +106,37 @@ describe('migrateLegacyState', () => {
       'state.json.migrated-to-player-20261030T140000Z.bak',
       'users',
     ]);
+  });
+
+  test('records the receiving login before copying, so a crash mid-copy hands nothing to another user', async () => {
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+    await mkdir(join(dir, 'users', 'player'), { recursive: true });
+    // A read-only state folder fails the rename of the original right after the copy, like a crash.
+    await chmod(dir, 0o500);
+    const crashed = await migrateLegacyState(dir, 'player', { now: () => NOW }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await chmod(dir, 0o700);
+
+    const other = await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
+
+    expect(crashed).toBeInstanceOf(Error);
+
+    expect(other).toEqual({ migrated: [] });
+    await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
+    expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
+  });
+
+  test('finishes a migration that recorded the receiver but stopped before copying', async () => {
+    await mkdir(join(dir, 'users'), { recursive: true });
+    await writeFile(join(dir, 'users', '.legacy-owner'), 'player\n');
+    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+
+    const result = await migrateLegacyState(dir, 'player', { now: () => NOW });
+
+    expect(result).toEqual({ migrated: ['state.json'] });
+    expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
   });
 
   test('records which login received the shared state', async () => {
@@ -214,7 +250,7 @@ describe('migrating a real legacy state folder', () => {
 
     const userDir = join(dir, 'users', 'brianchristensen');
     const store = await StateStore.open(userDir);
-    const player = new GameService(store, { broadcast: () => undefined }).player();
+    const player = new GameService(store, { broadcast: () => undefined }, () => NOW).player();
     expect(player).toEqual({
       xp: 25,
       level: 1,

@@ -3,8 +3,11 @@ import { join } from 'node:path';
 
 import { ensurePrivateDir, readIfExists, WriteQueue } from './privateFiles.ts';
 
-/** GitHub logins are letters, digits and hyphens, never starting with a hyphen, at most 39 long. */
-const LOGIN_PATTERN = /^[a-z\d][a-z\d-]{0,38}$/i;
+/**
+ * GitHub logins are letters, digits and hyphens, never starting with a hyphen, at most 39 long.
+ * Enterprise Managed User logins add an underscore and the enterprise's shortcode.
+ */
+const LOGIN_PATTERN = /^[a-z\d][a-z\d_-]{0,38}$/i;
 
 /**
  * Files that used to be shared by everyone and now live in each user's folder. `state.json` goes
@@ -16,7 +19,7 @@ const LEGACY_FILES = ['quests.json', 'state.json'] as const;
 const OWNER_FILE = '.legacy-owner';
 
 /** The backups of a migration that ran before the owner was recorded name the owner. */
-const BACKUP_PATTERN = /^(?:state|quests)\.json\.migrated-to-([a-z\d][a-z\d-]{0,38})-\d{8}T\d{6}Z\.bak$/;
+const BACKUP_PATTERN = /^(?:state|quests)\.json\.migrated-to-([a-z\d][a-z\d_-]{0,38})-\d{8}T\d{6}Z\.bak$/;
 
 /** One migration at a time, so two users signing in at once can't both copy the shared state. */
 const migrations = new WriteQueue();
@@ -37,10 +40,10 @@ export interface MigrateOptions {
 /**
  * Hands the state from before per-user folders to the first user who shows up. Each file is copied
  * into their folder, then the original is renamed to a timestamped `.bak` that nothing reads, so it
- * can't be handed to a second user. The receiving login is recorded, and a shared file that
- * reappears later (say, from running an older build) is renamed to `.orphaned-<stamp>.bak` instead
- * of being given to anyone. A user who already has state keeps it. Running it again is a no-op, and
- * a run that stopped between the copy and the rename is finished.
+ * can't be handed to a second user. The receiving login is recorded before anything is copied, and
+ * a shared file that reappears later (say, from running an older build) is renamed to
+ * `.orphaned-<stamp>.bak` instead of being given to anyone. A user who already has state keeps it.
+ * Running it again is a no-op, and a run that stopped part-way is finished for the same login.
  */
 export async function migrateLegacyState(
   stateDir: string,
@@ -61,10 +64,15 @@ async function migrate(
   await ensurePrivateDir(usersDir);
   await ensurePrivateDir(userDir);
   const ownerFile = join(usersDir, OWNER_FILE);
-  const recorded = (await readIfExists(ownerFile))?.trim().toLowerCase();
-  const owner = recorded && LOGIN_PATTERN.test(recorded) ? recorded : await ownerFromBackups(stateDir);
+  let recorded = (await readIfExists(ownerFile))?.trim().toLowerCase();
+  let owner = recorded && LOGIN_PATTERN.test(recorded) ? recorded : await ownerFromBackups(stateDir);
   const hasState = await exists(join(userDir, 'state.json'));
   const stamp = timestamp((options.now ?? (() => new Date()))());
+  if (owner === undefined && !hasState && (await anyLegacyFile(stateDir))) {
+    // Claimed before copying: a crash part-way must not leave the shared state to the next login.
+    await writeFile(ownerFile, `${login}\n`, { mode: 0o600 });
+    owner = recorded = login;
+  }
   const migrated: Array<string> = [];
   for (const name of LEGACY_FILES) {
     const legacy = join(stateDir, name);
@@ -76,18 +84,18 @@ async function migrate(
     if ((owner === undefined || owner === login) && targetExists && (await sameContent(legacy, target))) {
       await rename(legacy, `${legacy}.migrated-to-${login}-${stamp}.bak`);
       migrated.push(name);
-    } else if (owner !== undefined) {
-      const orphan = await setAside(legacy, stamp);
-      options.onWarning?.(
-        `${name} reappeared after the shared state went to ${owner}; it was moved to ${orphan} and given to nobody`,
-      );
-    } else if (!targetExists && !hasState) {
+    } else if (owner === login && !targetExists && !hasState) {
       const temp = `${target}.${process.pid}.migrating`;
       await copyFile(legacy, temp);
       await chmod(temp, 0o600);
       await rename(temp, target);
       await rename(legacy, `${legacy}.migrated-to-${login}-${stamp}.bak`);
       migrated.push(name);
+    } else if (owner !== undefined) {
+      const orphan = await setAside(legacy, stamp);
+      options.onWarning?.(
+        `${name} reappeared after the shared state went to ${owner}; it was moved to ${orphan} and given to nobody`,
+      );
     }
   }
   const receiver = owner ?? (migrated.length > 0 ? login : undefined);
@@ -95,6 +103,15 @@ async function migrate(
     await writeFile(ownerFile, `${receiver}\n`, { mode: 0o600 });
   }
   return { migrated };
+}
+
+async function anyLegacyFile(stateDir: string): Promise<boolean> {
+  for (const name of LEGACY_FILES) {
+    if (await exists(join(stateDir, name))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function ownerFromBackups(stateDir: string): Promise<string | undefined> {
