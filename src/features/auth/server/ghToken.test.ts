@@ -72,8 +72,14 @@ describe('readGhToken', () => {
         vi.unstubAllEnvs();
       }
 
-      const env = (execFileMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
-      expect(env?.PATH).toBe('/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');
+      expect(execFileMock).toHaveBeenCalledWith(
+        'gh',
+        ['auth', 'token'],
+        expect.objectContaining({
+          env: expect.objectContaining({ PATH: '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin' }),
+        }),
+        expect.any(Function),
+      );
     },
   );
 });
