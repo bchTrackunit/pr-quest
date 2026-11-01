@@ -278,11 +278,22 @@ the Cursor SDK's native parts (its sandbox, `rg` and the tree-sitter bindings); 
 if they're missing. Those parts and every `.node` binding are unpacked next to `app.asar`, since
 a program inside the archive can't be started.
 
-`just desktop-smoke` starts the packaged app with a throwaway state directory, checks that the UI
-renders, that both SDKs load with their native parts, and that a call with a made-up key reaches
-Cursor and Anthropic and is refused as unauthenticated, then quits with the result. Pass the path
-of another executable, such as the one inside a mounted `dmg`, to check that instead. It needs a
-display; on a Linux server, run it under `xvfb-run`.
+`just desktop-smoke` starts the packaged app with a throwaway state directory and without your
+`CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and `LINEAR_API_KEY`. It checks that the server refuses a
+request without the app's secret, that the UI renders with nothing blocked by its Content Security
+Policy, that both SDKs load with their native parts, and that a call with a made-up key reaches
+Cursor and Anthropic and is refused as unauthenticated, then quits with the result and deletes
+the directory. Pass the path of another executable, such as the one inside a mounted `dmg`, to
+check that instead. It needs a display; on a Linux server, run it under `xvfb-run`. The app's
+smoke mode (`PR_QUEST_SMOKE_TEST=1`) refuses to start without `PR_QUEST_STATE_DIR`, so it never
+touches your real state.
+
+**The window.** The app's server only answers requests carrying a secret made fresh at each
+start, which the window gets as an `HttpOnly`, `SameSite=Strict` cookie, so other programs and
+pages on your machine can't call it even though it listens on `127.0.0.1`. `GET /api/health`
+is the exception. A packaged app has no DevTools and refuses to start with
+`--remote-debugging-port` or `--remote-debugging-pipe`. If the page crashes, the window reloads
+it, at most once every 10 seconds. Quitting waits at most 5 seconds for the server to stop.
 
 **Unsigned builds.** Without signing settings the app is unsigned (on macOS, ad-hoc signed), so
 macOS Gatekeeper and Windows SmartScreen warn before the first start; on macOS, right-click the
@@ -302,17 +313,32 @@ a new one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and
 
 **Saved keys.** The app keeps the GitHub token and the API keys from Settings in
 `secrets.encrypted.json`, encrypted with a key held by the OS keychain (the macOS Keychain, the
-Windows user's DPAPI, or the Secret Service or KWallet on Linux). The first start moves an
-existing `secrets.json` into it and renames the plain file to `secrets.json.bak`; delete the
-backup once the app shows your keys. From then on, `yarn start` no longer sees those keys, so
-set them in `.env` or the environment for it. Without a keychain, such as on Linux without a
-keyring, the app keeps using `secrets.json` and logs a warning.
+Windows user's DPAPI, or the Secret Service or KWallet on Linux). Whenever it finds a
+`secrets.json`, it imports it, with its keys winning over the encrypted ones, so keys saved
+later by `yarn start` aren't lost. It decrypts the result to check it before deleting
+`secrets.json`; no plain copy is kept. From then on, `yarn start` no longer sees those keys, so
+set them in `.env` or the environment for it.
 
-**Updates.** A packaged app checks GitHub Releases for a newer version at start and every 6
+Without a usable keychain, such as on Linux without a keyring or with only Chromium's
+`basic_text` store, the app reads `secrets.json` but keeps any change in memory until it quits,
+and says so once in a dialog. Choosing **Save Them Unencrypted** there writes `secrets.json` from
+then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the
+keychain isn't available, the app starts without saved keys and never writes `secrets.json`,
+so the encrypted file stays the only copy. If the keychain can't decrypt the file, for example
+after the keychain entry was deleted, the app offers to try again or to continue without saved
+keys; the file is left in place until you save a key, which replaces it.
+
+**Updates.** A release build checks GitHub Releases for a newer version at start and every 6
 hours, downloads it in the background and installs it when you quit. Set
 `PR_QUEST_DISABLE_UPDATES=1` to turn this off. The repository it checks, and that **Help** opens,
 is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts); macOS installs updates
 only into a signed app.
+
+A release build is one built with `PR_QUEST_RELEASE_BUILD=1` in the environment of both
+`yarn build` (which bakes the flag into the desktop bundle) and electron-builder (which then
+adds the GitHub publish settings and the `app-update.yml` the updater reads). That build stops if
+`RELEASE_REPO` still names the placeholder owner. Any other build, including
+`just desktop-package`, never checks for updates.
 
 **Signing and publishing.** [`electron-builder.config.ts`](electron-builder.config.ts) reads its
 secrets from the environment and lists them at the top: `CSC_LINK` and `CSC_KEY_PASSWORD` sign
@@ -321,8 +347,9 @@ for macOS, and `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` (or `A
 Signing (`AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`,
 `AZURE_SIGNING_PUBLISHER` and the `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET`
 it authenticates with) or with a certificate (`WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`). With
-`GH_TOKEN` set, `yarn build && yarn electron-builder --config electron-builder.config.ts
---publish always` uploads the installers and the update files to a draft release.
+`GH_TOKEN` and `PR_QUEST_RELEASE_BUILD=1` set, `yarn build && yarn electron-builder --config
+electron-builder.config.ts --publish always` uploads the installers and the update files to a
+draft release.
 `CSC_IDENTITY_AUTO_DISCOVERY=false` skips signing on a Mac with a signing certificate in its
 keychain.
 
@@ -637,7 +664,12 @@ check, so links and bookmarks still open the page. Only GET and HEAD are served,
 alone: paths with `..`, a backslash or a dotfile segment get `404`. A path without a file
 extension that isn't a file gets `index.html`, so the app's own routes load. Hashed files under
 `assets/` are cached for a year as `immutable`; `index.html` and the rest are `no-cache`, so a new
-build shows up on the next load.
+build shows up on the next load. HTML pages carry a Content Security Policy that allows only PR
+Quest's own scripts, styles, fonts and API, plus avatars from `avatars.githubusercontent.com`,
+and forbids plugins, framing and forms that post elsewhere.
+
+The [desktop app](#desktop-app) also requires a per-start secret cookie on every request but
+`GET /api/health`. `yarn start` and `yarn dev` don't.
 
 In [hosted mode](#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and the Origin
 must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a load
@@ -745,7 +777,6 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 ├── secrets.json        the GitHub OAuth token and the API keys saved from Settings
 ├── secrets.encrypted.json
 │                       the same, encrypted; the desktop app keeps them here instead
-├── secrets.json.bak    the plain file, once the desktop app moved it into secrets.encrypted.json
 ├── settings.json       the review provider and the model per provider
 └── users/
     └── <login>/        one folder per GitHub user, named by the lower-cased login
@@ -754,7 +785,8 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
         └── quests.json the last quest list, when it was fetched, any rate-limit backoff
 ```
 
-The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`.
+The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`. It
+also deletes a `secrets.json.bak` that earlier builds of it left behind.
 `secrets.json` and `settings.json` are shared; the game and the quest cache belong to whoever
 the current token is. Signing in as someone else opens their own folder, starting fresh. Keys
 set in the environment or an env file are never written to `secrets.json`.
@@ -796,8 +828,9 @@ anyone.
   `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and `LINEAR_API_KEY`.
 - **Outside the desktop app, secrets are stored in plain text.** `secrets.json` is protected by
   its `0600` mode and the `0700` directory, not encrypted. Backups of your home folder include
-  it. The desktop app encrypts them with a key from the OS keychain instead (see
-  [Desktop app](#desktop-app)); its `secrets.json.bak` is still plain text until you delete it.
+  it. The desktop app encrypts them with a key from the OS keychain instead and deletes the plain
+  file once it has checked the encrypted copy. Without a keychain it writes them in plain text
+  only if you agree to (see [Desktop app](#desktop-app)).
 - **The OAuth token is broad.** The `repo` scope grants access to every repo you can access (see
   [Scopes](#scopes)); moving to a GitHub App with narrower, expiring tokens is a possible
   improvement. **Sign out** deletes the token from `secrets.json` but doesn't revoke it on
@@ -860,8 +893,8 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
   elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
 - **The desktop app has no release yet.** `RELEASE_REPO` names a placeholder owner, so **Help**
-  and update checks fail until it's set, the version is `0.0.0`, there is no app icon, and builds
-  are unsigned. Only the macOS arm64 build has been started and checked so far.
+  opens a missing page and a release build can't be packaged until it's set, the version is
+  `0.0.0`, there is no app icon, and builds are unsigned. Only the macOS arm64 build has been started and checked so far.
 - **The desktop app and `yarn start` don't share a running state.** Run one at a time on a
   state directory, as described in [Desktop app](#desktop-app).
 
