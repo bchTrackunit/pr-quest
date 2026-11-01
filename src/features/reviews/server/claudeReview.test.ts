@@ -17,7 +17,7 @@ import {
   GitHubNetworkError,
   NotSignedInError,
 } from '../../../platform/server/githubApi.ts';
-import type { QuestSnapshot } from '../../game/server/store.ts';
+import type { QuestSnapshot } from '../../game/server/index.ts';
 import { SOURCE_DIFF, toolMessage } from './test-utils/claude.ts';
 
 const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';

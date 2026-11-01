@@ -18,11 +18,11 @@ import type {
 import type { ReviewResult } from '../../../shared/api.ts';
 import { ANTHROPIC_API_URL } from '../../../platform/server/config.ts';
 import { budgetDiff, DEFAULT_DIFF_BUDGET_CHARS, type BudgetedDiff } from './diffBudget.ts';
-import type { GitHubClient } from '../../quests/server/github.ts';
+import type { GitHubClient } from '../../quests/server/index.ts';
 import { GitHubApiError, GitHubNetworkError } from '../../../platform/server/githubApi.ts';
 import { isRateLimitError } from '../../../platform/server/rateLimit.ts';
 import { REVIEW_GUIDELINES, ReviewResultSchema } from '../../../shared/reviewResult.ts';
-import type { QuestSnapshot } from '../../game/server/store.ts';
+import type { QuestSnapshot } from '../../game/server/index.ts';
 
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5';
 const MAX_OUTPUT_TOKENS = 16_000;

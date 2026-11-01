@@ -1,12 +1,12 @@
 import { describe, expect, test, vi } from 'vitest';
 
-import type { GitHubViewer } from '../../features/quests/server/github.ts';
+import type { GitHubViewer } from '../../features/quests/server/index.ts';
 import {
   GitHubApiError,
   GitHubNetworkError,
   NotSignedInError,
 } from '../../platform/server/githubApi.ts';
-import type { ResolvedToken } from '../../features/auth/server/githubToken.ts';
+import type { ResolvedToken } from '../../features/auth/server/index.ts';
 import {
   SessionEndedError,
   SessionManager,

@@ -13,7 +13,7 @@ import type {
   XpReason,
 } from '../../../shared/api.ts';
 import type { NotificationAccess } from '../../../platform/ui/notifications.ts';
-import type { SettingsTarget } from '../../settings/ui/settingsModel.ts';
+import type { SettingsTarget } from '../../settings/ui/index.ts';
 
 export type LoadState = 'loading' | 'ready' | 'error';
 

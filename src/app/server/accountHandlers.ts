@@ -6,11 +6,9 @@ import {
   type GitHubAccount,
   type SettingsResponse,
 } from '../../shared/api.ts';
-import type { ApiKeys } from '../../features/settings/server/apiKeys.ts';
-import type { DeviceFlow } from '../../features/auth/server/deviceFlow.ts';
-import type { ModelCatalog } from '../../features/settings/server/models.ts';
+import type { ApiKeys, ModelCatalog, SettingsStore } from '../../features/settings/server/index.ts';
+import type { DeviceFlow } from '../../features/auth/server/index.ts';
 import type { RouteHandlers } from '../../platform/server/router.ts';
-import type { SettingsStore } from '../../features/settings/server/settings.ts';
 import { ModelIdSchema, parseBody, parseOrReject } from '../../platform/server/validation.ts';
 
 const MAX_KEY_LENGTH = 1000;

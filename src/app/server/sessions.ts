@@ -1,7 +1,7 @@
 import type { GitHubAccount, GitHubTokenSource } from '../../shared/api.ts';
-import type { GitHubViewer } from '../../features/quests/server/github.ts';
+import type { GitHubViewer } from '../../features/quests/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
-import type { ResolvedToken } from '../../features/auth/server/githubToken.ts';
+import type { ResolvedToken } from '../../features/auth/server/index.ts';
 
 /** A failed `/user` lookup is retried after this long rather than on every request. */
 const IDENTITY_FAILURE_TTL_MS = 30_000;

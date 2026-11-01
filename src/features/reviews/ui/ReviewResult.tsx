@@ -9,9 +9,9 @@ import type {
   ReviewVerdict,
 } from '../../../shared/api.ts';
 import { describeError } from '../../../platform/ui/apiClient.ts';
-import { groupFindings, questLabel } from '../../game/ui/gameState.ts';
+import { groupFindings, questLabel } from '../../game/ui/index.ts';
 import { Modal } from '../../../platform/ui/Modal.tsx';
-import { PROVIDER_LABELS } from '../../settings/ui/settingsModel.ts';
+import { PROVIDER_LABELS } from '../../settings/ui/index.ts';
 
 export interface ReviewResultProps {
   run: ReviewRun;

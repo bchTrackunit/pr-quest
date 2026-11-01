@@ -13,7 +13,7 @@ import type {
 } from '../../../shared/api.ts';
 import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL } from './claudeReview.ts';
 import { ReviewRunService, type ClaudeRunner, type ReviewRunServiceOptions } from './reviewRuns.ts';
-import { StateStore, type StoredRun } from '../../game/server/store.ts';
+import { StateStore, type StoredRun } from '../../game/server/index.ts';
 
 vi.mock('@cursor/sdk', () => {
   class MockCursorAgentError extends Error {

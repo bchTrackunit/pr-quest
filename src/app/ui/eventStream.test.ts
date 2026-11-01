@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { ServerEvent } from '../../shared/api.ts';
 import { connectEventStream, parseServerEvent } from './eventStream.ts';
-import type { ConnectionStatus } from '../../features/game/ui/gameState.ts';
+import type { ConnectionStatus } from '../../features/game/ui/index.ts';
 import { makeRun } from '../../platform/ui/test-utils/fixtures.ts';
 import { MockEventSource } from './test-utils/MockEventSource.ts';
 

@@ -1,7 +1,7 @@
 import { chmod, copyFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { ensurePrivateDir, readIfExists, WriteQueue } from './privateFiles.ts';
+import { ensurePrivateDir, readIfExists, WriteQueue } from '../../platform/server/privateFiles.ts';
 
 /**
  * GitHub logins are letters, digits and hyphens, never starting with a hyphen, at most 39 long.

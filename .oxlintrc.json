@@ -65,6 +65,8 @@
         "local/no-barrel-files": "error",
         "local/no-type-assertion": "warn",
         "local/no-enum": "warn",
+        "local/feature-boundaries": "error",
+        "import/no-cycle": "error",
         "typescript/array-type": ["error", { "default": "generic" }],
         "typescript/await-thenable": "warn",
         "typescript/ban-ts-comment": "warn",
@@ -108,6 +110,12 @@
           { "allowNullableBoolean": true, "allowNullableString": true }
         ],
         "typescript/unified-signatures": "error"
+      }
+    },
+    {
+      "files": ["src/features/*/server/index.ts", "src/features/*/ui/index.ts"],
+      "rules": {
+        "local/no-barrel-files": "off"
       }
     },
     {

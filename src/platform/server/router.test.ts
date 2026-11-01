@@ -1,6 +1,7 @@
 import { createServer, request, type Server } from 'node:http';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
+// oxlint-disable-next-line local/feature-boundaries -- exercises the router with the app's real route table
 import { createHandlers } from '../../app/server/handlers.ts';
 import {
   ApiError,

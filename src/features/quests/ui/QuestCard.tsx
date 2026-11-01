@@ -2,9 +2,9 @@ import { useId } from 'react';
 
 import type { Quest, ReviewRun } from '../../../shared/api.ts';
 import { formatAge, formatNumber } from '../../../platform/ui/format.ts';
-import { questLabel, type QuestAction, type QuestActionError } from '../../game/ui/gameState.ts';
+import { questLabel, type QuestAction, type QuestActionError } from '../../game/ui/index.ts';
 import { RunStatus } from './RunStatus.tsx';
-import type { SettingsTarget } from '../../settings/ui/settingsModel.ts';
+import type { SettingsTarget } from '../../settings/ui/index.ts';
 import { TierBadge } from './TierBadge.tsx';
 
 export interface QuestCardProps {

@@ -9,16 +9,17 @@ import type {
   ReviewRunStatus,
 } from '../../../shared/api.ts';
 import { ClaudeReviewError, DEFAULT_CLAUDE_MODEL, type ClaudeRunner } from './claudeReview.ts';
-import type { EventSink, GameService } from '../../game/server/game.ts';
-import { buildReviewPrompt, parseReviewResult } from '../../../shared/reviewResult.ts';
-import { ApiError } from '../../../platform/server/router.ts';
-import type { AppSettings } from '../../settings/server/settings.ts';
 import {
+  type EventSink,
+  type GameService,
   runQuestOf,
   type QuestSnapshot,
   type StateStore,
   type StoredRun,
-} from '../../game/server/store.ts';
+} from '../../game/server/index.ts';
+import { buildReviewPrompt, parseReviewResult } from '../../../shared/reviewResult.ts';
+import { ApiError } from '../../../platform/server/router.ts';
+import type { AppSettings } from '../../settings/server/index.ts';
 
 const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;

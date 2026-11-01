@@ -1,5 +1,5 @@
 import type { ServerEvent, ServerEventType } from '../../shared/api.ts';
-import type { ConnectionStatus } from '../../features/game/ui/gameState.ts';
+import type { ConnectionStatus } from '../../features/game/ui/index.ts';
 
 export interface EventSourceLike {
   onopen: ((event: Event) => void) | null;

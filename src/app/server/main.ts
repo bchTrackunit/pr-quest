@@ -3,7 +3,7 @@ import { inspect } from 'node:util';
 
 import { createApp } from './app.ts';
 import { loadConfig } from '../../platform/server/config.ts';
-import { readGhToken } from '../../features/auth/server/ghToken.ts';
+import { readGhToken } from '../../features/auth/server/index.ts';
 import { createRouter, loopbackOrigins } from '../../platform/server/router.ts';
 
 const info = (message: string): void => {

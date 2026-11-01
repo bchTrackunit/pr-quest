@@ -8,10 +8,7 @@ import { ApiRequestError } from '../../../platform/ui/apiClient.ts';
 import * as apiClient from '../../../platform/ui/apiClient.ts';
 import { SettingsDialog } from './SettingsDialog.tsx';
 import type { SettingsTarget } from './settingsModel.ts';
-import type {
-  GitHubAccountController,
-  GitHubAccountState,
-} from '../../auth/ui/useGitHubAccount.ts';
+import type { GitHubAccountController, GitHubAccountState } from '../../auth/ui/index.ts';
 
 vi.mock('../../../platform/ui/apiClient.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../platform/ui/apiClient.ts')>();

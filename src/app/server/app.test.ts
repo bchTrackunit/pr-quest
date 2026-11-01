@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createApp, type App } from './app.ts';
-import type { CreateMessage } from '../../features/reviews/server/claudeReview.ts';
+import type { CreateMessage } from '../../features/reviews/server/index.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
 import { createRouter } from '../../platform/server/router.ts';
 import { SOURCE_DIFF, toolMessage } from '../../features/reviews/server/test-utils/claude.ts';
@@ -18,7 +18,7 @@ vi.mock('@cursor/sdk', () => ({
   Cursor: { models: { list: vi.fn(async () => []) } },
 }));
 
-const FIXTURES = join(import.meta.dirname, '../../platform/server/fixtures/legacy');
+const FIXTURES = join(import.meta.dirname, 'fixtures', 'legacy');
 const OAUTH_TOKEN = 'gho_OAUTHSECRET0123456789';
 const GH_TOKEN = 'gho_GHCLISECRET0123456789';
 

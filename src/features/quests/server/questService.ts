@@ -1,5 +1,5 @@
 import type { ListQuestsResponse, Quest, ServerEvent } from '../../../shared/api.ts';
-import type { EventSink, GameService } from '../../game/server/game.ts';
+import type { EventSink, GameService } from '../../game/server/index.ts';
 import { IncompleteQuestListError, toQuest, type GitHubClient } from './github.ts';
 import type { LinearReviewClient } from './linear.ts';
 import type { QuestCache, QuestSnapshot } from './questCache.ts';

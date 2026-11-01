@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { formatClock } from '../../../platform/ui/format.ts';
-import type { LoadState } from '../../game/ui/gameState.ts';
+import type { LoadState } from '../../game/ui/index.ts';
 import { QuestBoard, type QuestBoardProps } from './QuestBoard.tsx';
 import { makeQuest, makeRun } from '../../../platform/ui/test-utils/fixtures.ts';
 

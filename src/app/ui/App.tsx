@@ -1,15 +1,16 @@
-import { ApproveDialog } from '../../features/reviews/ui/ApproveDialog.tsx';
-import { findQuest, type GameState } from '../../features/game/ui/gameState.ts';
-import { GitHubAccountControl } from '../../features/auth/ui/GitHubAccountControl.tsx';
-import { PlayerHud } from '../../features/game/ui/PlayerHud.tsx';
-import { QuestBoard } from '../../features/quests/ui/QuestBoard.tsx';
-import { ReviewResult } from '../../features/reviews/ui/ReviewResult.tsx';
-import { SettingsDialog } from '../../features/settings/ui/SettingsDialog.tsx';
+import { ApproveDialog, ReviewResult } from '../../features/reviews/ui/index.ts';
+import {
+  findQuest,
+  type GameState,
+  PlayerHud,
+  Toasts,
+  XpPopups,
+} from '../../features/game/ui/index.ts';
+import { GitHubAccountControl, useGitHubAccount } from '../../features/auth/ui/index.ts';
+import { QuestBoard } from '../../features/quests/ui/index.ts';
+import { SettingsDialog } from '../../features/settings/ui/index.ts';
 import { useStoreState } from '../../platform/ui/store.ts';
-import { Toasts } from '../../features/game/ui/Toasts.tsx';
 import { useGameController } from './useGameController.ts';
-import { useGitHubAccount } from '../../features/auth/ui/useGitHubAccount.ts';
-import { XpPopups } from '../../features/game/ui/XpPopups.tsx';
 
 const selectState = (state: GameState): GameState => state;
 

@@ -1,5 +1,5 @@
 import type { DifficultyTier, Quest, RequestKind, ReviewRun } from '../../../shared/api.ts';
-import { questLabel, sortQuests } from '../../game/ui/gameState.ts';
+import { questLabel, sortQuests } from '../../game/ui/index.ts';
 
 export const DIFFICULTY_TIERS: ReadonlyArray<DifficultyTier> = [
   'Trivial',

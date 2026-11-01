@@ -3,10 +3,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { DeviceFlowStatus, ListModelsResponse } from '../../shared/api.ts';
 import { createAccountHandlers, type AccountServices } from './accountHandlers.ts';
-import { ApiKeys } from '../../features/settings/server/apiKeys.ts';
+import {
+  ApiKeys,
+  type AppSettings,
+  type SettingsPatch,
+} from '../../features/settings/server/index.ts';
 import { createRouter, loopbackOrigins } from '../../platform/server/router.ts';
 import type { SecretName } from '../../platform/server/secrets.ts';
-import type { AppSettings, SettingsPatch } from '../../features/settings/server/settings.ts';
 
 const SAVED_KEY = 'sk-ant-api03-SAVEDSECRETVALUE-wxyz';
 const NEW_KEY = 'crsr_NEWSECRETVALUE_0123456789';

@@ -3,13 +3,17 @@ import { z } from 'zod';
 import type { ReviewRun, ServerEvent } from '../../shared/api.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
 import type { EventHub } from '../../platform/server/events.ts';
-import type { GameService } from '../../features/game/server/game.ts';
-import type { GitHubClient } from '../../features/quests/server/github.ts';
+import type { GameService } from '../../features/game/server/index.ts';
+import {
+  type GitHubClient,
+  RateLimitedError,
+  type QuestService,
+  parseQuestId,
+  type QuestRef,
+  type ReviewDraft,
+} from '../../features/quests/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
-import { RateLimitedError, type QuestService } from '../../features/quests/server/questService.ts';
-import { parseQuestId, type QuestRef } from '../../features/quests/server/quests.ts';
-import type { ReviewDraft } from '../../features/quests/server/reviewPayload.ts';
-import type { ReviewRunService } from '../../features/reviews/server/reviewRuns.ts';
+import type { ReviewRunService } from '../../features/reviews/server/index.ts';
 import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
 import { ModelIdSchema, parseBody } from '../../platform/server/validation.ts';
 

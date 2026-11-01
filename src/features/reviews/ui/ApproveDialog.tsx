@@ -2,7 +2,7 @@ import { useId, useState, type FormEvent } from 'react';
 
 import type { Quest } from '../../../shared/api.ts';
 import { ApiRequestError, describeError } from '../../../platform/ui/apiClient.ts';
-import { questLabel } from '../../game/ui/gameState.ts';
+import { questLabel } from '../../game/ui/index.ts';
 import { Modal } from '../../../platform/ui/Modal.tsx';
 
 export interface ApproveDialogProps {

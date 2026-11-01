@@ -14,7 +14,7 @@ import {
   type LoadState,
   type QuestAction,
   type QuestActionError,
-} from '../../game/ui/gameState.ts';
+} from '../../game/ui/index.ts';
 import { QuestCard } from './QuestCard.tsx';
 import { moveFocusWithArrows, QuestFilterBar } from './QuestFilterBar.tsx';
 import {
@@ -26,7 +26,7 @@ import {
   type KindFilter,
   type RunLookup,
 } from './questFilters.ts';
-import type { SettingsTarget } from '../../settings/ui/settingsModel.ts';
+import type { SettingsTarget } from '../../settings/ui/index.ts';
 import { useBoardView } from './useBoardView.ts';
 import { useNow } from '../../../platform/ui/useNow.ts';
 

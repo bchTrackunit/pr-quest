@@ -18,12 +18,14 @@ import {
   updateSettings,
 } from '../../../platform/ui/apiClient.ts';
 import { ApiKeyRow } from './ApiKeyRow.tsx';
-import { DeviceCodePanel } from '../../auth/ui/DeviceCodePanel.tsx';
 import {
+  DeviceCodePanel,
   AccountAvatar,
   FallbackNotice,
   TokenSourceBadge,
-} from '../../auth/ui/GitHubAccountControl.tsx';
+  TOKEN_SOURCE_DESCRIPTIONS,
+  type GitHubAccountController,
+} from '../../auth/ui/index.ts';
 import { Modal } from '../../../platform/ui/Modal.tsx';
 import {
   KEY_META,
@@ -33,10 +35,6 @@ import {
   type SettingsSection,
   type SettingsTarget,
 } from './settingsModel.ts';
-import {
-  TOKEN_SOURCE_DESCRIPTIONS,
-  type GitHubAccountController,
-} from '../../auth/ui/useGitHubAccount.ts';
 
 export interface SettingsDialogProps {
   target: SettingsTarget;

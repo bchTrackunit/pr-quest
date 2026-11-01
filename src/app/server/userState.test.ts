@@ -14,9 +14,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { z } from 'zod';
 
-import { GameService } from '../../features/game/server/game.ts';
-import { QuestCache } from '../../features/quests/server/questCache.ts';
-import { StateStore } from '../../features/game/server/store.ts';
+import { GameService, StateStore } from '../../features/game/server/index.ts';
+import { QuestCache } from '../../features/quests/server/index.ts';
 import { migrateLegacyState, userStateDir } from './userState.ts';
 
 const LEGACY_STATE = JSON.stringify({ version: 1, game: { xp: 0, counters: { agentReviews: 3 } } });

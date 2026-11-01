@@ -1,33 +1,34 @@
 import type { SDKModel } from '@cursor/sdk';
 
 import { createAccountHandlers } from './accountHandlers.ts';
-import { ApiKeys } from '../../features/settings/server/apiKeys.ts';
-import { ClaudeReviewer, type CreateMessage } from '../../features/reviews/server/claudeReview.ts';
+import { ApiKeys, ModelCatalog, SettingsStore } from '../../features/settings/server/index.ts';
+import {
+  ClaudeReviewer,
+  type CreateMessage,
+  ReviewRunService,
+} from '../../features/reviews/server/index.ts';
 import type { AppConfig } from '../../platform/server/config.ts';
-import { DeviceFlow } from '../../features/auth/server/deviceFlow.ts';
+import { DeviceFlow, GitHubTokenProvider } from '../../features/auth/server/index.ts';
 import { EventHub } from '../../platform/server/events.ts';
-import { GameService } from '../../features/game/server/game.ts';
-import { GitHubClient } from '../../features/quests/server/github.ts';
+import { GameService, StateStore } from '../../features/game/server/index.ts';
+import {
+  GitHubClient,
+  LinearReviewClient,
+  QuestCache,
+  QuestService,
+} from '../../features/quests/server/index.ts';
 import {
   GitHubApi,
   GitHubApiError,
   NotSignedInError,
   type FetchLike,
 } from '../../platform/server/githubApi.ts';
-import { GitHubTokenProvider } from '../../features/auth/server/githubToken.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
-import { LinearReviewClient } from '../../features/quests/server/linear.ts';
-import { ModelCatalog } from '../../features/settings/server/models.ts';
-import { QuestCache } from '../../features/quests/server/questCache.ts';
-import { QuestService } from '../../features/quests/server/questService.ts';
-import { ReviewRunService } from '../../features/reviews/server/reviewRuns.ts';
 import type { RouteName } from '../../shared/api.ts';
 import { ApiError, type EventsHandler, type RouteHandlers } from '../../platform/server/router.ts';
 import { SecretStore } from '../../platform/server/secrets.ts';
 import { SessionManager, type SessionContext, type SessionServices } from './sessions.ts';
-import { SettingsStore } from '../../features/settings/server/settings.ts';
-import { StateStore } from '../../features/game/server/store.ts';
-import { migrateLegacyState, userStateDir } from '../../platform/server/userState.ts';
+import { migrateLegacyState, userStateDir } from './userState.ts';
 
 /** One player's game, opened from `users/<login>/` when their token is first seen. */
 interface UserServices extends SessionServices, AppServices {}

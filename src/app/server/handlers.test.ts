@@ -7,15 +7,17 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { ReviewRun } from '../../shared/api.ts';
 import { EventHub } from '../../platform/server/events.ts';
-import { GameService } from '../../features/game/server/game.ts';
+import { GameService, StateStore } from '../../features/game/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
-import { type GitHubClient, type ReviewRequestData } from '../../features/quests/server/github.ts';
+import {
+  type GitHubClient,
+  type ReviewRequestData,
+  LinearReviewClient,
+  QuestService,
+} from '../../features/quests/server/index.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
-import { LinearReviewClient } from '../../features/quests/server/linear.ts';
-import { QuestService } from '../../features/quests/server/questService.ts';
-import { ReviewRunService } from '../../features/reviews/server/reviewRuns.ts';
+import { ReviewRunService } from '../../features/reviews/server/index.ts';
 import { createRouter } from '../../platform/server/router.ts';
-import { StateStore } from '../../features/game/server/store.ts';
 import { reviewRequests } from '../../features/quests/server/test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({

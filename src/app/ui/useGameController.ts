@@ -39,17 +39,15 @@ import {
   type GameState,
   type QuestActionError,
   type Toast,
-} from '../../features/game/ui/gameState.ts';
+  playLootSound,
+  unlockAudio,
+} from '../../features/game/ui/index.ts';
 import {
   getNotificationAccess,
   requestNotificationAccess,
   showBrowserNotification,
 } from '../../platform/ui/notifications.ts';
-import {
-  settingsTargetFor,
-  type SettingsTarget,
-} from '../../features/settings/ui/settingsModel.ts';
-import { playLootSound, unlockAudio } from '../../features/game/ui/sound.ts';
+import { settingsTargetFor, type SettingsTarget } from '../../features/settings/ui/index.ts';
 import { createStore, type Store } from '../../platform/ui/store.ts';
 
 export interface GameActions {
