@@ -18,7 +18,7 @@ import {
   readDocument,
   writeDocument,
 } from '../../platform/server/postgres/documents.ts';
-import { assertSchemaCurrent } from '../../platform/server/postgres/migrations.ts';
+import { assertSchemaCurrent, MIGRATIONS } from '../../platform/server/postgres/migrations.ts';
 import { PostgresSecretStore } from '../../platform/server/postgres/secrets.ts';
 import { WriteQueue } from '../../platform/server/privateFiles.ts';
 import type { AppStorage, StorageScope } from './storage.ts';
@@ -35,16 +35,16 @@ const KINDS = { settings: 'settings', game: 'game', quests: 'quests' } as const;
 
 /**
  * Hosted storage: one JSON row per user and document in Postgres, using the same versioned codecs
- * as the state files, and each user's API keys under envelope encryption. Rejects when the schema
- * isn't exactly this build's, so run the migrations first. Keys and settings are per user, so the
+ * as the state files, and each user's API keys under envelope encryption. Rejects until this build's
+ * migrations have run, and when a newer build made a breaking schema change. Keys and settings are per user, so the
  * machine scope is refused, as hosted mode never opens it.
  */
 export async function openPostgresStorage(
   db: Database,
   options: PostgresStorageOptions,
 ): Promise<AppStorage> {
-  await assertSchemaCurrent(db);
   const { keyring, warn } = options;
+  await assertSchemaCurrent(db, MIGRATIONS, { onWarning: warn });
   const document = { onWarning: warn };
   return {
     secrets: async (scope) => PostgresSecretStore.open(db, githubLogin(userLogin(scope)), keyring),

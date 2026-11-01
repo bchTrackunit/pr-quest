@@ -71,9 +71,12 @@ const COMMANDS = {
     return 0;
   },
   status: async (db, out) => {
-    const { pending, unknown } = await schemaStatus(db);
+    const { pending, unknown, breaking } = await schemaStatus(db);
     if (unknown.length > 0) {
       out(`Run by a newer build: ${unknown.join(', ')}`);
+    }
+    if (breaking.length > 0) {
+      out(`Breaking for this build, which won't start: ${breaking.join(', ')}`);
     }
     if (pending.length > 0) {
       out(`Pending: ${pending.join(', ')}`);

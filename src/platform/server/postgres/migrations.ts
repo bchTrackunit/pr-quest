@@ -1,15 +1,22 @@
 import { z } from 'zod';
 
-import { type Database, rowsOf } from './database.ts';
+import { type Database, rowsOf, type SqlClient } from './database.ts';
 
 /**
- * One forward-only schema change. Statements run in order in one transaction, with the migration's
- * row in `schema_migrations`, so a failed migration leaves nothing behind. Never edit a migration
+ * One forward-only schema change. Every pending migration runs in a single transaction, with its
+ * row in `schema_migrations`, so a failed run leaves nothing behind; that rules out statements
+ * Postgres won't run in a transaction, such as `CREATE INDEX CONCURRENTLY`. Never edit a migration
  * that has shipped; add a new one.
  */
 export interface Migration {
   id: string;
   statements: ReadonlyArray<string>;
+  /**
+   * Set when a build without this migration can no longer use the schema, for example after a
+   * dropped or renamed column. It is recorded with the migration, so an older build rolled back
+   * to refuses to start; without it, an older build starts and ignores what it doesn't know.
+   */
+  breaking?: boolean;
 }
 
 /** Every migration, oldest first. */
@@ -67,10 +74,12 @@ const MIGRATION_LOCK = 7_291_843_101;
 
 const CREATE_LEDGER = `CREATE TABLE IF NOT EXISTS schema_migrations (
   id text PRIMARY KEY,
+  breaking boolean NOT NULL DEFAULT false,
   applied_at timestamptz NOT NULL DEFAULT now()
 )`;
 
-const IdRowSchema = z.object({ id: z.string() });
+const AppliedRowSchema = z.object({ id: z.string(), breaking: z.boolean() });
+type AppliedRow = z.infer<typeof AppliedRowSchema>;
 const PresentRowSchema = z.object({ present: z.boolean() });
 
 export interface SchemaStatus {
@@ -78,6 +87,13 @@ export interface SchemaStatus {
   pending: Array<string>;
   /** Migrations the database has run that this build doesn't know: a newer build ran them. */
   unknown: Array<string>;
+  /** The `unknown` ones that were marked `breaking`, which this build can't run alongside. */
+  breaking: Array<string>;
+}
+
+export interface SchemaCheckOptions {
+  /** Hears about migrations from a newer build that this one can run alongside. */
+  onWarning?: (message: string) => void;
 }
 
 /** Runs every pending migration and resolves to the ids it ran. Safe to run from several processes. */
@@ -88,19 +104,20 @@ export async function migrate(
   return await db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK]);
     await tx.query(CREATE_LEDGER);
-    const applied = rowsOf(await tx.query('SELECT id FROM schema_migrations'), IdRowSchema).map(
-      (row) => row.id,
-    );
+    const applied = await appliedMigrations(tx);
     refuseUnknown(statusOf(applied, migrations).unknown);
     const ran: Array<string> = [];
     for (const migration of migrations) {
-      if (applied.includes(migration.id)) {
+      if (applied.some((row) => row.id === migration.id)) {
         continue;
       }
       for (const statement of migration.statements) {
         await tx.query(statement);
       }
-      await tx.query('INSERT INTO schema_migrations (id) VALUES ($1)', [migration.id]);
+      await tx.query('INSERT INTO schema_migrations (id, breaking) VALUES ($1, $2)', [
+        migration.id,
+        migration.breaking ?? false,
+      ]);
       ran.push(migration.id);
     }
     return ran;
@@ -119,20 +136,25 @@ export async function schemaStatus(
   if (!ledger?.present) {
     return statusOf([], migrations);
   }
-  const applied = rowsOf(await db.query('SELECT id FROM schema_migrations'), IdRowSchema);
-  return statusOf(
-    applied.map((row) => row.id),
-    migrations,
-  );
+  return statusOf(await appliedMigrations(db), migrations);
 }
 
-/** Throws unless the database has run exactly this build's migrations. */
+/**
+ * Throws unless the database has run every migration of this build. Migrations from a newer build
+ * only warn, so a release can be rolled back, unless one of them is `breaking`.
+ */
 export async function assertSchemaCurrent(
   db: Database,
   migrations: ReadonlyArray<Migration> = MIGRATIONS,
+  options: SchemaCheckOptions = {},
 ): Promise<void> {
-  const { pending, unknown } = await schemaStatus(db, migrations);
-  refuseUnknown(unknown);
+  const { pending, unknown, breaking } = await schemaStatus(db, migrations);
+  refuseUnknown(breaking);
+  if (unknown.length > 0) {
+    options.onWarning?.(
+      `The database has migrations from a newer version of PR Quest (${unknown.join(', ')}). This version doesn't need them and runs anyway; deploy the newer one when you can.`,
+    );
+  }
   if (pending.length > 0) {
     throw new Error(
       `The database needs migrating (${pending.join(', ')} not run yet). Run \`node dist-server/db.js migrate\`, or \`just db-migrate\` from a checkout.`,
@@ -140,14 +162,24 @@ export async function assertSchemaCurrent(
   }
 }
 
+async function appliedMigrations(db: SqlClient): Promise<Array<AppliedRow>> {
+  return rowsOf(
+    await db.query('SELECT id, breaking FROM schema_migrations ORDER BY id'),
+    AppliedRowSchema,
+  );
+}
+
 function statusOf(
-  applied: ReadonlyArray<string>,
+  applied: ReadonlyArray<AppliedRow>,
   migrations: ReadonlyArray<Migration>,
 ): SchemaStatus {
   const known = new Set(migrations.map((migration) => migration.id));
+  const ran = new Set(applied.map((row) => row.id));
+  const unknown = applied.filter((row) => !known.has(row.id));
   return {
-    pending: migrations.map((migration) => migration.id).filter((id) => !applied.includes(id)),
-    unknown: applied.filter((id) => !known.has(id)),
+    pending: migrations.map((migration) => migration.id).filter((id) => !ran.has(id)),
+    unknown: unknown.map((row) => row.id),
+    breaking: unknown.filter((row) => row.breaking).map((row) => row.id),
   };
 }
 

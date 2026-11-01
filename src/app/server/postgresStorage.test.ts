@@ -46,6 +46,16 @@ describe('openPostgresStorage', () => {
       await empty.close();
     }
   });
+
+  test('opens, with a warning, a database a newer build added to, so a release can roll back', async () => {
+    await db.query("INSERT INTO schema_migrations (id) VALUES ('9999_added_table')");
+    try {
+      await expect(open()).resolves.toBeDefined();
+      expect(warnings).toEqual([expect.stringMatching(/9999_added_table/)]);
+    } finally {
+      await db.query("DELETE FROM schema_migrations WHERE id = '9999_added_table'");
+    }
+  });
 });
 
 describe('settings', () => {
