@@ -111,7 +111,33 @@ describe('App', () => {
     expect(screen.getByRole('img', { name: 'Level 3' })).toBeTruthy();
     expect(screen.getByText('Live')).toBeTruthy();
     expect(MockEventSource.latest().url).toBe('/api/events');
-    expect(await screen.findByText('gh CLI')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'GitHub account @octocat' })).toBeTruthy();
+  });
+
+  test('puts the account and settings in the header corner and keeps the HUD to game info', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    const corner = screen.getByRole('group', { name: 'Account and settings' });
+    const hud = screen.getByRole('region', { name: 'Player' });
+
+    const chip = await within(corner).findByRole('button', { name: 'GitHub account @octocat' });
+    for (const name of ['Settings', 'Sound', 'Enable notifications']) {
+      expect(within(corner).getByRole('button', { name })).toBeTruthy();
+      expect(within(hud).queryByRole('button', { name })).toBeNull();
+    }
+    expect(within(corner).getByRole('status').textContent).toContain('Live');
+    expect(within(hud).getByRole('button', { name: /Achievements/ })).toBeTruthy();
+
+    await user.click(chip);
+    const menu = screen.getByRole('dialog', { name: 'GitHub account' });
+    expect(within(menu).getByText('gh CLI')).toBeTruthy();
+    await user.click(within(menu).getByRole('button', { name: 'Settings' }));
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'GitHub account' })).toBeNull();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(chip);
   });
 
   test('never asks for notification permission on load, only from the HUD toggle', async () => {
@@ -191,7 +217,7 @@ describe('App', () => {
     expect(within(error).queryByRole('button')).toBeNull();
   });
 
-  test('the HUD gear opens the settings at the GitHub account', async () => {
+  test('the header gear opens the settings at the GitHub account', async () => {
     const user = userEvent.setup();
     await renderApp();
 
@@ -348,6 +374,7 @@ describe('App', () => {
     api.fetchAchievements.mockRejectedValue(notSignedIn);
     const streamsBefore = MockEventSource.instances.length;
 
+    await user.click(await screen.findByRole('button', { name: 'GitHub account @octocat' }));
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     expect(await screen.findByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
@@ -377,6 +404,7 @@ describe('App', () => {
 
     api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
     api.fetchRuns.mockResolvedValue({ runs: [] });
+    await user.click(await screen.findByRole('button', { name: 'GitHub account @octocat' }));
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     await screen.findByRole('button', { name: /Sign in with GitHub/ });
 

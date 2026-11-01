@@ -44,15 +44,26 @@ function pendingDevice(overrides: Partial<DeviceFlowStatus> = {}): DeviceFlowSta
   };
 }
 
-const Harness = ({ onAccountChanged }: { onAccountChanged: () => void }) => {
+interface HarnessProps {
+  onAccountChanged: () => void;
+  onClickSettings?: () => void;
+}
+
+const Harness = ({ onAccountChanged, onClickSettings = undefined }: HarnessProps) => {
   const { state, actions } = useGitHubAccount(onAccountChanged);
-  return <GitHubAccountControl actions={actions} state={state} />;
+  return <GitHubAccountControl actions={actions} onClickSettings={onClickSettings} state={state} />;
 };
 
-function renderControl() {
+function renderControl(onClickSettings?: () => void) {
   const onAccountChanged = vi.fn();
-  render(<Harness onAccountChanged={onAccountChanged} />);
+  render(<Harness onAccountChanged={onAccountChanged} onClickSettings={onClickSettings} />);
   return { onAccountChanged };
+}
+
+/** Opens the account chip's menu and returns it. */
+async function openAccountMenu(user: ReturnType<typeof userEvent.setup>, login = 'octocat') {
+  await user.click(await screen.findByRole('button', { name: `GitHub account @${login}` }));
+  return screen.getByRole('dialog', { name: 'GitHub account' });
 }
 
 async function poll(): Promise<void> {
@@ -113,9 +124,44 @@ describe('GitHubAccountControl', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'Done' }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByText(/@octocat/)).toBeTruthy();
-    expect(screen.getByText('OAuth')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+    const menu = await openAccountMenu(user);
+    expect(within(menu).getByText('OAuth')).toBeTruthy();
+    expect(within(menu).getByRole('button', { name: 'Sign out' })).toBeTruthy();
+  });
+
+  test('the account chip opens a menu with the account, Settings, and closes on Escape', async () => {
+    const user = setupUser();
+    const onClickSettings = vi.fn();
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ account: OCTOCAT }));
+    renderControl(onClickSettings);
+
+    const chip = await screen.findByRole('button', { name: 'GitHub account @octocat' });
+    expect(chip.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+
+    const menu = await openAccountMenu(user);
+    expect(chip.getAttribute('aria-expanded')).toBe('true');
+    expect(within(menu).getByText('The Octocat')).toBeTruthy();
+    expect(within(menu).getByText('Signed in with GitHub (OAuth)')).toBeTruthy();
+    expect(document.activeElement).toBe(within(menu).getByRole('button', { name: 'Settings' }));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(chip);
+
+    await openAccountMenu(user);
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(onClickSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(chip);
+  });
+
+  test('says when GitHub rejected the token while signed out', async () => {
+    api.fetchAuthStatus.mockResolvedValue(authStatus({ error: 'Bad credentials' }));
+    renderControl();
+
+    expect(await screen.findByText('GitHub rejected the token: Bad credentials')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
   });
 
   test('focuses Done when sign-in completes, and returns focus to the account on close', async () => {
@@ -138,7 +184,9 @@ describe('GitHubAccountControl', () => {
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Sign out' }));
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'GitHub account @octocat' }),
+    );
   });
 
   test('Escape still closes the dialog after Cancel and Try again replace the focused button', async () => {
@@ -305,14 +353,16 @@ describe('GitHubAccountControl', () => {
   });
 
   test('shows the gh CLI fallback without a sign-out button', async () => {
+    const user = setupUser();
     api.fetchAuthStatus.mockResolvedValue(
       authStatus({ account: { login: 'octocat', tokenSource: 'gh' } }),
     );
     renderControl();
 
-    expect(await screen.findByText('gh CLI')).toBeTruthy();
-    expect(screen.getByText(/@octocat/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    const menu = await openAccountMenu(user);
+    expect(within(menu).getByText('gh CLI')).toBeTruthy();
+    expect(within(menu).getByText('@octocat')).toBeTruthy();
+    expect(within(menu).queryByRole('button', { name: 'Sign out' })).toBeNull();
   });
 
   test('signing out forgets the OAuth account and tells the game to reload', async () => {
@@ -321,7 +371,8 @@ describe('GitHubAccountControl', () => {
     api.signOut.mockResolvedValue(authStatus());
     const { onAccountChanged } = renderControl();
 
-    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await openAccountMenu(user);
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     expect(api.signOut).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
@@ -339,7 +390,8 @@ describe('GitHubAccountControl', () => {
     api.fetchAuthStatus.mockResolvedValue(authStatus({ account: { ...OCTOCAT, login: 'mona' } }));
     renderControl();
 
-    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await openAccountMenu(user, 'mona');
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     const notice = await screen.findByText(/now acts as @hubot/);
     expect(notice.textContent).toBe(
@@ -355,7 +407,8 @@ describe('GitHubAccountControl', () => {
     api.signOut.mockResolvedValue(authStatus({ account: { login: 'hubot', tokenSource: 'gh' } }));
     renderControl();
 
-    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await openAccountMenu(user);
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     expect(
       await screen.findByText(/Signed out of @octocat\. PR Quest now acts as @hubot/),
@@ -368,7 +421,8 @@ describe('GitHubAccountControl', () => {
     api.signOut.mockResolvedValue(authStatus({ account: { login: 'Octocat', tokenSource: 'gh' } }));
     renderControl();
 
-    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await openAccountMenu(user);
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
     expect(await screen.findByText('gh CLI')).toBeTruthy();
     expect(screen.queryByText(/now acts as/)).toBeNull();
