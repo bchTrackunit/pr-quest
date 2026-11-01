@@ -111,7 +111,7 @@
       }
     },
     {
-      "files": ["src/ui/**/*.ts", "src/ui/**/*.tsx"],
+      "files": ["src/**/ui/**/*.ts", "src/**/ui/**/*.tsx"],
       "rules": {
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "error",
@@ -119,7 +119,7 @@
           "error",
           {
             "name": "localStorage",
-            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
           }
         ],
         "eslint/no-restricted-properties": [
@@ -127,7 +127,7 @@
           {
             "object": "window",
             "property": "localStorage",
-            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
           }
         ]
       }

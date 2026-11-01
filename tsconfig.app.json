@@ -8,6 +8,6 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]
   },
-  "include": ["src/ui/**/*.ts", "src/ui/**/*.tsx", "src/shared/**/*.ts"],
+  "include": ["src/**/ui/**/*.ts", "src/**/ui/**/*.tsx", "src/shared/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
