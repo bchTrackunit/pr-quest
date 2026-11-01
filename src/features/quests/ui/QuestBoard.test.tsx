@@ -407,7 +407,11 @@ describe('QuestBoard filters and sorting', () => {
     expect(titles()).toEqual(['Draft: new alerts page']);
 
     await openPresets(user);
-    await user.click(screen.getByRole('button', { name: 'Delete preset Guild duty' }));
+    const remove = screen.getByRole('button', { name: 'Delete preset Guild duty' });
+    await user.hover(remove);
+    expect(screen.getByRole('tooltip').id).toBe(remove.getAttribute('aria-describedby'));
+    expect(screen.getByRole('tooltip').textContent).toBe('Delete preset');
+    await user.click(remove);
     expect(screen.queryByRole('button', { name: 'Guild duty' })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /Save current/ }));
   });

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { AchievementStatus, PlayerState } from '../../../shared/api.ts';
+import { Tooltip } from '../../../platform/ui/Tooltip.tsx';
 import { AchievementsPanel } from './AchievementsPanel.tsx';
 import { XpBar } from './XpBar.tsx';
 
@@ -65,9 +66,14 @@ export const PlayerHud = ({
           {recent.length > 0 ? (
             <ul aria-label="Recent achievements" className="hud__recent">
               {recent.map((entry) => (
-                <li className="hud__recent-badge" key={entry.id} title={entry.name}>
-                  <span aria-hidden="true">{entry.icon}</span>
-                  <span className="visually-hidden">{entry.name}</span>
+                <li key={entry.id}>
+                  <Tooltip content={entry.name}>
+                    {() => (
+                      <span aria-label={entry.name} className="hud__recent-badge" role="img">
+                        {entry.icon}
+                      </span>
+                    )}
+                  </Tooltip>
                 </li>
               ))}
             </ul>

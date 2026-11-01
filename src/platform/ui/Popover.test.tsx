@@ -57,6 +57,30 @@ describe('Popover', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Done' }));
   });
 
+  test('a toggle tooltip describes the button and hides while the panel is open', async () => {
+    const user = userEvent.setup();
+    render(
+      <Popover buttonContent="☰" buttonLabel="Menu" buttonTooltip="More options" label="Example">
+        <CloseButton />
+      </Popover>,
+    );
+    const toggle = screen.getByRole('button', { name: 'Menu' });
+    const tooltip = screen.getByRole('tooltip', { hidden: true });
+    expect(toggle.getAttribute('aria-describedby')).toBe(tooltip.id);
+
+    await user.hover(toggle);
+    expect(screen.getByRole('tooltip').textContent).toBe('More options');
+
+    await user.click(toggle);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+    expect(screen.getByRole('tooltip').textContent).toBe('More options');
+  });
+
   test('Escape closes it and returns focus to the toggle', async () => {
     const user = userEvent.setup();
     const toggle = renderPopover();

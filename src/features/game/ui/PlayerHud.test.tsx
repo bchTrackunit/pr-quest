@@ -26,9 +26,16 @@ describe('PlayerHud', () => {
     expect(bar.getAttribute('aria-valuenow')).toBe('150');
     expect(bar.getAttribute('aria-valuemax')).toBe('400');
     expect(screen.getByText(/2-day streak/)).toBeTruthy();
-    expect(
-      within(screen.getByRole('list', { name: 'Recent achievements' })).getByText('First Blood'),
-    ).toBeTruthy();
+    const recent = screen.getByRole('list', { name: 'Recent achievements' });
+    expect(within(recent).getByRole('img', { name: 'First Blood' })).toBeTruthy();
+  });
+
+  test('a recent badge shows its name in a tooltip on hover', async () => {
+    const user = userEvent.setup();
+    renderHud();
+
+    await user.hover(screen.getByRole('img', { name: 'First Blood' }));
+    expect(screen.getByRole('tooltip').textContent).toBe('First Blood');
   });
 
   test('holds only game info: the one control is the achievements button', () => {

@@ -12,6 +12,7 @@ import {
 } from 'react';
 
 import { FOCUSABLE, isModalOpen } from './Modal.tsx';
+import { Tooltip } from './Tooltip.tsx';
 
 export interface PopoverProps {
   /** The panel's accessible name. */
@@ -20,6 +21,8 @@ export interface PopoverProps {
   buttonContent: ReactNode;
   /** The toggle button's accessible name; must include its visible text. */
   buttonLabel?: string;
+  /** A tooltip for the toggle button, hidden while the panel is open. */
+  buttonTooltip?: string;
   buttonClassName?: string;
   /** Extra class for the panel. */
   className?: string;
@@ -45,6 +48,7 @@ export const Popover = ({
   label,
   buttonContent,
   buttonLabel = undefined,
+  buttonTooltip = undefined,
   buttonClassName = 'button',
   className = '',
   align = 'start',
@@ -100,20 +104,31 @@ export const Popover = ({
     }
   };
 
+  const renderButton = (describedBy?: string) => (
+    <button
+      aria-controls={isOpen ? panelId : undefined}
+      aria-describedby={describedBy}
+      aria-expanded={isOpen}
+      aria-haspopup="dialog"
+      aria-label={buttonLabel}
+      className={buttonClassName}
+      onClick={() => (isOpen ? close() : setIsOpen(true))}
+      ref={buttonRef}
+      type="button"
+    >
+      {buttonContent}
+    </button>
+  );
+
   return (
     <div className="popover" onBlur={onBlur} ref={rootRef}>
-      <button
-        aria-controls={isOpen ? panelId : undefined}
-        aria-expanded={isOpen}
-        aria-haspopup="dialog"
-        aria-label={buttonLabel}
-        className={buttonClassName}
-        onClick={() => (isOpen ? close() : setIsOpen(true))}
-        ref={buttonRef}
-        type="button"
-      >
-        {buttonContent}
-      </button>
+      {buttonTooltip ? (
+        <Tooltip align={align} content={buttonTooltip} isDisabled={isOpen}>
+          {renderButton}
+        </Tooltip>
+      ) : (
+        renderButton()
+      )}
       {isOpen ? (
         <div
           aria-label={label}

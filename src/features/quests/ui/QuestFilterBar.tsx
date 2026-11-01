@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import { Popover, usePopoverClose } from '../../../platform/ui/Popover.tsx';
+import { Tooltip } from '../../../platform/ui/Tooltip.tsx';
 import { MAX_PRESET_NAME_LENGTH, type Preset } from './boardViewStorage.ts';
 import {
   activeFilterChips,
@@ -275,18 +276,22 @@ const PresetList = ({
               {preset.name}
             </button>
             {preset.builtIn ? null : (
-              <button
-                aria-label={`Delete preset ${preset.name}`}
-                className="icon-button icon-button--small"
-                onClick={() => {
-                  onClickDeletePreset(preset.id);
-                  saveButton.current?.focus();
-                }}
-                title={`Delete preset ${preset.name}`}
-                type="button"
-              >
-                ✕
-              </button>
+              <Tooltip align="end" content="Delete preset">
+                {(describedBy) => (
+                  <button
+                    aria-describedby={describedBy}
+                    aria-label={`Delete preset ${preset.name}`}
+                    className="icon-button icon-button--small"
+                    onClick={() => {
+                      onClickDeletePreset(preset.id);
+                      saveButton.current?.focus();
+                    }}
+                    type="button"
+                  >
+                    ✕
+                  </button>
+                )}
+              </Tooltip>
             )}
           </li>
         ))}

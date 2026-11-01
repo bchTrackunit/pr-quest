@@ -1,5 +1,7 @@
 import { useEffect, useEffectEvent, useId, useRef, type ReactNode } from 'react';
 
+import { Tooltip } from './Tooltip.tsx';
+
 export interface ModalProps {
   title: ReactNode;
   children: ReactNode;
@@ -143,15 +145,20 @@ export const Modal = ({
           <h2 className="modal__title pixel" id={titleId}>
             {title}
           </h2>
-          <button
-            aria-label="Close"
-            className="icon-button"
-            disabled={isBusy}
-            onClick={onClickClose}
-            type="button"
-          >
-            ✕
-          </button>
+          <Tooltip align="end" content="Close (Esc)">
+            {(describedBy) => (
+              <button
+                aria-describedby={describedBy}
+                aria-label="Close"
+                className="icon-button"
+                disabled={isBusy}
+                onClick={onClickClose}
+                type="button"
+              >
+                ✕
+              </button>
+            )}
+          </Tooltip>
         </header>
         <div className="modal__body">{children}</div>
       </div>
