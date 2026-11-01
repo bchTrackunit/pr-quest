@@ -8,13 +8,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { inspect } from 'node:util';
 
 import { loadConfig, type RunningServer } from '../app/server/server.ts';
+import { RELEASE_BUILD } from './buildFlags.ts';
 import { startDesktopServer } from './desktopServer.ts';
 import { type Encryptor, openDesktopSecrets } from './keychainSecrets.ts';
 import { type LogFile, openLogFile } from './logFile.ts';
 import { menuTemplate } from './menu.ts';
 import { externalUrl, isAllowedPermission, isAppUrl } from './navigation.ts';
 import { readPreferences, writePreferences } from './preferences.ts';
-import { README_URL } from './release.ts';
+import { README_URL, RELEASE_REPO } from './release.ts';
 import { scheduleUpdateChecks, updatesEnabled } from './updates.ts';
 
 /** `PR_QUEST_SMOKE_TEST=1` checks a build, prints the results and exits; see smoke.ts. */
@@ -123,7 +124,14 @@ function run(): void {
         await runSmokeTestAndExit(window, running, log);
         return;
       }
-      if (updatesEnabled({ isPackaged: app.isPackaged, env: process.env })) {
+      if (
+        updatesEnabled({
+          isPackaged: app.isPackaged,
+          releaseBuild: RELEASE_BUILD,
+          repo: RELEASE_REPO,
+          env: process.env,
+        })
+      ) {
         const { autoUpdater } = electronUpdater;
         autoUpdater.logger = { info: log.info, warn: log.warn, error: log.warn };
         stopUpdates = scheduleUpdateChecks(autoUpdater, log);

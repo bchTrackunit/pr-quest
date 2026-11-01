@@ -1,5 +1,7 @@
 import { inspect } from 'node:util';
 
+import { isPublishable, type ReleaseRepo } from './release.ts';
+
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** The part of electron-updater's `autoUpdater` this uses. */
@@ -7,12 +9,26 @@ export interface Updater {
   checkForUpdatesAndNotify: () => Promise<unknown>;
 }
 
+export interface UpdatesEnabledOptions {
+  isPackaged: boolean;
+  /** Whether this bundle was built as a release; see `RELEASE_BUILD`. */
+  releaseBuild: boolean;
+  repo: ReleaseRepo;
+  env: NodeJS.ProcessEnv;
+}
+
 /**
- * Only a packaged build has a release to update from. `PR_QUEST_DISABLE_UPDATES=1` turns checks
- * off, for managed machines and for smoke tests.
+ * Only a packaged release build of a real repository updates itself, so a locally packaged app
+ * never installs whatever a stranger publishes under the placeholder owner.
+ * `PR_QUEST_DISABLE_UPDATES=1` turns checks off, for managed machines and for smoke tests.
  */
-export function updatesEnabled(options: { isPackaged: boolean; env: NodeJS.ProcessEnv }): boolean {
-  return options.isPackaged && options.env.PR_QUEST_DISABLE_UPDATES !== '1';
+export function updatesEnabled(options: UpdatesEnabledOptions): boolean {
+  return (
+    options.isPackaged &&
+    options.releaseBuild &&
+    isPublishable(options.repo) &&
+    options.env.PR_QUEST_DISABLE_UPDATES !== '1'
+  );
 }
 
 /**

@@ -2,7 +2,7 @@ import { Arch, type Configuration } from 'electron-builder';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { RELEASE_REPO } from './src/desktop/release.ts';
+import { publishSettings, RELEASE_REPO } from './src/desktop/release.ts';
 
 /*
  * Installers for the desktop app. Local builds are unsigned. Release builds sign and publish
@@ -15,10 +15,15 @@ import { RELEASE_REPO } from './src/desktop/release.ts';
  * - Windows signing with Azure Trusted Signing: the AZURE_SIGNING_* variables below, plus
  *   AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET for the service principal. Or an OV
  *   certificate with WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD instead.
+ * - Release builds: PR_QUEST_RELEASE_BUILD=1, set for the whole `yarn desktop:package` so the
+ *   bundle and this config agree. Only then does the build get publish settings and the
+ *   app-update.yml the updater reads, and it refuses the placeholder RELEASE_REPO. Without it the
+ *   app never checks for updates.
  * - Publishing: GH_TOKEN, used by `electron-builder --publish always`. Releases go to RELEASE_REPO
  *   in src/desktop/release.ts as drafts.
  */
 const env = process.env;
+const releaseBuild = env.PR_QUEST_RELEASE_BUILD === '1';
 
 function required(name: string): string {
   const value = env[name];
@@ -77,12 +82,7 @@ const config: Configuration = {
       );
     }
   },
-  publish: {
-    provider: 'github',
-    owner: RELEASE_REPO.owner,
-    repo: RELEASE_REPO.repo,
-    releaseType: 'draft',
-  },
+  publish: publishSettings({ releaseBuild, repo: RELEASE_REPO }),
   // Targets name no architecture, so each build is for the machine it runs on unless `--arm64` or
   // `--x64` says otherwise. Release macOS on an Apple Silicon and an Intel runner.
   mac: {

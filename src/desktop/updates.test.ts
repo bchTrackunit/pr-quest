@@ -11,18 +11,33 @@ afterEach(() => {
 });
 
 describe('updatesEnabled', () => {
-  test('checks for updates in a packaged build', () => {
-    expect(updatesEnabled({ isPackaged: true, env: {} })).toBe(true);
+  const release = {
+    isPackaged: true,
+    releaseBuild: true,
+    repo: { owner: 'octocat', repo: 'pr-quest' },
+    env: {},
+  };
+
+  test('checks for updates in a packaged release build of a real repository', () => {
+    expect(updatesEnabled(release)).toBe(true);
   });
 
   test('never in development, where there is nothing to update', () => {
-    expect(updatesEnabled({ isPackaged: false, env: {} })).toBe(false);
+    expect(updatesEnabled({ ...release, isPackaged: false })).toBe(false);
+  });
+
+  test('never in a package built without the release flag, such as a local build', () => {
+    expect(updatesEnabled({ ...release, releaseBuild: false })).toBe(false);
+  });
+
+  test('never while the repository owner is the placeholder', () => {
+    expect(updatesEnabled({ ...release, repo: { owner: 'CHANGE-ME', repo: 'pr-quest' } })).toBe(
+      false,
+    );
   });
 
   test('not when PR_QUEST_DISABLE_UPDATES is set', () => {
-    expect(updatesEnabled({ isPackaged: true, env: { PR_QUEST_DISABLE_UPDATES: '1' } })).toBe(
-      false,
-    );
+    expect(updatesEnabled({ ...release, env: { PR_QUEST_DISABLE_UPDATES: '1' } })).toBe(false);
   });
 });
 

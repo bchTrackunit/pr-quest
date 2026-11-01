@@ -27,7 +27,7 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.desktop.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "build": "yarn typecheck && vite build && yarn build:server && yarn build:desktop",
     "build:server": "node -e \"fs.rmSync('dist-server', { recursive: true, force: true })\" && esbuild src/app/server/main.ts src/app/server/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist-server --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
-    "build:desktop": "node -e \"fs.rmSync('dist-desktop', { recursive: true, force: true })\" && esbuild src/desktop/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist-desktop/main.js --external:electron --external:electron-updater --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
+    "build:desktop": "node scripts/build-desktop.ts",
     "desktop:dev": "vite build && yarn build:desktop && electron .",
     "desktop:package": "yarn build && electron-builder --config electron-builder.config.ts --publish never",
     "desktop:smoke": "node scripts/desktop-smoke.ts"
