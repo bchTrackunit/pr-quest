@@ -149,6 +149,7 @@ describe('toQuest', () => {
       repo: { owner: 'Trackunit', name: 'circleci-configuration' },
       number: 930,
       author: { name: 'kfr-example', githubLogin: 'kfr-example' },
+      authorAssociation: 'COLLABORATOR',
       sourceBranch: 'kfr-example/ins-2967-register-ci',
       targetBranch: 'master',
       headSha: 'd77c66a89e0707ccc917203251d3a3a1efce4182',
@@ -189,6 +190,12 @@ describe('toQuest', () => {
       source: 'linear',
       author: { name: 'Kieran Example', githubLogin: 'kpr-example' },
     });
+  });
+
+  test("leaves out the author's role when GitHub did not return it", () => {
+    const details = { ...TEAM.details, authorAssociation: undefined };
+
+    expect(toQuest({ ...TEAM, details })).not.toHaveProperty('authorAssociation');
   });
 
   test("ignores the player's own approval whatever its letter case", () => {
@@ -251,6 +258,7 @@ describe('GitHubClient.fetchReviewRequests', () => {
     const { query } = (github.calls.find(isBatch)?.body ?? {}) as { query: string };
     expect(query).toContain('viewer { login }');
     expect(query).toContain('isDraft');
+    expect(query).toContain('authorAssociation');
     expect(query).toContain('latestReviews(first: 100) { nodes { state author { login } } }');
     expect(data.map((entry) => entry.viewerLogin)).toEqual(['player-login', 'player-login']);
     expect(github.calls.some((call) => call.path === '/user')).toBe(false);
@@ -436,6 +444,13 @@ describe('parsePullRequestBatch', () => {
 
   test("returns the player's login next to the entries", () => {
     expect(parsePullRequestBatch(BATCH, 2).viewerLogin).toBe('player-login');
+  });
+
+  test("reads the author's role on the repo", () => {
+    expect(parsePullRequestBatch(BATCH, 2).entries).toMatchObject([
+      { details: { authorAssociation: 'COLLABORATOR' } },
+      { details: { authorAssociation: 'MEMBER' } },
+    ]);
   });
 });
 

@@ -29,6 +29,7 @@ const QuestSchema = z.object({
   repo: RepoSchema,
   number: z.number().int().positive(),
   author: z.object({ name: z.string(), githubLogin: z.string().optional() }),
+  authorAssociation: z.string().optional(),
   sourceBranch: z.string(),
   targetBranch: z.string(),
   headSha: z.string().optional(),

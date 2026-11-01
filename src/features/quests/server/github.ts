@@ -26,6 +26,7 @@ const BATCH_FIELDS = `
   deletions
   changedFiles
   author { login ... on User { name } }
+  authorAssociation
   reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on Team { slug } } } }
   latestReviews(first: 100) { nodes { state author { login } } }`;
 
@@ -60,6 +61,7 @@ const PullRequestCoreSchema = z.object({
   deletions: z.number().int().nonnegative(),
   changedFiles: z.number().int().nonnegative(),
   author: z.object({ login: z.string(), name: z.string().nullish() }).nullish(),
+  authorAssociation: z.string().nullish(),
 });
 
 const BatchPullRequestSchema = PullRequestCoreSchema.extend({
@@ -127,6 +129,8 @@ export interface PullRequestDetails {
   deletions: number;
   changedFiles: number;
   authorName?: string;
+  /** GitHub's `CommentAuthorAssociation` for the PR author, e.g. `MEMBER` or `CONTRIBUTOR`. */
+  authorAssociation?: string;
   /** Team slugs without the org prefix, e.g. `team-gluon`. */
   requestedTeams: Array<string>;
   /** Logins whose latest review is `APPROVED`, the player included. */
@@ -219,6 +223,7 @@ function toDetails(
     deletions: raw.deletions,
     changedFiles: raw.changedFiles,
     authorName: raw.author?.name || undefined,
+    authorAssociation: raw.authorAssociation || undefined,
     requestedTeams: reviewers.flatMap((reviewer) =>
       reviewer.__typename === 'Team' && reviewer.slug
         ? [reviewer.slug.split('/').at(-1) ?? reviewer.slug]
@@ -336,6 +341,9 @@ export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInp
     requestedAt: item.createdAt,
     source: linear ? 'linear' : 'github',
   };
+  if (details.authorAssociation) {
+    quest.authorAssociation = details.authorAssociation;
+  }
   if (linear?.appUrl) {
     quest.linearUrl = linear.appUrl;
   }

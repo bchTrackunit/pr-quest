@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { buildReviewPrompt, parseReviewResult } from './reviewResult.ts';
+import { buildReviewPrompt, isPromptSafeBranch, parseReviewResult } from './reviewResult.ts';
 
 const valid = {
   summary: 'Adds a cache.',
@@ -115,6 +115,33 @@ describe('parseReviewResult', () => {
   });
 });
 
+describe('isPromptSafeBranch', () => {
+  test.each(['main', 'feature/cache', 'release/1.2.3', 'renovate/zod-4.x', 'deps/a+b@2', 'x_y'])(
+    'accepts %s',
+    (name) => {
+      expect(isPromptSafeBranch(name)).toBe(true);
+    },
+  );
+
+  test.each([
+    '',
+    '-x',
+    'main;id',
+    'a$(id)',
+    'a`id`',
+    "a'b",
+    'a b',
+    'a|b',
+    'a&b',
+    'a>b',
+    'a"b',
+    'a\nb',
+    'x'.repeat(256),
+  ])('rejects %j', (name) => {
+    expect(isPromptSafeBranch(name)).toBe(false);
+  });
+});
+
 describe('buildReviewPrompt', () => {
   const head = 'abcdef0123456789abcdef0123456789abcdef01';
   const prompt = buildReviewPrompt(
@@ -130,8 +157,28 @@ describe('buildReviewPrompt', () => {
   );
 
   test('scopes the review to the PR diff', () => {
-    expect(prompt).toContain('git diff origin/master...HEAD');
+    expect(prompt).toContain("git diff 'origin/master...HEAD'");
+    expect(prompt).toContain("git fetch origin 'master'");
     expect(prompt).toContain('https://github.com/Trackunit/manager/pull/7');
+  });
+
+  test('quotes branch names in prose', () => {
+    expect(prompt).toContain('source branch "feature/cache"; it targets "master"');
+  });
+
+  test('refuses branch names that are unsafe in a shell command', () => {
+    const target = {
+      id: 'Trackunit/manager#7',
+      title: 'Add cache',
+      number: 7,
+      githubUrl: 'https://github.com/Trackunit/manager/pull/7',
+      sourceBranch: 'feature/cache',
+      targetBranch: 'main;curl$IFS/x.sh|sh',
+    };
+    expect(() => buildReviewPrompt(target, head)).toThrow(/branch/i);
+    expect(() =>
+      buildReviewPrompt({ ...target, targetBranch: 'main', sourceBranch: 'x`id`' }, head),
+    ).toThrow(/branch/i);
   });
 
   test('pins the review to the head commit, fetching it from the PR ref for forks', () => {

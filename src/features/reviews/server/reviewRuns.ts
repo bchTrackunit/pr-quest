@@ -18,7 +18,11 @@ import {
   type StateStore,
   type StoredRun,
 } from '../../game/server/index.ts';
-import { buildReviewPrompt, parseReviewResult } from '../../../shared/reviewResult.ts';
+import {
+  buildReviewPrompt,
+  isPromptSafeBranch,
+  parseReviewResult,
+} from '../../../shared/reviewResult.ts';
 import { findingDecisionsOf } from '../../../shared/findingDecisions.ts';
 import { ApiError } from '../../../platform/server/router.ts';
 import type { AppSettings } from '../../settings/server/index.ts';
@@ -26,6 +30,12 @@ import type { AppSettings } from '../../settings/server/index.ts';
 const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
+/** Authors who can already push to the repo, so steering the agent gains them no access. */
+const TRUSTED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
+  'OWNER',
+  'MEMBER',
+  'COLLABORATOR',
+]);
 
 export type { ClaudeRunner };
 
@@ -117,6 +127,9 @@ export class ReviewRunService {
         'conflict',
         `The head commit of ${quest.id} is unknown. Refresh the board, then send the agent again.`,
       );
+    }
+    if (provider === 'cursor') {
+      assertCursorMayReview(quest);
     }
     const snapshot = snapshotOf(quest);
     const stored: StoredRun = {
@@ -447,7 +460,15 @@ export class ReviewRunService {
     }
     const headSha = this.get(id)?.quest.headSha;
     const reported = parsed.reviewedSha;
-    if (reported && headSha && !(reported.length >= 7 && headSha.startsWith(reported))) {
+    if (!reported) {
+      await this.fail(
+        id,
+        'error',
+        'The agent did not say which commit it reviewed, so its line numbers may not match the PR. Send it again.',
+      );
+      return;
+    }
+    if (headSha && !(reported.length >= 7 && headSha.startsWith(reported))) {
       await this.fail(
         id,
         'error',
@@ -502,6 +523,37 @@ export class ReviewRunService {
     }
     this.events.broadcast({ type: 'runUpdated', run: updated });
     return updated;
+  }
+}
+
+/**
+ * The Cursor agent runs PR content in the repo with the player's Cursor GitHub integration, and
+ * only its prompt stops it from pushing, so it reviews only PRs by people who can push anyway, on
+ * branches whose names are safe in the commands its prompt contains. Claude can't act, so it
+ * reviews anything.
+ */
+function assertCursorMayReview(quest: Quest): void {
+  const association = quest.authorAssociation;
+  if (!association) {
+    throw new ApiError(
+      409,
+      'conflict',
+      `PR Quest doesn't know ${quest.id}'s author's role on the repo yet. Refresh the board, then send the agent again.`,
+    );
+  }
+  if (!TRUSTED_AUTHOR_ASSOCIATIONS.has(association)) {
+    throw new ApiError(
+      409,
+      'conflict',
+      `${quest.id} is by an author without write access to the repo (${association}), and its content could steer the Cursor agent. Review it with Claude instead.`,
+    );
+  }
+  if (!isPromptSafeBranch(quest.sourceBranch) || !isPromptSafeBranch(quest.targetBranch)) {
+    throw new ApiError(
+      409,
+      'conflict',
+      `${quest.id} has a branch name the Cursor agent can't use safely in a command. Review it with Claude instead.`,
+    );
   }
 }
 

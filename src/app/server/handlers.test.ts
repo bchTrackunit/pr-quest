@@ -39,6 +39,7 @@ const REVIEW_TEXT = `\`\`\`json\n${JSON.stringify({
     { file: 'src/a.ts', line: 3, severity: 'major', body: 'Bug.' },
     { file: 'src/b.ts', severity: 'nit', body: 'Style.' },
   ],
+  reviewedSha: DIRECT_HEAD,
 })}\n\`\`\``;
 
 let dir: string;
@@ -550,7 +551,7 @@ describe('runs', () => {
 
   test('an agent verdict of approve still posts a comment, never an approval', async () => {
     mockAgentFinishing(
-      `\`\`\`json\n${JSON.stringify({ summary: 'Fine.', verdict: 'approve', findings: [] })}\n\`\`\``,
+      `\`\`\`json\n${JSON.stringify({ summary: 'Fine.', verdict: 'approve', findings: [], reviewedSha: DIRECT_HEAD })}\n\`\`\``,
     );
     const started = await send('POST', `/api/quests/${DIRECT_PATH}/review`, {});
     await services.runs.whenIdle();

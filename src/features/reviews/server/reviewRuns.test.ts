@@ -39,6 +39,7 @@ const REVIEW_TEXT = [
     summary: 'Small change.',
     verdict: 'comment',
     findings: [{ file: 'src/a.ts', line: 2, severity: 'minor', body: 'Name it better.' }],
+    reviewedSha: HEAD_SHA,
   }),
   '```',
 ].join('\n');
@@ -82,6 +83,7 @@ const quest: Quest = {
   repo: { owner: 'Trackunit', name: 'manager' },
   number: 7,
   author: { name: 'a' },
+  authorAssociation: 'MEMBER',
   sourceBranch: 'feature/cache',
   targetBranch: 'master',
   headSha: HEAD_SHA,
@@ -217,6 +219,76 @@ describe('ReviewRunService.start', () => {
     expect(recordAgentReviewFinished).not.toHaveBeenCalled();
   });
 
+  test('fails the run when the agent does not report which commit it reviewed', async () => {
+    const result = { summary: 'Fine.', verdict: 'comment', findings: [] };
+    fakeAgent(fakeRun({ result: `\`\`\`json\n${JSON.stringify(result)}\n\`\`\`` }));
+    const runs = service();
+
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+
+    expect(runs.get(id)?.run).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringContaining('did not say which commit') },
+    });
+    expect(runs.get(id)?.run.result).toBeUndefined();
+    expect(recordAgentReviewFinished).not.toHaveBeenCalled();
+  });
+
+  test.each(['CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'NONE', 'MANNEQUIN'])(
+    'refuses a Cursor review of a PR by a %s, before queueing anything',
+    async (authorAssociation) => {
+      fakeAgent();
+
+      await expect(service().start({ ...quest, authorAssociation })).rejects.toMatchObject({
+        status: 409,
+        code: 'conflict',
+        message: expect.stringContaining('Claude'),
+      });
+      expect(createMock).not.toHaveBeenCalled();
+      expect(store.state.runs).toEqual([]);
+    },
+  );
+
+  test.each(['OWNER', 'MEMBER', 'COLLABORATOR'])(
+    'starts a Cursor review of a PR by a %s',
+    async (authorAssociation) => {
+      fakeAgent();
+      const runs = service();
+
+      await expect(runs.start({ ...quest, authorAssociation })).resolves.toMatchObject({
+        status: 'queued',
+      });
+      await runs.whenIdle();
+    },
+  );
+
+  test('refuses a Cursor review while the author role is unknown, asking for a refresh', async () => {
+    fakeAgent();
+
+    await expect(service().start({ ...quest, authorAssociation: undefined })).rejects.toMatchObject(
+      { status: 409, message: expect.stringContaining('Refresh') },
+    );
+    expect(createMock).not.toHaveBeenCalled();
+    expect(store.state.runs).toEqual([]);
+  });
+
+  test.each([
+    { targetBranch: 'main;curl$IFS/x.sh|sh' },
+    { sourceBranch: 'feature/$(id)' },
+    { sourceBranch: 'x`id`' },
+  ])('refuses a Cursor review of a PR with an unsafe branch name: %o', async (branches) => {
+    fakeAgent();
+
+    await expect(service().start({ ...quest, ...branches })).rejects.toMatchObject({
+      status: 409,
+      code: 'conflict',
+      message: expect.stringContaining('Claude'),
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(store.state.runs).toEqual([]);
+  });
+
   test('accepts a reported commit that abbreviates the head commit', async () => {
     const result = {
       summary: 'Fine.',
@@ -258,7 +330,7 @@ describe('ReviewRunService.start', () => {
       result: { summary: 'Small change.', verdict: 'comment' },
     });
     expect(agent.send).toHaveBeenCalledWith(
-      expect.stringContaining('git diff origin/master...HEAD'),
+      expect.stringContaining("git diff 'origin/master...HEAD'"),
     );
     expect(agent[Symbol.asyncDispose]).toHaveBeenCalledOnce();
     expect(runStatuses()).toEqual(['queued', 'queued', 'running', 'finished']);
@@ -429,6 +501,16 @@ describe('ReviewRunService with Claude', () => {
       questId: quest.id,
       provider: 'claude',
     });
+  });
+
+  test('reviews PRs the Cursor agent refuses: outside authors and unusual branch names', async () => {
+    const { runs, claude } = claudeService();
+
+    await runs.start({ ...quest, authorAssociation: 'NONE', sourceBranch: 'x`id`' });
+    await runs.whenIdle();
+
+    expect(claude.review).toHaveBeenCalledOnce();
+    expect(store.state.runs[0]?.run.status).toBe('finished');
   });
 
   test('prefers the requested model over the one in the settings', async () => {
@@ -662,6 +744,7 @@ describe('ReviewRunService finding decisions', () => {
       { file: 'src/b.ts', line: 5, severity: 'minor', body: 'Name.' },
       { file: 'README.md', severity: 'nit', body: 'Typo.' },
     ],
+    reviewedSha: HEAD_SHA,
   })}\n\`\`\``;
 
   async function finishedRun(runs: ReviewRunService): Promise<string> {
