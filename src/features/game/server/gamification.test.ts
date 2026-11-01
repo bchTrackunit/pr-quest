@@ -15,9 +15,12 @@ import {
   type ReviewAction,
 } from './gamification.ts';
 
-/** Local-time dates keep these tests independent of the machine's time zone. */
+/**
+ * Local-time dates keep these tests independent of the machine's time zone. November 10th 2026 is
+ * a Tuesday, so the default action unlocks no weekend or time-of-day achievement.
+ */
 const day = (dayOfMonth: number, hour = 12, minute = 0): Date =>
-  new Date(2026, 9, dayOfMonth, hour, minute);
+  new Date(2026, 10, dayOfMonth, hour, minute);
 
 function action(overrides: Partial<ReviewAction> = {}): ReviewAction {
   return {
@@ -83,10 +86,10 @@ describe('XP for review actions', () => {
 
     expect(update.grants).toEqual([
       { amount: 20, reason: 'reviewPosted', questId: 'o/r#1' },
-      { amount: 10, reason: 'achievement' },
+      { amount: 25, reason: 'achievement', achievementId: 'first-blood' },
     ]);
-    expect(update.xpGained).toBe(30);
-    expect(update.state.xp).toBe(30);
+    expect(update.xpGained).toBe(45);
+    expect(update.state.xp).toBe(45);
   });
 
   test('a second approval of the same quest earns nothing and changes nothing', () => {
@@ -222,17 +225,20 @@ describe('achievements', () => {
   });
 
   test('Agent Commander unlocks after 10 finished agent reviews, which earn no XP themselves', () => {
+    const review = { questId: 'o/r#1', provider: 'cursor' as const };
     let state = initialGameState();
     for (let index = 0; index < 9; index++) {
-      const update = applyAgentReviewFinished(state, day(10));
+      const update = applyAgentReviewFinished(state, review, day(10));
       expect(update.xpGained).toBe(0);
       state = update.state;
     }
 
-    const tenth = applyAgentReviewFinished(state, day(10));
+    const tenth = applyAgentReviewFinished(state, review, day(10));
 
     expect(tenth.unlocked.map((entry) => entry.id)).toEqual(['agent-commander']);
-    expect(tenth.grants).toEqual([{ amount: 40, reason: 'achievement' }]);
+    expect(tenth.grants).toEqual([
+      { amount: 50, reason: 'achievement', achievementId: 'agent-commander' },
+    ]);
     expect(tenth.state.counters.agentReviews).toBe(10);
   });
 });
@@ -259,12 +265,32 @@ describe('player views', () => {
 
     expect(statuses.map((status) => status.id)).toEqual([
       'first-blood',
+      'centurion-bronze',
+      'centurion-silver',
+      'centurion-gold',
+      'team-player',
+      'agent-commander',
+      'gatekeeper',
+      'giant-killer',
+      'on-fire',
+      'unstoppable',
+      'early-bird',
+      'night-owl',
+      'weekend-warrior',
       'quick-draw',
       'boss-slayer',
-      'team-player',
       'inbox-zero',
-      'on-fire',
-      'agent-commander',
+      'clean-sweep',
+      'necromancer',
+      'the-long-read',
+      'eagle-eye',
+      'featherweight',
+      'second-opinion',
+      'explorer',
+      'diplomat',
+      'bot-wrangler',
+      'speedrunner',
+      'archaeologist',
     ]);
     expect(statuses.find((status) => status.id === 'first-blood')).toMatchObject({
       unlockedAt: day(10).toISOString(),

@@ -40,6 +40,7 @@ import {
   type QuestActionError,
   type Toast,
   playLootSound,
+  rewardLabel,
   unlockAudio,
 } from '../../features/game/ui/index.ts';
 import {
@@ -143,6 +144,7 @@ export function useGameController(): GameController {
         title: `Achievement unlocked: ${achievement.name}`,
         message: achievement.description,
         icon: achievement.icon,
+        ...(achievement.xpReward > 0 ? { reward: rewardLabel(achievement) } : {}),
       });
     };
 
@@ -210,14 +212,16 @@ export function useGameController(): GameController {
       store.setState((state) => ({ ...state, player: outcome.player }));
       outcome.gains.forEach(pushXpGain);
       outcome.unlocked.forEach((unlocked: UnlockedAchievement) => {
+        const sent = outcome.achievements?.find((entry) => entry.id === unlocked.id);
         const known = store.getState().achievements.find((entry) => entry.id === unlocked.id);
-        const definition: AchievementDef = known ?? {
-          id: unlocked.id,
-          name: unlocked.id,
-          description: '',
-          icon: '🏅',
-          xpReward: 0,
-        };
+        const definition: AchievementDef = sent ??
+          known ?? {
+            id: unlocked.id,
+            name: unlocked.id,
+            description: '',
+            icon: '🏅',
+            xpReward: 0,
+          };
         store.setState((state) => markAchievementUnlocked(state, definition, unlocked.unlockedAt));
         announceAchievement(definition);
       });

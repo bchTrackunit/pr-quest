@@ -361,6 +361,52 @@ describe('App', () => {
       unlockedAt: new Date().toISOString(),
     });
     expect(screen.getAllByText('Achievement unlocked: Team Player')).toHaveLength(1);
+    expect(screen.getByText('Rare · +50 bonus XP')).toBeTruthy();
+  });
+
+  test('a hidden achievement unlocked by an approval is announced by its real name', async () => {
+    const user = userEvent.setup();
+    const speedrunner = {
+      id: 'speedrunner' as const,
+      name: 'Speedrunner',
+      description: 'Approve a PR within 5 minutes of being asked to review it.',
+      icon: '⏱️',
+      xpReward: 100,
+      rarity: 'epic' as const,
+      category: 'secret' as const,
+      secret: true,
+    };
+    api.fetchAchievements.mockResolvedValue({
+      achievements: [{ ...speedrunner, name: '???', icon: '❔', description: 'A very fast hand.' }],
+    });
+    api.approveQuest.mockResolvedValue({
+      questId: 'Trackunit/manager#101',
+      approvedVia: 'linear',
+      outcome: {
+        xpGained: 140,
+        gains: [
+          { eventId: 'xp-1', amount: 40, reason: 'approved' },
+          {
+            eventId: 'xp-achievement-speedrunner',
+            amount: 100,
+            reason: 'achievement',
+            achievementId: 'speedrunner',
+          },
+        ],
+        player: makePlayer(),
+        unlocked: [{ id: 'speedrunner', unlockedAt: new Date().toISOString() }],
+        achievements: [speedrunner],
+      },
+    });
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: /^Approve/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this PR?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Approve Trackunit/manager#101' }));
+
+    expect(await screen.findByText('Achievement unlocked: Speedrunner')).toBeTruthy();
+    expect(screen.getByText('Epic · +100 bonus XP')).toBeTruthy();
+    expect(screen.queryByText('Achievement unlocked: ???')).toBeNull();
   });
 
   test("signing out clears the previous player's runs, errors, toasts and player", async () => {

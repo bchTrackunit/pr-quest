@@ -281,7 +281,11 @@ describe('migrating a real legacy state folder', () => {
 
     const userDir = join(dir, 'users', 'brianchristensen');
     const store = await StateStore.open(userDir);
-    const player = new GameService(store, { broadcast: () => undefined }, () => NOW).player();
+    const player = new GameService(
+      store,
+      { broadcast: () => undefined },
+      { now: () => NOW },
+    ).player();
     expect(player).toEqual({
       xp: 25,
       level: 1,

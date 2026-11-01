@@ -123,7 +123,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     const store = await opening;
     const events = new EventHub();
-    const game = new GameService(store, events);
+    const game = new GameService(store, events, { login });
     const runs = new ReviewRunService({
       store,
       events,

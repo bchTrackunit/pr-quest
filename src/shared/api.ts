@@ -164,14 +164,53 @@ export interface ReviewRun {
 // Gamification
 // ---------------------------------------------------------------------------
 
-export type AchievementId =
-  | 'first-blood'
-  | 'quick-draw'
-  | 'boss-slayer'
-  | 'team-player'
-  | 'inbox-zero'
-  | 'on-fire'
-  | 'agent-commander';
+/** Every achievement id; the stored state accepts exactly these. */
+export const ACHIEVEMENT_IDS = [
+  'first-blood',
+  'quick-draw',
+  'boss-slayer',
+  'team-player',
+  'inbox-zero',
+  'on-fire',
+  'agent-commander',
+  'necromancer',
+  'early-bird',
+  'night-owl',
+  'weekend-warrior',
+  'centurion-bronze',
+  'centurion-silver',
+  'centurion-gold',
+  'unstoppable',
+  'clean-sweep',
+  'giant-killer',
+  'featherweight',
+  'the-long-read',
+  'eagle-eye',
+  'gatekeeper',
+  'second-opinion',
+  'explorer',
+  'diplomat',
+  'bot-wrangler',
+  'speedrunner',
+  'archaeologist',
+] as const;
+
+export type AchievementId = (typeof ACHIEVEMENT_IDS)[number];
+
+/** How hard an achievement is to get; it sets the bonus XP. */
+export type AchievementRarity = 'common' | 'rare' | 'epic' | 'legendary';
+
+/** The group the Achievements dialog lists an achievement under. */
+export type AchievementCategory = 'milestones' | 'streaks' | 'feats' | 'variety' | 'secret';
+
+export type AchievementTier = 'bronze' | 'silver' | 'gold';
+
+/** The tiers of one achievement, such as Centurion Bronze, Silver and Gold, share a series. */
+export interface AchievementSeries {
+  id: string;
+  name: string;
+  tier: AchievementTier;
+}
 
 export interface AchievementDef {
   id: AchievementId;
@@ -179,11 +218,19 @@ export interface AchievementDef {
   description: string;
   /** A single emoji or short glyph shown on the badge. */
   icon: string;
+  /** Bonus XP, awarded once when the achievement unlocks. */
   xpReward: number;
+  rarity?: AchievementRarity;
+  category?: AchievementCategory;
+  series?: AchievementSeries;
   /** Hidden achievements show as "???" until unlocked. */
   secret?: boolean;
+  /** What a hidden achievement shows instead of its description until it unlocks. */
+  hint?: string;
   /** Counter target for progress bars, e.g. 10 for Team Player. */
   target?: number;
+  /** `progress` counts only today's actions and starts again each local day. */
+  daily?: boolean;
 }
 
 export interface UnlockedAchievement {
@@ -230,10 +277,13 @@ export interface AchievementStatus extends AchievementDef {
  * client that sees it both ways counts it once.
  */
 export interface XpGain {
+  /** For an achievement bonus, `xp-achievement-<id>`: the same every time, so it counts once. */
   eventId: string;
   amount: number;
   reason: XpReason;
   questId?: string;
+  /** The achievement whose bonus this is, when `reason` is `achievement`. */
+  achievementId?: AchievementId;
 }
 
 /** Game side effects of an action, returned so the UI can animate without waiting for SSE. */
@@ -244,6 +294,11 @@ export interface GameOutcome {
   gains: Array<XpGain>;
   player: PlayerState;
   unlocked: Array<UnlockedAchievement>;
+  /**
+   * The definitions of `unlocked`, in the same order. The achievement list shows hidden ones as
+   * "???", so the UI needs these to announce them.
+   */
+  achievements?: Array<AchievementDef>;
 }
 
 // ---------------------------------------------------------------------------

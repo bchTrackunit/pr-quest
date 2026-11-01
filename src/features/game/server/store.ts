@@ -1,19 +1,35 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-import type {
-  DifficultyTier,
-  RepoRef,
-  RequestKind,
-  ReviewRun,
-  ReviewRunQuest,
+import {
+  ACHIEVEMENT_IDS,
+  type DiffStats,
+  type DifficultyTier,
+  type QuestAuthor,
+  type RepoRef,
+  type RequestKind,
+  type ReviewRun,
+  type ReviewRunQuest,
 } from '../../../shared/api.ts';
 import { initialGameState, type GameState } from './gamification.ts';
+import {
+  emptyLedger,
+  isHighSeverity,
+  prKey,
+  repoKey,
+  withEntry,
+  withRunProvider,
+  type AchievementLedger,
+} from './ledger.ts';
+import { refuseNewerVersion } from '../../../platform/server/privateFiles.ts';
 import { StoredReviewResultSchema, type ReviewTarget } from '../../../shared/reviewResult.ts';
 
 const STATE_FILE = 'state.json';
+/** Version 2 added the achievement ledger. */
+export const STATE_VERSION = 2;
 
 /** The quest as it was when a run started, so posting and rewards work after it leaves the queue. */
 export interface QuestSnapshot extends ReviewTarget {
@@ -24,6 +40,9 @@ export interface QuestSnapshot extends ReviewTarget {
   difficulty: DifficultyTier;
   requestKind: RequestKind;
   requestedAt: string;
+  /** Absent in runs started before snapshots kept it. */
+  author?: QuestAuthor;
+  diffStats?: DiffStats;
 }
 
 /** The part of the snapshot the UI sees on `ReviewRun.quest`. */
@@ -46,7 +65,7 @@ export interface StoredRun {
 }
 
 export interface PersistedState {
-  version: 1;
+  version: typeof STATE_VERSION;
   game: GameState;
   runs: Array<StoredRun>;
 }
@@ -61,17 +80,29 @@ const CountersSchema = z.object({
   quickDraws: z.number().int().nonnegative(),
 });
 
-const AchievementIdSchema = z.enum([
-  'first-blood',
-  'quick-draw',
-  'boss-slayer',
-  'team-player',
-  'inbox-zero',
-  'on-fire',
-  'agent-commander',
-]);
+const AchievementIdSchema = z.enum(ACHIEVEMENT_IDS);
 
-const GameStateSchema = z.object({
+const ProviderSchema = z.enum(['cursor', 'claude']);
+
+const LedgerSchema = z.object({
+  repos: z.array(z.string()),
+  authors: z.array(z.string()),
+  botPrs: z.array(z.string()),
+  changesRequestedPrs: z.array(z.string()),
+  bossApprovals: z.number().int().nonnegative(),
+  highSeverityReviews: z.number().int().nonnegative(),
+  reviewedPrs: z.array(z.string()),
+  runProviders: z.record(z.string(), z.array(ProviderSchema)),
+  day: z
+    .object({
+      date: z.string(),
+      trivialApprovals: z.number().int().nonnegative(),
+      directPrs: z.array(z.string()),
+    })
+    .optional(),
+});
+
+const GameStateV1Schema = z.object({
   xp: z.number().nonnegative(),
   achievements: z.array(z.object({ id: AchievementIdSchema, unlockedAt: z.string() })),
   counters: CountersSchema,
@@ -79,6 +110,8 @@ const GameStateSchema = z.object({
   lastReviewDate: z.string().optional(),
   rewardedApprovals: z.array(z.string()),
 });
+
+const GameStateSchema = GameStateV1Schema.extend({ ledger: LedgerSchema });
 
 const TierSchema = z.enum(['Trivial', 'Normal', 'Hard', 'Boss']);
 
@@ -99,7 +132,7 @@ const StoredRunSchema = z.object({
       })
       .optional(),
     /** Absent in state written before Claude reviews existed; those runs were Cursor's. */
-    provider: z.enum(['cursor', 'claude']).default('cursor'),
+    provider: ProviderSchema.default('cursor'),
     model: z.string().optional(),
     agentId: z.string().optional(),
     runId: z.string().optional(),
@@ -124,12 +157,26 @@ const StoredRunSchema = z.object({
     difficulty: TierSchema,
     requestKind: z.enum(['direct', 'team']),
     requestedAt: z.string(),
+    author: z.object({ name: z.string(), githubLogin: z.string().optional() }).optional(),
+    diffStats: z
+      .object({
+        fileCount: z.number().int().nonnegative(),
+        additions: z.number().int().nonnegative(),
+        deletions: z.number().int().nonnegative(),
+      })
+      .optional(),
   }),
 });
 
 const PersistedStateSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(STATE_VERSION),
   game: GameStateSchema,
+  runs: z.array(StoredRunSchema),
+});
+
+const PersistedStateV1Schema = z.object({
+  version: z.literal(1),
+  game: GameStateV1Schema,
   runs: z.array(StoredRunSchema),
 });
 
@@ -199,15 +246,21 @@ async function readState(
     throw error;
   }
 
-  const parsed = PersistedStateSchema.safeParse(safeJson(text));
+  const json = safeJson(text);
+  refuseNewerVersion(json, STATE_VERSION, file);
+  const parsed = PersistedStateSchema.safeParse(json);
   if (parsed.success) {
-    return {
-      ...parsed.data,
-      runs: parsed.data.runs.map(({ run, quest }) => ({
-        run: { ...run, quest: run.quest ?? runQuestOf(quest) },
-        quest,
-      })),
+    return { ...parsed.data, runs: withRunQuests(parsed.data.runs) };
+  }
+  const legacy = PersistedStateV1Schema.safeParse(json);
+  if (legacy.success) {
+    await keepCopy(file, `${file}.v1.bak`);
+    const runs = withRunQuests(legacy.data.runs);
+    const game: GameState = {
+      ...legacy.data.game,
+      ledger: backfillLedger(legacy.data.game.rewardedApprovals, runs),
     };
+    return { version: STATE_VERSION, game, runs };
   }
   const aside = `${file}.corrupt-${Date.now()}`;
   await rename(file, aside);
@@ -215,8 +268,65 @@ async function readState(
   return emptyState();
 }
 
+type ParsedRun = z.infer<typeof StoredRunSchema>;
+
+function withRunQuests(runs: Array<ParsedRun>): Array<StoredRun> {
+  return runs.map(({ run, quest }) => ({
+    run: { ...run, quest: run.quest ?? runQuestOf(quest) },
+    quest,
+  }));
+}
+
+/**
+ * What version 1 state already shows about the achievement ledger: the repos of approved and
+ * posted PRs, Boss approvals whose run kept the tier, posted reviews with critical or major
+ * findings, and which providers finished a review of each PR. Authors, bots, requests for changes
+ * and today's counters weren't stored, so they count from the upgrade on.
+ */
+export function backfillLedger(
+  rewardedApprovals: ReadonlyArray<string>,
+  runs: ReadonlyArray<StoredRun>,
+): AchievementLedger {
+  const ledger = emptyLedger();
+  const tiers = new Map(runs.map(({ quest }) => [prKey(quest.id), quest.difficulty]));
+  for (const questId of rewardedApprovals) {
+    ledger.repos = withEntry(ledger.repos, repoKey(questId));
+    if (tiers.get(prKey(questId)) === 'Boss') {
+      ledger.bossApprovals++;
+    }
+  }
+  for (const { run, quest } of runs) {
+    const key = prKey(quest.id);
+    if (run.status === 'finished' && run.result) {
+      ledger.reviewedPrs = withEntry(ledger.reviewedPrs, key);
+      ledger.runProviders = withRunProvider(ledger.runProviders, key, run.provider);
+    }
+    if (run.disposition === 'posted') {
+      ledger.repos = withEntry(ledger.repos, repoKey(quest.id));
+      ledger.reviewedPrs = withEntry(ledger.reviewedPrs, key);
+      if (run.result?.findings.some((finding) => isHighSeverity(finding.severity))) {
+        ledger.highSeverityReviews++;
+      }
+    }
+  }
+  return ledger;
+}
+
+/** Copies `file` to `backup` once; a later upgrade never overwrites the first copy. */
+async function keepCopy(file: string, backup: string): Promise<void> {
+  try {
+    await copyFile(file, backup, constants.COPYFILE_EXCL);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+      return;
+    }
+    throw error;
+  }
+  await chmod(backup, 0o600);
+}
+
 function emptyState(): PersistedState {
-  return { version: 1, game: initialGameState(), runs: [] };
+  return { version: STATE_VERSION, game: initialGameState(), runs: [] };
 }
 
 function safeJson(text: string): unknown {
