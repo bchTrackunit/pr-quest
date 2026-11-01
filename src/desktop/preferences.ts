@@ -32,7 +32,7 @@ export async function readPreferences(file: string): Promise<DesktopPreferences>
     return {};
   }
   const { version: _version, ...preferences } = parsed.data;
-  return Object.fromEntries(Object.entries(preferences).filter(([, value]) => value !== undefined));
+  return preferences;
 }
 
 export async function writePreferences(

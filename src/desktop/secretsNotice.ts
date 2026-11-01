@@ -21,9 +21,6 @@ export function secretsNotice(
   plaintextChoice: boolean | undefined,
 ): SecretsNotice | undefined {
   switch (storage) {
-    case 'keychain':
-    case 'plaintext':
-      return undefined;
     case 'memory':
       return plaintextChoice === undefined
         ? {
@@ -51,5 +48,7 @@ export function secretsNotice(
           { label: 'Continue Without Saved Keys', action: 'continue' },
         ],
       };
+    default:
+      return undefined;
   }
 }
