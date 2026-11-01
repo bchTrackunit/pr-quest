@@ -62,7 +62,11 @@ function fakeServices(): FakeServices {
             }
           }
         }
+        const timeZone = patch.timeZone === undefined ? settings.timeZone : patch.timeZone;
         settings = { reviewProvider: patch.reviewProvider ?? settings.reviewProvider, models };
+        if (timeZone) {
+          settings.timeZone = timeZone;
+        }
         return settings;
       }),
     },
@@ -183,7 +187,29 @@ describe('settings', () => {
     });
   });
 
+  test('PUT /api/settings saves an IANA time zone under its canonical name', async () => {
+    const response = await send('PUT', '/api/settings', {
+      body: { timeZone: 'europe/copenhagen' },
+    });
+
+    expect(response).toMatchObject({ status: 200, body: { timeZone: 'Europe/Copenhagen' } });
+    expect(services.settings.update).toHaveBeenCalledWith({ timeZone: 'Europe/Copenhagen' });
+  });
+
+  test('PUT /api/settings clears the time zone with null', async () => {
+    settings = { reviewProvider: 'cursor', models: {}, timeZone: 'Asia/Tokyo' };
+
+    const response = await send('PUT', '/api/settings', { body: { timeZone: null } });
+
+    expect(response.status).toBe(200);
+    expect(response.body).not.toHaveProperty('timeZone');
+    expect(services.settings.update).toHaveBeenCalledWith({ timeZone: null });
+  });
+
   test.each([
+    ['an unknown time zone', { timeZone: 'Mars/Olympus_Mons' }],
+    ['a fixed UTC offset', { timeZone: '+02:00' }],
+    ['a non-string time zone', { timeZone: 1 }],
     ['an unknown provider', { reviewProvider: 'openai' }],
     ['an unknown field', { reviewProvider: 'claude', theme: 'dark' }],
     ['a model for an unknown provider', { models: { openai: 'gpt' } }],

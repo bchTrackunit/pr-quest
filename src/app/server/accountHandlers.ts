@@ -9,6 +9,7 @@ import {
 import type { ApiKeys, ModelCatalog, SettingsStore } from '../../features/settings/server/index.ts';
 import type { DeviceFlow } from '../../features/auth/server/index.ts';
 import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
+import { canonicalTimeZone } from '../../platform/server/timeZone.ts';
 import { ModelIdSchema, parseBody, parseOrReject } from '../../platform/server/validation.ts';
 
 const MAX_KEY_LENGTH = 1000;
@@ -17,12 +18,28 @@ const ProviderSchema = z.enum(['cursor', 'claude'], {
   error: 'Must be "cursor" or "claude"',
 });
 
+const TimeZoneSchema = z
+  .string({ error: 'Send the time zone as a string' })
+  .max(100)
+  .transform((value, context) => {
+    const zone = canonicalTimeZone(value);
+    if (zone === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Must be an IANA time zone such as Europe/Copenhagen',
+      });
+      return z.NEVER;
+    }
+    return zone;
+  });
+
 const UpdateSettingsSchema = z.strictObject(
   {
     reviewProvider: ProviderSchema.optional(),
     models: z.partialRecord(ProviderSchema, ModelIdSchema.nullable()).optional(),
+    timeZone: TimeZoneSchema.nullable().optional(),
   },
-  { error: 'Send a JSON object with reviewProvider and/or models' },
+  { error: 'Send a JSON object with reviewProvider, models and/or timeZone' },
 );
 
 /** The value's content never appears in an error, only which rule it broke. */
@@ -139,6 +156,7 @@ export function createSettingsHandlers(services: SettingsServices): RouteHandler
     return {
       reviewProvider: current.reviewProvider,
       models: current.models,
+      ...(current.timeZone ? { timeZone: current.timeZone } : {}),
       keys: apiKeys.statuses(),
     };
   };

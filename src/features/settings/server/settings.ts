@@ -10,6 +10,7 @@ import {
   writePrivateJson,
   WriteQueue,
 } from '../../../platform/server/privateFiles.ts';
+import { canonicalTimeZone } from '../../../platform/server/timeZone.ts';
 
 const SETTINGS_FILE = 'settings.json';
 
@@ -18,12 +19,16 @@ export interface AppSettings {
   reviewProvider: ReviewProvider;
   /** Model id per provider; a missing entry means the provider's default. */
   models: Partial<Record<ReviewProvider, string>>;
+  /** The player's IANA time zone for streaks and daily achievements; absent means the machine's. */
+  timeZone?: string;
 }
 
 export interface SettingsPatch {
   reviewProvider?: ReviewProvider;
   /** `null` clears the model, going back to the provider's default. */
   models?: Partial<Record<ReviewProvider, string | null>>;
+  /** A canonical IANA zone name; `null` goes back to the machine's zone. */
+  timeZone?: string | null;
 }
 
 const ProviderSchema = z.enum(['cursor', 'claude']);
@@ -32,6 +37,8 @@ const SettingsFileSchema = z.object({
   version: z.literal(1),
   reviewProvider: ProviderSchema,
   models: z.partialRecord(ProviderSchema, z.string()),
+  /** Older builds drop it on their next write, which only resets the zone to the machine's. */
+  timeZone: z.string().optional().catch(undefined),
 });
 
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
@@ -74,10 +81,15 @@ export class FileSettingsStore implements SettingsStore {
       options.onWarning?.('The settings file was unreadable; using the defaults');
       return new FileSettingsStore(file, DEFAULT_SETTINGS);
     }
-    return new FileSettingsStore(file, {
+    const settings: AppSettings = {
       reviewProvider: parsed.data.reviewProvider,
       models: parsed.data.models,
-    });
+    };
+    const timeZone = parsed.data.timeZone && canonicalTimeZone(parsed.data.timeZone);
+    if (timeZone) {
+      settings.timeZone = timeZone;
+    }
+    return new FileSettingsStore(file, settings);
   }
 
   public get(): AppSettings {
@@ -99,6 +111,10 @@ export class FileSettingsStore implements SettingsStore {
         reviewProvider: patch.reviewProvider ?? this.current.reviewProvider,
         models,
       };
+      const timeZone = patch.timeZone === undefined ? this.current.timeZone : patch.timeZone;
+      if (timeZone) {
+        next.timeZone = timeZone;
+      }
       await writePrivateJson(this.file, { version: 1, ...next });
       this.current = next;
       return next;

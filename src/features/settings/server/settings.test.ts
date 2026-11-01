@@ -46,6 +46,43 @@ describe('FileSettingsStore', () => {
     expect(settings.get().models).toEqual({ claude: 'claude-opus-5-5' });
   });
 
+  test('saves the time zone and clears it with null', async () => {
+    const settings = await FileSettingsStore.open(dir);
+
+    await settings.update({ timeZone: 'Europe/Copenhagen' });
+    expect((await FileSettingsStore.open(dir)).get().timeZone).toBe('Europe/Copenhagen');
+
+    await settings.update({ timeZone: null });
+    expect((await FileSettingsStore.open(dir)).get()).toEqual({
+      reviewProvider: 'cursor',
+      models: {},
+    });
+  });
+
+  test('keeps the time zone when a patch leaves it out', async () => {
+    const settings = await FileSettingsStore.open(dir);
+    await settings.update({ timeZone: 'Asia/Tokyo' });
+
+    await settings.update({ reviewProvider: 'claude' });
+
+    expect(settings.get().timeZone).toBe('Asia/Tokyo');
+  });
+
+  test('drops a time zone this machine does not know and keeps the other settings', async () => {
+    const text = JSON.stringify({
+      version: 1,
+      reviewProvider: 'claude',
+      models: {},
+      timeZone: 'Mars/Olympus_Mons',
+    });
+    await writeFile(join(dir, 'settings.json'), text);
+
+    expect((await FileSettingsStore.open(dir)).get()).toEqual({
+      reviewProvider: 'claude',
+      models: {},
+    });
+  });
+
   test('ignores an unreadable file and warns', async () => {
     await writeFile(join(dir, 'settings.json'), '{"reviewProvider":"nope"}');
     const onWarning = vi.fn();

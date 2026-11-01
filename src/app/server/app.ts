@@ -226,7 +226,10 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     const [store, cache] = await Promise.all([opening, storage.questCache(login)]);
     const events = new EventHub();
-    const game = new GameService(store, events, { login });
+    const game = new GameService(store, events, {
+      login,
+      timeZone: () => scoped.settings.get().timeZone,
+    });
     const runs = new ReviewRunService({
       store,
       events,
