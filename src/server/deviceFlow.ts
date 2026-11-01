@@ -15,7 +15,10 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const DeviceCodeSchema = z.object({
   device_code: z.string().min(1),
   user_code: z.string().min(1),
-  verification_uri: z.url(),
+  /** The UI renders it as a link, so only a page on github.com is accepted. */
+  verification_uri: z.url().refine((url) => url.startsWith(`${GITHUB_URL}/`), {
+    message: 'is not a github.com page',
+  }),
   expires_in: z.number().positive(),
   interval: z.number().nonnegative().optional(),
 });

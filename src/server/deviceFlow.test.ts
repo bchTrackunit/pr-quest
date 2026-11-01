@@ -163,6 +163,21 @@ describe('DeviceFlow', () => {
     expect(onToken).not.toHaveBeenCalled();
   });
 
+  test.each(['javascript:alert(1)', 'file:///etc/passwd', 'https://github.com.evil.example/login/device'])(
+    'refuses a verification link to %s, since the UI renders it as a link',
+    async (verificationUri) => {
+      const flow = new DeviceFlow({
+        clientId: 'Iv1.client',
+        onToken: async () => undefined,
+        log: () => undefined,
+        fetch: async () => json({ ...CODE_RESPONSE, verification_uri: verificationUri }),
+      });
+
+      await expect(flow.start()).rejects.toMatchObject({ status: 502, code: 'upstreamFailed' });
+      expect(flow.status()).toEqual({ state: 'idle' });
+    },
+  );
+
   test('refuses to start without a client ID', async () => {
     const { flow, fetchMock } = setup([], null);
 
