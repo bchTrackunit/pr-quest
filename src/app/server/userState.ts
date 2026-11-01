@@ -25,12 +25,17 @@ const BACKUP_PATTERN =
 /** One migration at a time, so two users signing in at once can't both copy the shared state. */
 const migrations = new WriteQueue();
 
-/** `<stateDir>/users/<login>`: one player's game state and quest cache. */
-export function userStateDir(stateDir: string, login: string): string {
+/** `login` lower-cased, as GitHub logins are case-insensitive. Throws when it isn't a login. */
+export function githubLogin(login: string): string {
   if (!LOGIN_PATTERN.test(login)) {
     throw new Error(`Not a GitHub login: ${JSON.stringify(login.slice(0, 50))}`);
   }
-  return join(stateDir, 'users', login.toLowerCase());
+  return login.toLowerCase();
+}
+
+/** `<stateDir>/users/<login>`: one player's game state and quest cache. */
+export function userStateDir(stateDir: string, login: string): string {
+  return join(stateDir, 'users', githubLogin(login));
 }
 
 export interface MigrateOptions {
