@@ -26,10 +26,13 @@ let server: Server | undefined;
 let port: number;
 let secrets: Map<SecretName, string>;
 let settings: AppSettings;
-let services: AccountServices;
+/** Always with a device flow, which the tests that go without it drop. */
+type FakeServices = AccountServices & { deviceFlow: NonNullable<AccountServices['deviceFlow']> };
+
+let services: FakeServices;
 let device: DeviceFlowStatus;
 
-function fakeServices(): AccountServices {
+function fakeServices(): FakeServices {
   const apiKeys = new ApiKeys({
     env: { linear: ENV_KEY },
     secrets: {
@@ -79,9 +82,9 @@ function fakeServices(): AccountServices {
           device = { state: 'idle' };
         }
       }),
+      isConfigured: () => true,
     },
     auth: {
-      clientIdConfigured: true,
       current: async () => ({ account: { login: 'Player', tokenSource: 'oauth' } }),
       signOut: vi.fn(async (): Promise<{ signedOutLogin?: string }> => ({})),
     },
@@ -92,8 +95,13 @@ beforeEach(async () => {
   secrets = new Map([['anthropic', SAVED_KEY]]);
   settings = { reviewProvider: 'cursor', models: {} };
   services = fakeServices();
+  await listen(services);
+});
+
+async function listen(served: AccountServices): Promise<void> {
+  await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   server = createServer(
-    createRouter(createAccountHandlers(services), {
+    createRouter(createAccountHandlers(served), {
       allowedOrigins: loopbackOrigins([4317, 4318]),
     }),
   );
@@ -103,7 +111,7 @@ beforeEach(async () => {
     throw new Error('Test server is not listening on a TCP port');
   }
   port = address.port;
-});
+}
 
 afterEach(async () => {
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
@@ -253,6 +261,35 @@ describe('models', () => {
 
     expect(response.status).toBe(400);
     expect(services.models.list).not.toHaveBeenCalled();
+  });
+});
+
+describe('auth without a device flow', () => {
+  beforeEach(async () => {
+    await listen({ ...services, deviceFlow: undefined });
+  });
+
+  test('reports sign-in as unconfigured and idle', async () => {
+    const response = await send('GET', '/api/auth/status');
+
+    expect(response.body).toEqual({
+      clientIdConfigured: false,
+      account: { login: 'Player', tokenSource: 'oauth' },
+      device: { state: 'idle' },
+    });
+  });
+
+  test('refuses to start the device flow', async () => {
+    const response = await send('POST', '/api/auth/device');
+
+    expect(response).toMatchObject({ status: 409, body: { error: { code: 'missingConfig' } } });
+  });
+
+  test('still signs out', async () => {
+    const response = await send('POST', '/api/auth/sign-out');
+
+    expect(response.status).toBe(200);
+    expect(services.auth.signOut).toHaveBeenCalledOnce();
   });
 });
 

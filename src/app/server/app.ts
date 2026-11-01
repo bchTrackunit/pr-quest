@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SDKModel } from '@cursor/sdk';
 
 import {
@@ -13,7 +13,6 @@ import {
   ReviewRunService,
 } from '../../features/reviews/server/index.ts';
 import { type AppConfig, assertSafeConfig } from '../../platform/server/config.ts';
-import { DeviceFlow } from '../../features/auth/server/index.ts';
 import { EventHub } from '../../platform/server/events.ts';
 import { GameService, type StateStore } from '../../features/game/server/index.ts';
 import {
@@ -32,6 +31,7 @@ import type { ApiKeyName, RouteName } from '../../shared/api.ts';
 import {
   ApiError,
   type EventsHandler,
+  type RawRoute,
   type RouteHandler,
   type RouteHandlers,
 } from '../../platform/server/router.ts';
@@ -64,13 +64,15 @@ function required<THandler>(handler: THandler | undefined, name: RouteName): THa
   return handler;
 }
 
+type HandlersFor = (req: IncomingMessage, res: ServerResponse) => Promise<RouteHandlers>;
+
 /** Answers `name` with the handler that `handlersFor` picks for the request. */
 function perRequest<TName extends JsonRouteName>(
   name: TName,
-  handlersFor: (req: IncomingMessage) => Promise<RouteHandlers>,
+  handlersFor: HandlersFor,
 ): RouteHandler<TName> {
   return async (context) => {
-    const handlers: JsonRouteHandlers = await handlersFor(context.req);
+    const handlers: JsonRouteHandlers = await handlersFor(context.req, context.res);
     return required<RouteHandler<TName>>(handlers[name], name)(context);
   };
 }
@@ -111,6 +113,8 @@ export interface AppOptions {
 
 export interface App {
   handlers: RouteHandlers;
+  /** The identity resolver's routes outside the JSON API, for `RouterOptions.routes`. */
+  routes: ReadonlyArray<RawRoute>;
   /** Opens the current player's game so polling starts without waiting for the UI. */
   warmUp: () => Promise<void>;
   close: () => void;
@@ -261,58 +265,58 @@ export async function createApp(options: AppOptions): Promise<App> {
     };
   };
 
-  const context: IdentityContext<UserServices> = { openUser, fetchViewer, storage, log: info };
+  const releaseUser = (login: string): void => {
+    stores.delete(login);
+    const scope = identity.scopeFor(login);
+    if (scope.kind === 'user') {
+      scopes.delete(scopeKey(scope));
+    }
+  };
+
+  const context: IdentityContext<UserServices> = {
+    openUser,
+    fetchViewer,
+    storage,
+    log: info,
+    warn,
+    releaseUser,
+  };
   let identity: IdentityResolver<UserServices>;
-  let local: LocalIdentityResolver<UserServices> | undefined;
   if (options.identity) {
     identity = await options.identity(context);
   } else {
     if (!machine) {
       throw new Error('Only local mode has a default identity resolver');
     }
-    local = new LocalIdentityResolver({
+    identity = new LocalIdentityResolver({
       ...context,
       secrets: machine.secrets,
       ghToken: options.ghToken ?? (async () => undefined),
+      githubClientId: config.githubClientId,
+      fetch: options.fetch,
     });
-    identity = local;
   }
 
-  const deviceFlow = new DeviceFlow({
-    clientId: local ? config.githubClientId : undefined,
-    onToken: async (token, { isCurrent }) => {
-      await fetchViewer(token);
-      if (!isCurrent()) {
-        return;
-      }
-      await local?.signIn(token);
-    },
-    log: warn,
-    fetch: options.fetch,
-  });
-
-  const auth = (req: IncomingMessage): AuthServices['auth'] => ({
-    clientIdConfigured: local !== undefined && !!config.githubClientId,
+  const auth = (req: IncomingMessage, res: ServerResponse): AuthServices['auth'] => ({
     current: async () => {
       try {
-        const session = await identity.resolve(req);
+        const session = await identity.resolve(req, res);
         return session ? { account: session.account } : {};
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     },
     signOut: async () => {
-      deviceFlow.cancel();
-      const signedOut = await identity.signOut(req);
+      const signedOut = await identity.signOut(req, res);
       return signedOut?.tokenSource === 'oauth' ? { signedOutLogin: signedOut.login } : {};
     },
   });
-  const authFor = async (req: IncomingMessage): Promise<RouteHandlers> =>
-    createAuthHandlers({ deviceFlow, auth: auth(req) });
+  const authFor: HandlersFor = async (req, res) =>
+    createAuthHandlers({ deviceFlow: identity.deviceFlow, auth: auth(req, res) });
 
   const settingsHandlers = new WeakMap<ScopedServices, RouteHandlers>();
-  const settingsFor = async (req: IncomingMessage): Promise<RouteHandlers> => {
-    const scope = await identity.scope(req).catch(signInFailure);
+  const settingsFor: HandlersFor = async (req, res) => {
+    const scope = await identity.scope(req, res).catch(signInFailure);
     const scoped = await servicesFor(scope);
     let handlers = settingsHandlers.get(scoped);
     if (!handlers) {
@@ -323,8 +327,8 @@ export async function createApp(options: AppOptions): Promise<App> {
   };
 
   const gameHandlers = new WeakMap<UserServices, RouteHandlers>();
-  const user = async (req: IncomingMessage): Promise<RouteHandlers> => {
-    const session = await identity.resolve(req).catch(signInFailure);
+  const user: HandlersFor = async (req, res) => {
+    const session = await identity.resolve(req, res).catch(signInFailure);
     if (!session) {
       signInFailure(new NotSignedInError());
     }
@@ -337,7 +341,7 @@ export async function createApp(options: AppOptions): Promise<App> {
   };
 
   const userEvents: EventsHandler = (eventsContext) => {
-    user(eventsContext.req).then(
+    user(eventsContext.req, eventsContext.res).then(
       (handlers) => handlers.events?.(eventsContext),
       (error: unknown) => {
         const status = error instanceof ApiError ? error.status : 500;
@@ -392,8 +396,8 @@ export async function createApp(options: AppOptions): Promise<App> {
         );
       }
     },
+    routes: identity.routes ?? [],
     close: () => {
-      deviceFlow.cancel();
       identity.close();
     },
   };

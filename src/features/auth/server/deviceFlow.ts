@@ -124,6 +124,11 @@ export class DeviceFlow {
     return this.current;
   }
 
+  /** Whether there is a client ID, without which `start` refuses. */
+  public isConfigured(): boolean {
+    return !!this.options.clientId;
+  }
+
   public cancel(): void {
     this.generation++;
     this.current = { state: 'idle' };

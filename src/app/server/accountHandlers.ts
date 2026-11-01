@@ -8,7 +8,7 @@ import {
 } from '../../shared/api.ts';
 import type { ApiKeys, ModelCatalog, SettingsStore } from '../../features/settings/server/index.ts';
 import type { DeviceFlow } from '../../features/auth/server/index.ts';
-import type { RouteHandlers } from '../../platform/server/router.ts';
+import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
 import { ModelIdSchema, parseBody, parseOrReject } from '../../platform/server/validation.ts';
 
 const MAX_KEY_LENGTH = 1000;
@@ -38,6 +38,17 @@ const KeyNameSchema = z.enum(API_KEY_NAMES, {
 
 const EmptyBodySchema = z.strictObject({}, { error: 'This route takes no body' });
 
+/** Stands in where sign-in works another way: always idle, and starting it is refused. */
+const NO_DEVICE_FLOW: NonNullable<AuthServices['deviceFlow']> = {
+  start: async () => {
+    throw new ApiError(409, 'missingConfig', "This server doesn't sign in with a device code");
+  },
+  status: () => ({ state: 'idle' }),
+  cancel: () => undefined,
+  acknowledgeComplete: () => undefined,
+  isConfigured: () => false,
+};
+
 /** What the settings, API key and model routes act on: one storage scope's. */
 export interface SettingsServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
@@ -47,9 +58,12 @@ export interface SettingsServices {
 
 /** What the sign-in routes act on. */
 export interface AuthServices {
-  deviceFlow: Pick<DeviceFlow, 'start' | 'status' | 'cancel' | 'acknowledgeComplete'>;
+  /** Only local mode signs in by device code; without it, those routes say it isn't set up. */
+  deviceFlow?: Pick<
+    DeviceFlow,
+    'start' | 'status' | 'cancel' | 'acknowledgeComplete' | 'isConfigured'
+  >;
   auth: {
-    clientIdConfigured: boolean;
     /** The token owner, or why the token didn't resolve to one. */
     current: () => Promise<{ account?: GitHubAccount; error?: string }>;
     /** Forgets the OAuth token and the cached identity; names the OAuth account it signed out of. */
@@ -66,7 +80,8 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
 
 /** The sign-in routes: who is signed in, the device flow and signing out. */
 export function createAuthHandlers(services: AuthServices): RouteHandlers {
-  const { deviceFlow, auth } = services;
+  const { auth } = services;
+  const deviceFlow = services.deviceFlow ?? NO_DEVICE_FLOW;
 
   const authStatus = async (): Promise<AuthStatusResponse> => {
     const { account, error } = await auth.current();
@@ -75,7 +90,7 @@ export function createAuthHandlers(services: AuthServices): RouteHandlers {
       deviceFlow.acknowledgeComplete();
     }
     return {
-      clientIdConfigured: auth.clientIdConfigured,
+      clientIdConfigured: deviceFlow.isConfigured(),
       ...(account ? { account } : {}),
       ...(error ? { error } : {}),
       device,

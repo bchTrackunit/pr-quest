@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { type AppConfig, loadConfig } from '../../platform/server/config.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
-import { type RunningServer, startServer, type ServerOverrides } from './server.ts';
+import {
+  type IdentityFactory,
+  MACHINE_SCOPE,
+  type RunningServer,
+  startServer,
+  type ServerOverrides,
+  type UserServices,
+} from './server.ts';
 
 vi.mock('@cursor/sdk', () => ({
   Agent: { create: vi.fn(), getRun: vi.fn() },
@@ -143,6 +150,30 @@ describe('startServer', () => {
     await expect(start({ ...HOSTED_CONFIG, host: '127.0.0.1' })).rejects.toThrow(
       /hosted mode needs/i,
     );
+  });
+
+  test("serves an injected identity's own routes", async () => {
+    const identity: IdentityFactory<UserServices> = async () => ({
+      resolve: async () => undefined,
+      scope: async () => MACHINE_SCOPE,
+      scopeFor: () => MACHINE_SCOPE,
+      signOut: async () => undefined,
+      rejected: () => undefined,
+      warmUp: async () => undefined,
+      close: () => undefined,
+      routes: [
+        {
+          method: 'GET',
+          path: '/auth/ping',
+          handle: (_req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/plain' }).end('pong');
+          },
+        },
+      ],
+    });
+    const server = await start(LOCAL_CONFIG, { identity });
+
+    expect(await (await fetch(`${server.url}/auth/ping`)).text()).toBe('pong');
   });
 
   test('stops listening when closed', async () => {

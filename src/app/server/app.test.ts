@@ -1,5 +1,12 @@
 import { copyFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, request, type Server } from 'node:http';
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  request,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -85,7 +92,7 @@ async function start(overrides: Partial<AppOptions> = {}): Promise<void> {
     warn: (message) => logs.push(message),
     ...overrides,
   });
-  server = createServer(createRouter(app.handlers));
+  server = createServer(createRouter(app.handlers, { routes: app.routes }));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   port = typeof address === 'object' && address ? address.port : 0;
@@ -96,7 +103,7 @@ function send(
   path: string,
   body?: unknown,
   headers: Record<string, string> = {},
-): Promise<{ status: number; body: unknown; text: string }> {
+): Promise<{ status: number; body: unknown; text: string; headers: IncomingHttpHeaders }> {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = request(
@@ -117,7 +124,14 @@ function send(
         let text = '';
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => (text += chunk));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), text }));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            body: text ? JSON.parse(text) : undefined,
+            text,
+            headers: res.headers,
+          }),
+        );
       },
     );
     req.on('error', reject);
@@ -418,37 +432,54 @@ describe('createApp', () => {
 
 /**
  * A stand-in for a hosted sign-in: the `X-Test-Token` header names the GitHub token, and every
- * login keeps its own session open at the same time.
+ * login keeps its own session open at the same time. It names the session in an `X-Test-Session`
+ * response header, as a hosted resolver would set its cookie, and releases a player who signs out.
  */
-const headerIdentity: IdentityFactory<UserServices> = async ({ openUser, fetchViewer }) => {
+const headerIdentity: IdentityFactory<UserServices> = async ({
+  openUser,
+  fetchViewer,
+  releaseUser,
+}) => {
   const open = new Map<string, Promise<Session<UserServices>>>();
-  const sessionOf = async (req: IncomingMessage) => {
+  const sessionOf = async (req: IncomingMessage, res: ServerResponse) => {
     const token = req.headers['x-test-token'];
     if (typeof token !== 'string') {
       return undefined;
     }
     const { login } = await fetchViewer(token);
-    let session = open.get(login.toLowerCase());
+    const key = login.toLowerCase();
+    let session = open.get(key);
     if (!session) {
-      session = openUser({ login: login.toLowerCase(), token: async () => token }).then(
-        (services) => ({ account: { login, tokenSource: 'oauth' as const }, services }),
-      );
-      open.set(login.toLowerCase(), session);
+      session = openUser({ login: key, token: async () => token }).then((services) => ({
+        account: { login, tokenSource: 'oauth' as const },
+        services,
+      }));
+      open.set(key, session);
     }
+    res.setHeader('X-Test-Session', key);
     return session;
   };
   return {
     resolve: sessionOf,
-    peek: () => undefined,
-    scope: async (req) => {
-      const session = await sessionOf(req);
+    scope: async (req, res) => {
+      const session = await sessionOf(req, res);
       if (!session) {
         throw new NotSignedInError();
       }
       return userScope(session.account.login);
     },
     scopeFor: userScope,
-    signOut: async () => undefined,
+    signOut: async (req, res) => {
+      const session = await sessionOf(req, res);
+      if (!session) {
+        return undefined;
+      }
+      const key = session.account.login.toLowerCase();
+      open.delete(key);
+      session.services.stop();
+      releaseUser(key);
+      return session.account;
+    },
     rejected: () => undefined,
     warmUp: async () => undefined,
     close: () => {
@@ -459,6 +490,15 @@ const headerIdentity: IdentityFactory<UserServices> = async ({ openUser, fetchVi
         );
       }
     },
+    routes: [
+      {
+        method: 'GET',
+        path: '/auth/test',
+        handle: (_req, res) => {
+          res.writeHead(302, { Location: '/' }).end();
+        },
+      },
+    ],
   };
 };
 
@@ -544,6 +584,23 @@ describe('createApp with an injected identity and storage', () => {
     expect(settings).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
   });
 
+  test('lets the identity write headers on the response, as for a session cookie', async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(player.headers['x-test-session']).toBe('brianchristensen');
+  });
+
+  test("serves the identity's own routes outside the JSON API", async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const response = await send('GET', '/auth/test');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('/');
+  });
+
   test("never falls back to the gh CLI's token or offers the device flow (local mode)", async () => {
     ghToken = GH_TOKEN;
     await start({ identity: headerIdentity, storage: perUserStorage() });
@@ -627,6 +684,31 @@ describe('createApp in hosted mode', () => {
     expect(settings.status).toBe(500);
     expect(player.status).toBe(500);
     expect(scopes).not.toContain('machine');
+  });
+
+  test("reopens a released player's game and keys from storage", async () => {
+    const { storage, scopes } = recordingStorage();
+    let gameStates = 0;
+    await start({
+      config: hostedConfig(),
+      identity: headerIdentity,
+      storage: {
+        ...storage,
+        gameState: async (login) => {
+          gameStates += 1;
+          return storage.gameState(login);
+        },
+      },
+    });
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    expect(gameStates).toBe(1);
+
+    await send('POST', '/api/auth/sign-out', {}, as(GH_TOKEN));
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(gameStates).toBe(2);
+    expect(scopes.filter((key) => key === 'user:brianchristensen')).toHaveLength(4);
   });
 
   test('answers the health check without saying which keys exist', async () => {

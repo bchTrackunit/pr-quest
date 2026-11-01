@@ -22,7 +22,13 @@ export {
   type LocalConfig,
 } from '../../platform/server/config.ts';
 export type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
-export type { IdentityContext, IdentityFactory, IdentityResolver } from './identity.ts';
+export type {
+  DeviceSignIn,
+  IdentityContext,
+  IdentityFactory,
+  IdentityResolver,
+} from './identity.ts';
+export type { RawRoute } from '../../platform/server/router.ts';
 export {
   type AppStorage,
   createFileStorage,
@@ -117,6 +123,7 @@ export async function startServer(
   routing.router = createRouter(app.handlers, {
     ...trustedRequests(config, port),
     staticDir,
+    routes: app.routes,
     onUnexpectedError: (error) => {
       warn(`unexpected error ${inspect(error)}`);
     },
