@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import {
+  assertSafeConfig,
   DEFAULT_GITHUB_CLIENT_ID,
   DEFAULT_SERVER_PORT,
   ENV_FILE_NAME,
@@ -12,6 +13,7 @@ import {
   LOOPBACK_HOST,
   LOOPBACK_HOSTNAMES,
 } from './config.ts';
+import { HOSTED_CONFIG } from './test-utils/config.ts';
 
 describe('loadConfig', () => {
   let dir: string;
@@ -251,4 +253,19 @@ describe('loadConfig', () => {
       /PR_QUEST_MODE/,
     );
   });
+});
+
+describe('assertSafeConfig', () => {
+  test('accepts lower-case allowed hosts in hosted mode', () => {
+    expect(() => assertSafeConfig(HOSTED_CONFIG)).not.toThrow();
+  });
+
+  test.each(['Pr-Quest.example', 'pr-quest.example:443', 'https://pr-quest.example', ''])(
+    'refuses the hosted allowed host "%s", which the Host check would never match',
+    (name) => {
+      expect(() => assertSafeConfig({ ...HOSTED_CONFIG, allowedHosts: [name] })).toThrow(
+        /lower-case host names/,
+      );
+    },
+  );
 });

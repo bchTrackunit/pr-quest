@@ -164,6 +164,12 @@ export function assertSafeConfig(config: AppConfig): void {
     if (config.allowedHosts.length === 0) {
       throw new Error('Hosted mode needs at least one allowed host');
     }
+    const malformed = config.allowedHosts.filter((name) => !isHostname(name));
+    if (malformed.length > 0) {
+      throw new Error(
+        `Hosted mode's allowedHosts must be lower-case host names without a scheme or port, got ${malformed.map((name) => `"${name}"`).join(', ')}`,
+      );
+    }
     const keys: Partial<Record<ApiKeyField, unknown>> = config;
     const shared = API_KEY_FIELDS.filter((field) => keys[field] !== undefined);
     if (shared.length > 0) {
