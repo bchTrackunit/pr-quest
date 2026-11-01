@@ -23,11 +23,13 @@ token. It also accepts browser requests only from its own UI and API origins, as
   `package.json`, so Volta switches to them inside the repo. Yarn older than 4.17.1 can't install
   TypeScript 7.
 - **Optional keys** for reviews and Linear. Add them in the [settings popup](#settings), or in
-  `.env.local` at the repo root (git-ignored). Start from the example:
+  the env file `~/.pr-quest/.env`, in the [state directory](#where-state-lives). Start from the
+  example:
 
   ```sh
-  cp .env.example .env.local
-  chmod 600 .env.local
+  mkdir -p -m 700 ~/.pr-quest
+  cp .env.example ~/.pr-quest/.env
+  chmod 600 ~/.pr-quest/.env
   ```
 
   ```sh
@@ -45,11 +47,24 @@ token. It also accepts browser requests only from its own UI and API origins, as
   "Send review agent" says which key is missing, with a button that opens the settings at it.
 
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
-`4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). They can go in `.env.local` or the
-environment. Environment variables take precedence over the file, and setting one to an empty
-value ignores both, so the default applies. For an API key, the default is the key saved in
-Settings: `CURSOR_API_KEY= yarn start` drops the key from the environment and `.env.local`, but a
-Cursor key saved in Settings still applies. Remove it in Settings to run without one.
+`4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). `PR_QUEST_MODE`, `PR_QUEST_HOST`,
+`PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to [hosted mode](#hosted-mode),
+which isn't usable yet.
+
+PR Quest reads settings from three places, and the first one that sets a value wins:
+
+1. The environment.
+2. The env file in the state directory, `<PR_QUEST_STATE_DIR>/.env`. It can't set
+   `PR_QUEST_STATE_DIR` itself, because it is read from there; PR Quest refuses to start if it
+   tries.
+3. `.env.local` at the repo root (git-ignored), read by `yarn dev` and `yarn start` from a
+   checkout. It was the only env file before, so existing setups keep working, and it may set
+   `PR_QUEST_STATE_DIR`. Move its other values to `~/.pr-quest/.env` when convenient.
+
+Setting a value to an empty string in the environment or a file ignores the places below it, so
+the default applies. For an API key, the default is the key saved in Settings:
+`CURSOR_API_KEY= yarn dev` drops the key from the env files, but a Cursor key saved in Settings
+still applies. Remove it in Settings to run without one.
 
 ## Sign in with GitHub
 
@@ -76,7 +91,7 @@ reach your machine from outside. It does need a GitHub OAuth App, which you crea
 
 ### Configure PR Quest
 
-Put the client ID in `.env.local` and restart PR Quest:
+Put the client ID in `~/.pr-quest/.env` (or `.env.local`) and restart PR Quest:
 
 ```sh
 PR_QUEST_GITHUB_CLIENT_ID=Ov23li...
@@ -167,8 +182,8 @@ the popup with that key's input focused.
 
 **API keys** show only whether each key is set, its last four characters (for keys of 12
 characters or more) and its source: `settings` when it was saved from the popup, `env` when it
-comes from the environment or `.env.local`. Environment keys win over saved ones and are
-read-only in the popup; change them in `.env.local` and restart. Saved keys apply to the next
+comes from the environment or an env file. Environment keys win over saved ones and are
+read-only in the popup; change them in the env file and restart. Saved keys apply to the next
 request without a restart. Removing a key asks for confirmation first. The key values themselves
 never leave the server. The key inputs ask 1Password, LastPass and Bitwarden not to save them; a
 browser's built-in password manager may still offer to.
@@ -201,25 +216,54 @@ yarn dev
 ```
 
 `yarn dev` starts the API on <http://127.0.0.1:4317>, restarting it when the server code changes,
-and the UI on <http://127.0.0.1:4318>. `yarn start` does the same without restarting the API on
-changes. Open the UI in a browser or in Cursor's browser tab. The UI proxies `/api` to the server
-and receives live updates over server-sent events; the indicator in the header shows "Live" when
-it is connected.
+and the UI on <http://127.0.0.1:4318> with hot reload. Open the UI in a browser or in Cursor's
+browser tab. The UI proxies `/api` to the server and receives live updates over server-sent
+events; the indicator in the header shows "Live" when it is connected.
+
+To run the production build instead:
+
+```sh
+yarn build
+yarn start
+```
+
+`yarn build` builds the UI into `dist/` and bundles the server into `dist-server/` with
+[esbuild](https://esbuild.github.io). `yarn start` runs `node dist-server/main.js`, which serves
+the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port. Without
+a `dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk` and
+`@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
+
+### Hosted mode
+
+`PR_QUEST_MODE` is `local` by default: one player on their own machine, listening on `127.0.0.1`
+only. Local mode refuses a `PR_QUEST_HOST` other than `127.0.0.1`, and refuses the hosted-only
+settings, so a typo can't expose the server.
+
+`PR_QUEST_MODE=hosted` is groundwork for serving many players from one address. It needs
+`PR_QUEST_PUBLIC_ORIGIN`, the origin browsers load PR Quest from (for example
+`https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `0.0.0.0`) and accepts the Host
+names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's host name).
+Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
+don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server
+supplies them through `startServer` in
+[`src/app/server/server.ts`](src/app/server/server.ts).
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
 
 ## Checks
 
-| Command             | What it does                                                             |
-| ------------------- | ------------------------------------------------------------------------ |
-| `yarn typecheck`    | Type-checks the UI, server and test projects                             |
-| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
-| `yarn lint:fix`     | Applies oxlint's safe fixes                                              |
-| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
-| `yarn format:check` | Fails if a file isn't formatted                                          |
-| `yarn test`         | Runs the Vitest suite once (`yarn test:watch` keeps it open)             |
-| `yarn build`        | Type-checks, then builds the UI into `dist/`                             |
+| Command             | What it does                                                                    |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `yarn typecheck`    | Type-checks the UI, server and test projects                                    |
+| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware         |
+| `yarn lint:fix`     | Applies oxlint's safe fixes                                                     |
+| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)        |
+| `yarn format:check` | Fails if a file isn't formatted                                                 |
+| `yarn test`         | Runs the Vitest suite once (`yarn test:watch` keeps it open)                    |
+| `yarn build`        | Type-checks, then builds the UI into `dist/` and the server into `dist-server/` |
+| `yarn build:server` | Bundles only the server into `dist-server/`                                     |
+| `yarn start`        | Runs the production build; see [Run it](#run-it)                                |
 
 With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
 tests and build, as CI does on every pull request and every push to `main`.
@@ -250,7 +294,10 @@ Each feature owns its server and UI code. Tests sit next to the code they test.
 ```text
 src/
   app/          composition roots: they wire the features together
-    server/     main.ts (entry), app.ts, the HTTP route tables, per-player sessions and state dirs
+    server/     main.ts (production entry), dev.ts (dev entry), server.ts (startServer, for
+                embedding), app.ts, the HTTP route tables, identity.ts (who a request acts
+                as), storage.ts (where secrets, settings and player state live), per-player
+                sessions and state dirs
     ui/         main.tsx (entry), App.tsx, the header controls and preferences, the game
                 controller hook and the live event stream
   features/
@@ -502,6 +549,17 @@ The API acts as you, so it only accepts requests that come from PR Quest:
   `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
   never grants.
 
+When `yarn start` serves the built UI, page and asset requests outside `/api` get only the Host
+check, so links and bookmarks still open the page. Only GET and HEAD are served, from `dist/`
+alone: paths with `..`, a backslash or a dotfile segment get `404`. A path without a file
+extension that isn't a file gets `index.html`, so the app's own routes load. Hashed files under
+`assets/` are cached for a year as `immutable`; `index.html` and the rest are `no-cache`, so a new
+build shows up on the next load.
+
+In [hosted mode](#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and the Origin
+must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a load
+balancer can probe it by IP address; its other checks still apply.
+
 ## XP and achievements
 
 XP is awarded only for real review actions, never for just starting an agent:
@@ -599,6 +657,7 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 
 ```text
 ~/.pr-quest/
+├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved from Settings
 ├── settings.json       the review provider and the model per provider
 └── users/
@@ -610,7 +669,7 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 
 `secrets.json` and `settings.json` are shared; the game and the quest cache belong to whoever
 the current token is. Signing in as someone else opens their own folder, starting fresh. Keys
-set in the environment or `.env.local` are never written to `secrets.json`.
+set in the environment or an env file are never written to `secrets.json`.
 
 An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
 Quest starts without it. Unreadable finding decisions on a run are the exception: they are
@@ -640,9 +699,9 @@ anyone.
 
 ## Security notes
 
-- **Loopback only.** The server listens on `127.0.0.1` and checks Host, Origin, `Sec-Fetch-Site`
-  and the content type of every POST, PUT and DELETE, as described in
-  [Local server protections](#local-server-protections).
+- **Loopback only.** In local mode, the default, the server listens on `127.0.0.1` and checks
+  Host, Origin, `Sec-Fetch-Site` and the content type of every POST, PUT and DELETE, as described
+  in [Local server protections](#local-server-protections).
 - **Secrets stay in the server process.** The UI only learns whether a key is set, its source and
   its last four characters. No route returns a key or the GitHub token, and the server doesn't
   log them. `gh auth token`, the only command PR Quest runs, gets an environment without
