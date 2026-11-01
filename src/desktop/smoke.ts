@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, sep } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 interface Check {
   name: string;
@@ -9,7 +10,9 @@ interface Check {
 }
 
 const BOGUS_KEY = 'pr-quest-smoke-test-invalid-key';
-const UI_RENDER_WAIT_MS = 2000;
+const UI_RENDER_WAIT_MS = 10_000;
+const UI_POLL_MS = 250;
+const CHECK_TIMEOUT_MS = 30_000;
 
 /**
  * Checks a packaged build: the UI renders from the bundled files, both SDKs load with their native
@@ -31,13 +34,16 @@ export async function runSmokeTest(window: BrowserWindow, url: string): Promise<
     {
       name: 'ui',
       run: async () => {
-        const children: unknown = await window.webContents.executeJavaScript(
-          `new Promise((resolve) => setTimeout(() => resolve(document.getElementById('root')?.childElementCount ?? 0), ${UI_RENDER_WAIT_MS}))`,
-        );
-        if (typeof children !== 'number' || children === 0) {
-          throw new Error('the UI root rendered nothing');
+        for (let waited = 0; waited < UI_RENDER_WAIT_MS; waited += UI_POLL_MS) {
+          const children: unknown = await window.webContents.executeJavaScript(
+            `document.getElementById('root')?.childElementCount ?? 0`,
+          );
+          if (typeof children === 'number' && children > 0) {
+            return `"${window.webContents.getTitle()}" rendered`;
+          }
+          await delay(UI_POLL_MS);
         }
-        return `"${window.webContents.getTitle()}" rendered`;
+        throw new Error(`the UI root rendered nothing in ${UI_RENDER_WAIT_MS} ms`);
       },
     },
     {
@@ -98,7 +104,7 @@ export async function runSmokeTest(window: BrowserWindow, url: string): Promise<
   let ok = true;
   for (const check of checks) {
     try {
-      process.stdout.write(`[smoke] ok   ${check.name}: ${await check.run()}\n`);
+      process.stdout.write(`[smoke] ok   ${check.name}: ${await withDeadline(check.run())}\n`);
     } catch (error) {
       ok = false;
       process.stdout.write(`[smoke] FAIL ${check.name}: ${describe(error)}\n`);
@@ -121,6 +127,20 @@ async function authFailure(
     throw new Error(`expected ${expected.name}, got ${describe(error)}`, { cause: error });
   }
   throw new Error('the call succeeded with a bogus key');
+}
+
+async function withDeadline(check: Promise<string>): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`no answer in ${CHECK_TIMEOUT_MS} ms`));
+    }, CHECK_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([check, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function describe(error: unknown): string {

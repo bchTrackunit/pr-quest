@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { inspect } from 'node:util';
 
 import { loadConfig, type RunningServer } from '../app/server/server.ts';
@@ -18,10 +19,17 @@ import { scheduleUpdateChecks, updatesEnabled } from './updates.ts';
 
 /** `PR_QUEST_SMOKE_TEST=1` checks a build, prints the results and exits; see smoke.ts. */
 const smokeTest = process.env.PR_QUEST_SMOKE_TEST === '1';
+/** After this the smoke test checks the window anyway, so a page that never loads fails it. */
+const SMOKE_LOAD_TIMEOUT_MS = 30_000;
+const SMOKE_CLOSE_TIMEOUT_MS = 5000;
 
 if (smokeTest) {
   // Its own profile, so it runs next to an open PR Quest instead of handing over to it.
   app.setPath('userData', mkdtempSync(join(tmpdir(), 'pr-quest-smoke-')));
+  // Chromium keeps its cookie key in the OS keychain. An unsigned rebuild can't read the item an
+  // earlier build created without an access prompt, and pages don't load while that prompt waits.
+  app.commandLine.appendSwitch('use-mock-keychain');
+  app.commandLine.appendSwitch('password-store', 'basic');
 }
 
 if (app.requestSingleInstanceLock()) {
@@ -194,6 +202,9 @@ function openWindow(url: string, log: LogFile): BrowserWindow {
       openExternally(event.url);
     }
   });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    log.warn(`the window's renderer stopped: ${details.reason} (exit code ${details.exitCode})`);
+  });
   window.webContents.loadURL(url).catch((error: unknown) => {
     log.warn(`the window failed to load ${url}: ${inspect(error)}`);
   });
@@ -207,10 +218,18 @@ async function runSmokeTestAndExit(
 ): Promise<void> {
   const { runSmokeTest } = await import('./smoke.ts');
   if (window.webContents.isLoading()) {
-    await once(window.webContents, 'did-finish-load');
+    await Promise.race([
+      once(window.webContents, 'did-finish-load'),
+      once(window.webContents, 'did-fail-load'),
+      delay(SMOKE_LOAD_TIMEOUT_MS),
+    ]);
   }
+  log.info(
+    `smoke test window: ${window.webContents.isLoading() ? 'still loading' : 'loaded'} ${window.webContents.getURL()}, ${window.isVisible() ? 'visible' : 'hidden'}`,
+  );
   const ok = await runSmokeTest(window, server.url);
-  await server.close();
+  // A page that never finished loading keeps its connection open, and closing waits for it.
+  await Promise.race([server.close(), delay(SMOKE_CLOSE_TIMEOUT_MS)]);
   await log.close();
   app.exit(ok ? 0 : 1);
 }
