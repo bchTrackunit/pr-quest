@@ -91,6 +91,9 @@ const config: Configuration = {
     }
   },
   publish: publishSettings({ releaseBuild, repo }),
+  // A prerelease version like 1.1.0-beta.1 must not put a channel in app-update.yml: with a
+  // channel, electron-updater installs older versions. CI checks the packaged file.
+  detectUpdateChannel: false,
   // Targets name no architecture, so each build is for the machine it runs on unless `--arm64` or
   // `--x64` says otherwise. Release macOS on an Apple Silicon and an Intel runner.
   mac: {

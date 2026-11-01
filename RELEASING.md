@@ -19,7 +19,9 @@ Pushing a tag that starts with `v` runs these jobs:
    Each job packages the app, signs it when the signing secrets are set, and smoke-tests it with
    `yarn desktop:smoke`: the unpacked app on every platform, the app inside the mounted `dmg` on
    macOS, and the AppImage on Linux. Signed builds also get their signature checked, and macOS
-   builds their notarization.
+   builds their notarization. The packaged update settings (`app-update.yml`) must set no update
+   channel, which would let the app install older versions, and on a signed Windows build must
+   name the publisher, so the app checks who signed an update before installing it.
 4. **Publish the draft release.** Once every build has passed, one job gathers their files,
    merges the two macOS update files, and creates the draft release with all of them. Because only
    this job creates the release, parallel builds can't create duplicate releases. Re-running it
@@ -167,9 +169,9 @@ check the current list in Microsoft's documentation.
 2. Under the account, request an identity validation of the **Public** type and wait for it to be
    approved.
 3. Create a certificate profile of the **Public Trust** type for that identity. Its certificate
-   subject is the `AZURE_SIGNING_PUBLISHER` value. electron-updater also checks it before
-   installing an update, so keep it stable: if it changes, apps signed with the old one refuse
-   the update.
+   subject is the `AZURE_SIGNING_PUBLISHER` value. electron-builder writes it into the app as
+   `publisherName`, and electron-updater checks an update's signer against it before installing
+   the update, so keep it stable: if it changes, apps signed with the old one refuse the update.
 4. In Microsoft Entra ID, create an app registration and give it a client secret. On the Trusted
    Signing account or the profile, give it the **Trusted Signing Certificate Profile Signer**
    role.
