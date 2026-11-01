@@ -1,0 +1,147 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "react", "jsx-a11y"],
+  "jsPlugins": [{ "name": "local", "specifier": "./oxlint-plugins/local.js" }],
+  "options": {
+    "typeAware": true
+  },
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+  "ignorePatterns": ["dist/**", "coverage/**", ".yarn/**"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "eslint/no-case-declarations": "error",
+    "eslint/no-empty": "error",
+    "eslint/no-fallthrough": "error",
+    "eslint/no-prototype-builtins": "error",
+    "eslint/no-regex-spaces": "error",
+    "eslint/no-unexpected-multiline": "error",
+    "eslint/prefer-rest-params": "error",
+    "eslint/no-array-constructor": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-function-type": "error",
+
+    "eslint/constructor-super": "error",
+    "eslint/default-case": "error",
+    "eslint/eqeqeq": ["error", "always"],
+    "eslint/no-caller": "error",
+    "eslint/no-console": "error",
+    "eslint/no-debugger": "error",
+    "eslint/no-duplicate-imports": "error",
+    "eslint/no-eval": "error",
+    "eslint/no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "react-dom/test-utils",
+            "message": "Please use 'act' from @testing-library/react instead."
+          }
+        ]
+      }
+    ],
+    "eslint/no-template-curly-in-string": "error",
+    "eslint/no-unreachable": "error",
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+    "eslint/prefer-spread": "error",
+    "eslint/prefer-template": "error",
+
+    "typescript/no-useless-default-assignment": "off",
+    "jsx-a11y/no-autofocus": "off",
+    "jsx-a11y/no-noninteractive-element-interactions": "off",
+    "jsx-a11y/prefer-tag-over-role": "off"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts", "**/*.tsx"],
+      "rules": {
+        "local/no-barrel-files": "error",
+        "local/no-type-assertion": "warn",
+        "local/no-enum": "warn",
+        "typescript/array-type": ["error", { "default": "generic" }],
+        "typescript/await-thenable": "warn",
+        "typescript/ban-ts-comment": "warn",
+        "typescript/dot-notation": "error",
+        "typescript/explicit-member-accessibility": ["error", { "accessibility": "explicit" }],
+        "eslint/no-empty-function": "error",
+        "typescript/no-empty-object-type": "error",
+        "typescript/no-explicit-any": "error",
+        "typescript/no-floating-promises": "error",
+        "typescript/no-inferrable-types": "error",
+        "typescript/no-non-null-assertion": "warn",
+        "eslint/no-redeclare": "error",
+        "typescript/no-require-imports": "warn",
+        "typescript/no-restricted-types": [
+          "error",
+          {
+            "types": {
+              "React.FC": { "message": "Please use props interface or type instead." },
+              "FC": { "message": "Please use props interface or type instead." }
+            }
+          }
+        ],
+        "eslint/no-shadow": ["error", { "hoist": "all" }],
+        "typescript/no-unnecessary-condition": "error",
+        "typescript/no-unnecessary-type-assertion": "error",
+        "eslint/no-unused-expressions": "error",
+        "eslint/no-unused-vars": [
+          "error",
+          {
+            "args": "all",
+            "argsIgnorePattern": "^_",
+            "caughtErrors": "all",
+            "caughtErrorsIgnorePattern": "^_",
+            "destructuredArrayIgnorePattern": "^_",
+            "varsIgnorePattern": "^_",
+            "ignoreRestSiblings": true
+          }
+        ],
+        "typescript/strict-boolean-expressions": [
+          "warn",
+          { "allowNullableBoolean": true, "allowNullableString": true }
+        ],
+        "typescript/unified-signatures": "error"
+      }
+    },
+    {
+      "files": ["src/ui/**/*.ts", "src/ui/**/*.tsx"],
+      "rules": {
+        "react/rules-of-hooks": "error",
+        "react/exhaustive-deps": "error",
+        "eslint/no-restricted-globals": [
+          "error",
+          {
+            "name": "localStorage",
+            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+          }
+        ],
+        "eslint/no-restricted-properties": [
+          "error",
+          {
+            "object": "window",
+            "property": "localStorage",
+            "message": "Use browserStorage() in src/ui/useBoardView.ts, the one storage access point."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      "plugins": ["vitest"],
+      "rules": {
+        "eslint/no-restricted-properties": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/unbound-method": "off",
+        "vitest/require-mock-type-parameters": "off",
+        "vitest/require-to-throw-message": "off"
+      }
+    }
+  ]
+}

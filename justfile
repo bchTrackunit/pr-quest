@@ -20,9 +20,21 @@ start:
 test:
     yarn test
 
-# Lint the whole repo
+# Lint the whole repo with oxlint, including the type-aware rules
 lint:
     yarn lint
+
+# Apply oxlint's safe fixes
+lint-fix:
+    yarn lint:fix
+
+# Format the whole repo with oxfmt
+format:
+    yarn format
+
+# Fail if any file isn't formatted with oxfmt
+format-check:
+    yarn format:check
 
 # Type-check the UI, server and test projects
 typecheck:
@@ -33,4 +45,4 @@ build:
     yarn build
 
 # Run every check CI runs
-check: typecheck lint test build
+check: typecheck lint format-check test build

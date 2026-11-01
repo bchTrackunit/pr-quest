@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/* eslint-disable no-restricted-globals -- tests reset and seed the jsdom storage the board persists to */
+/* oxlint-disable no-restricted-globals -- tests reset and seed the jsdom storage the board persists to */
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
