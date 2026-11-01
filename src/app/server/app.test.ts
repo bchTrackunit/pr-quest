@@ -741,9 +741,10 @@ describe('createApp in hosted mode', () => {
     );
   });
 
-  test("keeps one copy of a renamed player's game, as hosted games belong to the account id", async () => {
+  test("keeps one copy of a renamed player's game, and records each session's login", async () => {
     let context: IdentityContext<UserServices> | undefined;
     const games: Array<string> = [];
+    const registered: Array<GitHubUser> = [];
     const inner = perUserStorage();
     await start({
       config: hostedConfig(),
@@ -756,6 +757,9 @@ describe('createApp in hosted mode', () => {
         gameState: async (user) => {
           games.push(user.login);
           return inner.gameState(user);
+        },
+        registerUser: async (user) => {
+          registered.push(user);
         },
       },
     });
@@ -770,6 +774,10 @@ describe('createApp in hosted mode', () => {
     after.stop();
 
     expect(games).toEqual(['before']);
+    expect(registered).toEqual([
+      { id: 4101, login: 'before' },
+      { id: 4101, login: 'after' },
+    ]);
   });
 
   test('serves cross-site routes, such as an OAuth callback from github.com', async () => {

@@ -211,6 +211,45 @@ describe('accounts', () => {
     ]);
   });
 
+  const loginOf = async (id: number) =>
+    (await db.query('SELECT login FROM users WHERE github_id = $1', [id])).rows;
+
+  test('follows a login renamed and renamed back (A, B, A) in one process', async () => {
+    const storage = await open();
+
+    await storage.gameState({ id: OCTOCAT.id, login: 'first' });
+    await storage.gameState({ id: OCTOCAT.id, login: 'second' });
+    await storage.gameState({ id: OCTOCAT.id, login: 'first' });
+
+    expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'first' }]);
+  });
+
+  test('registerUser records the login again even when this process saw it last', async () => {
+    const mine = await open();
+    const theirs = await open();
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+    await theirs.gameState({ id: OCTOCAT.id, login: 'second' });
+
+    await mine.registerUser?.({ id: OCTOCAT.id, login: 'first' });
+
+    expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'first' }]);
+  });
+
+  test('records a login again once its cached registration is five minutes old', async () => {
+    let now = 0;
+    const mine = await openPostgresStorage(db, { keyring, warn: () => undefined, now: () => now });
+    const theirs = await open();
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+    await theirs.gameState({ id: OCTOCAT.id, login: 'second' });
+
+    now = 4 * 60_000;
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+    expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'second' }]);
+    now = 5 * 60_000 + 1;
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+    expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'first' }]);
+  });
+
   test('records a user once per storage, however many of their stores it opens', async () => {
     const statements: Array<string> = [];
     const counting: Database = {

@@ -30,6 +30,17 @@ export interface PostgresStorageOptions {
   /** Wraps each user's data key; see `envelope.ts`. */
   keyring: MasterKeyring;
   warn: (message: string) => void;
+  /** Milliseconds since the epoch, for when a cached registration goes stale. */
+  now?: () => number;
+}
+
+/** How long a user's recorded login is trusted before another store opening records it again. */
+const REGISTRATION_TTL_MS = 5 * 60_000;
+
+interface Registration {
+  login: string;
+  at: number;
+  done: Promise<GitHubUser>;
 }
 
 /** `user_documents.kind` of each document. */
@@ -48,27 +59,35 @@ export async function openPostgresStorage(
   options: PostgresStorageOptions,
 ): Promise<AppStorage> {
   const { keyring, warn } = options;
+  const now = options.now ?? Date.now;
   await assertSchemaCurrent(db, MIGRATIONS, { onWarning: warn });
   const document = { onWarning: warn };
-  const registered = new Map<string, Promise<GitHubUser>>();
-  /** Records `user`'s current login once per id and login this process sees. */
+  /** The login last recorded per account id, so opening a user's four stores records it once. */
+  const registered = new Map<number, Registration>();
+  const record = (user: GitHubUser): Promise<GitHubUser> => {
+    const done = ensureUser(db, user).then(({ detachedFrom }) => {
+      if (detachedFrom !== undefined) {
+        warn(
+          `The login ${user.login} now belongs to GitHub id ${user.id}; the account that held it before (GitHub id ${detachedFrom}) keeps its data until it signs in under its new login`,
+        );
+      }
+      return user;
+    });
+    const registration = { login: user.login, at: now(), done };
+    registered.set(user.id, registration);
+    done.catch(() => {
+      if (registered.get(user.id) === registration) {
+        registered.delete(user.id);
+      }
+    });
+    return done;
+  };
+  /** Records `user`'s login unless this process recorded the same one in the last few minutes. */
   const register = async (given: GitHubUser): Promise<GitHubUser> => {
     const user = githubUser(given.id, given.login);
-    const key = `${user.id}:${user.login}`;
-    let pending = registered.get(key);
-    if (!pending) {
-      pending = ensureUser(db, user).then(({ detachedFrom }) => {
-        if (detachedFrom !== undefined) {
-          warn(
-            `The login ${user.login} now belongs to GitHub id ${user.id}; the account that held it before (GitHub id ${detachedFrom}) keeps its data until it signs in under its new login`,
-          );
-        }
-        return user;
-      });
-      registered.set(key, pending);
-      pending.catch(() => registered.delete(key));
-    }
-    return await pending;
+    const cached = registered.get(user.id);
+    const fresh = cached?.login === user.login && now() - cached.at <= REGISTRATION_TTL_MS;
+    return await (fresh ? cached.done : record(user));
   };
   const keyOf = async (user: GitHubUser, kind: string): Promise<DocumentKey> => ({
     user: await register(user),
@@ -86,6 +105,9 @@ export async function openPostgresStorage(
       return stateStore(await PostgresDocument.open(db, key, STATE_DOCUMENT, document));
     },
     questCache: async (user) => questCache(db, await keyOf(user, KINDS.quests), warn),
+    registerUser: async (user) => {
+      await record(githubUser(user.id, user.login));
+    },
   };
 }
 

@@ -231,6 +231,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       }),
       { onWarning: warn },
     );
+    await storage.registerUser?.(player);
     // First, so a scope the app refuses leaves the player's game unopened.
     const scoped = await servicesFor(identity.scopeFor(player));
     const storeKey = userKey(player);

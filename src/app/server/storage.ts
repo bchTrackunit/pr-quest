@@ -43,6 +43,11 @@ export interface AppStorage {
   gameState: (user: GitHubUser) => Promise<StateStore>;
   /** `user`'s last quest list and any rate-limit backoff. */
   questCache: (user: GitHubUser) => Promise<QuestCache>;
+  /**
+   * Records `user`'s current login, which may have changed since another server or session last
+   * saw it. The app calls it whenever it opens a session; storage keyed by login needs none.
+   */
+  registerUser?: (user: GitHubUser) => Promise<void>;
 }
 
 export interface FileStorageOptions {
