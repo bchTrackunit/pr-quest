@@ -1,5 +1,8 @@
-import { createServer, request, type Server } from 'node:http';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingHttpHeaders, request, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // oxlint-disable-next-line local/feature-boundaries -- exercises the router with the app's real route table
 import { createHandlers } from '../../app/server/handlers.ts';
@@ -10,7 +13,9 @@ import {
   matchRoute,
   type RouteHandlers,
   type RouterOptions,
+  trustedRequests,
 } from './router.ts';
+import type { AppConfig } from './config.ts';
 import { LOCAL_CONFIG } from './test-utils/config.ts';
 
 interface TestResponse {
@@ -49,13 +54,19 @@ async function startServer(
   return address.port;
 }
 
-function send(
+interface RawResponse {
+  status: number;
+  headers: IncomingHttpHeaders;
+  text: string;
+}
+
+function sendRaw(
   port: number,
   method: string,
   path: string,
   headers: Record<string, string> = {},
   body?: string,
-): Promise<TestResponse> {
+): Promise<RawResponse> {
   const framed =
     body === undefined
       ? headers
@@ -65,11 +76,22 @@ function send(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => (text += chunk));
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) }));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
     });
     req.on('error', reject);
     req.end(body);
   });
+}
+
+async function send(
+  port: number,
+  method: string,
+  path: string,
+  headers: Record<string, string> = {},
+  body?: string,
+): Promise<TestResponse> {
+  const { status, text } = await sendRaw(port, method, path, headers, body);
+  return { status, body: JSON.parse(text) };
 }
 
 const config = { ...LOCAL_CONFIG, cursorApiKey: 'secret' };
@@ -311,6 +333,271 @@ describe('router', () => {
     );
 
     expect(response.status).toBe(501);
+  });
+});
+
+describe('trustedRequests', () => {
+  const HOSTED: AppConfig = {
+    ...LOCAL_CONFIG,
+    mode: 'hosted',
+    host: '0.0.0.0',
+    publicOrigin: 'https://pr-quest.example',
+    allowedHosts: ['pr-quest.example', 'pr-quest.fly.dev'],
+  };
+  const PUBLIC = { Host: 'pr-quest.example', Origin: 'https://pr-quest.example' };
+
+  describe('in local mode', () => {
+    test('trusts loopback hosts and the API and UI origins, as before hosted mode existed', () => {
+      expect(trustedRequests({ ...LOCAL_CONFIG, uiPort: UI_PORT }, API_PORT)).toEqual({
+        allowedHosts: ['127.0.0.1', 'localhost'],
+        allowedOrigins: loopbackOrigins([API_PORT, UI_PORT]),
+        hostCheckExempt: [],
+      });
+    });
+
+    test('still checks the Host of /api/health', async () => {
+      const port = await startServer(
+        createHandlers(config),
+        trustedRequests({ ...LOCAL_CONFIG, uiPort: UI_PORT }, API_PORT),
+      );
+
+      const response = await send(port, 'GET', '/api/health', { Host: 'rebind.example' });
+
+      expect(response).toEqual({
+        status: 403,
+        body: { error: { code: 'forbidden', message: 'Host must be 127.0.0.1 or localhost' } },
+      });
+    });
+  });
+
+  describe('in hosted mode', () => {
+    test('trusts the allowed hosts and only the public origin', () => {
+      expect(trustedRequests(HOSTED, 8080)).toEqual({
+        allowedHosts: ['pr-quest.example', 'pr-quest.fly.dev'],
+        allowedOrigins: ['https://pr-quest.example'],
+        hostCheckExempt: ['health'],
+      });
+    });
+
+    test.each(['pr-quest.example', 'PR-Quest.example:443', 'pr-quest.fly.dev'])(
+      'accepts the Host %s',
+      async (host) => {
+        const port = await startServer({}, trustedRequests(HOSTED, 8080));
+
+        const response = await send(port, 'POST', START_REVIEW, { ...JSON_HEADERS, Host: host });
+
+        expect(response.status).toBe(501);
+      },
+    );
+
+    test.each(['127.0.0.1', 'localhost', 'evil.example'])(
+      'rejects the Host %s on API routes',
+      async (host) => {
+        const port = await startServer({}, trustedRequests(HOSTED, 8080));
+
+        const response = await send(port, 'POST', START_REVIEW, { ...JSON_HEADERS, Host: host });
+
+        expect(response).toEqual({
+          status: 403,
+          body: {
+            error: {
+              code: 'forbidden',
+              message: 'Host must be pr-quest.example or pr-quest.fly.dev',
+            },
+          },
+        });
+      },
+    );
+
+    test('accepts a POST from the public origin', async () => {
+      const port = await startServer({}, trustedRequests(HOSTED, 8080));
+
+      const response = await send(port, 'POST', START_REVIEW, { ...JSON_HEADERS, ...PUBLIC });
+
+      expect(response.status).toBe(501);
+    });
+
+    test.each(['http://pr-quest.example', 'http://127.0.0.1:8080', 'https://evil.example'])(
+      'rejects a POST from the origin %s',
+      async (origin) => {
+        const port = await startServer({}, trustedRequests(HOSTED, 8080));
+
+        const response = await send(port, 'POST', START_REVIEW, {
+          ...JSON_HEADERS,
+          ...PUBLIC,
+          Origin: origin,
+        });
+
+        expect(response.status).toBe(403);
+      },
+    );
+
+    test('answers /api/health whatever the Host, for load balancer health checks', async () => {
+      const port = await startServer(createHandlers(config), trustedRequests(HOSTED, 8080));
+
+      const response = await send(port, 'GET', '/api/health', { Host: '10.0.0.7:8080' });
+
+      expect(response.status).toBe(200);
+    });
+
+    test('still rejects a cross-site /api/health', async () => {
+      const port = await startServer(createHandlers(config), trustedRequests(HOSTED, 8080));
+
+      const response = await send(port, 'GET', '/api/health', {
+        Host: '10.0.0.7:8080',
+        'Sec-Fetch-Site': 'cross-site',
+      });
+
+      expect(response.status).toBe(403);
+    });
+  });
+});
+
+describe('static files', () => {
+  let staticDir: string;
+  const INDEX = '<!doctype html><title>PR Quest</title>';
+
+  beforeEach(async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'pr-quest-static-'));
+    staticDir = join(parent, 'dist');
+    await mkdir(join(staticDir, 'assets'), { recursive: true });
+    await writeFile(join(staticDir, 'index.html'), INDEX);
+    await writeFile(join(staticDir, 'favicon.svg'), '<svg/>');
+    await writeFile(join(staticDir, '.env'), 'SECRET=1');
+    await writeFile(join(staticDir, 'assets', 'index-B4x9kQ.js'), 'console.log(1);');
+    await writeFile(join(parent, 'secret.txt'), 'outside the static directory');
+  });
+
+  afterEach(async () => {
+    await rm(join(staticDir, '..'), { recursive: true, force: true });
+  });
+
+  const serve = (options: RouterOptions = {}) =>
+    startServer({ health: createHandlers(config).health }, { ...options, staticDir });
+
+  test('serves index.html at / without letting the browser reuse it unchecked', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/');
+
+    expect(response).toMatchObject({
+      status: 200,
+      text: INDEX,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'DENY',
+      },
+    });
+  });
+
+  test.each(['/quests', '/runs/run-1', '/index.html'])('serves index.html for %s', async (path) => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', path);
+
+    expect(response).toMatchObject({ status: 200, text: INDEX });
+  });
+
+  test('caches hashed assets for good', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/assets/index-B4x9kQ.js');
+
+    expect(response).toMatchObject({
+      status: 200,
+      text: 'console.log(1);',
+      headers: {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'public, max-age=31536000, immutable',
+      },
+    });
+  });
+
+  test('revalidates files outside assets/, whose names carry no hash', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/favicon.svg');
+
+    expect(response.headers).toMatchObject({
+      'content-type': 'image/svg+xml',
+      'cache-control': 'no-cache',
+    });
+  });
+
+  test.each(['/assets/index-gone.js', '/missing.png'])(
+    'answers 404 for the missing file %s instead of index.html',
+    async (path) => {
+      const port = await serve();
+
+      const response = await sendRaw(port, 'GET', path);
+
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain(INDEX);
+      expect(response.headers['cache-control']).toBe('no-store');
+    },
+  );
+
+  test.each(['/..%2fsecret.txt', '/assets/..%2f..%2fsecret.txt', '/.env', '/%2e%2e/secret.txt'])(
+    'never serves %s',
+    async (path) => {
+      const port = await serve();
+
+      const response = await sendRaw(port, 'GET', path);
+
+      expect(response.text).not.toContain('outside the static directory');
+      expect(response.text).not.toContain('SECRET');
+    },
+  );
+
+  test('answers HEAD with the headers only', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'HEAD', '/');
+
+    expect(response).toMatchObject({
+      status: 200,
+      text: '',
+      headers: { 'content-length': String(INDEX.length) },
+    });
+  });
+
+  test('opens from a link on another site, which browsers send as cross-site', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/', { 'Sec-Fetch-Site': 'cross-site' });
+
+    expect(response.status).toBe(200);
+  });
+
+  test('still checks the Host, so a rebound name gets nothing', async () => {
+    const port = await serve();
+
+    const response = await sendRaw(port, 'GET', '/', { Host: 'rebind.example' });
+
+    expect(response.status).toBe(403);
+  });
+
+  test('leaves /api to the routes', async () => {
+    const port = await serve();
+
+    expect((await send(port, 'GET', '/api/nope')).status).toBe(404);
+    expect((await send(port, 'GET', '/api/health')).status).toBe(200);
+  });
+
+  test('serves no files to other methods', async () => {
+    const port = await serve();
+
+    const response = await send(port, 'POST', '/', JSON_HEADERS, '{}');
+
+    expect(response.status).toBe(404);
+  });
+
+  test('without a static directory, / is not found as before', async () => {
+    const port = await startServer({});
+
+    expect((await send(port, 'GET', '/')).status).toBe(404);
   });
 });
 

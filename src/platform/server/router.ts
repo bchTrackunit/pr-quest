@@ -9,9 +9,10 @@ import {
   type RouteName,
   type RouteParams,
 } from '../../shared/api.ts';
+import { type AppConfig, LOOPBACK_HOSTNAMES } from './config.ts';
+import { createStaticHandler, type StaticHandler } from './staticFiles.ts';
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost']);
 
 /** Extra fields of an error body beyond `code` and `message`. */
 export type ApiErrorDetails = Omit<ApiErrorResponse['error'], 'code' | 'message'>;
@@ -61,12 +62,45 @@ export type RequestListener = (req: IncomingMessage, res: ServerResponse) => voi
 export interface RouterOptions {
   /** Exact origins (`http://127.0.0.1:4318`) a browser may call from; any other Origin gets 403. */
   allowedOrigins?: ReadonlyArray<string>;
+  /** Lower-cased host names the Host header may name, whatever its port. Defaults to loopback. */
+  allowedHosts?: ReadonlyArray<string>;
+  /** Routes answered whatever the Host header says, such as a load balancer's health check. */
+  hostCheckExempt?: ReadonlyArray<RouteName>;
+  /** Serves the built UI from this directory to GET and HEAD requests outside `/api`. */
+  staticDir?: string;
   onUnexpectedError?: (error: unknown) => void;
 }
+
+export type TrustOptions = Required<
+  Pick<RouterOptions, 'allowedOrigins' | 'allowedHosts' | 'hostCheckExempt'>
+>;
 
 /** The `127.0.0.1` and `localhost` origins of each port, e.g. the API and the UI. */
 export function loopbackOrigins(ports: ReadonlyArray<number>): Array<string> {
   return ports.flatMap((port) => [`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+}
+
+/**
+ * Who the router trusts for `config` once the server listens on `port`. Local mode trusts only
+ * loopback names and the API and UI origins. Hosted mode trusts its public origin and allowed
+ * hosts, and answers `/api/health` on any Host so the platform can check it by IP address.
+ */
+export function trustedRequests(
+  config: Pick<AppConfig, 'mode' | 'uiPort' | 'publicOrigin' | 'allowedHosts'>,
+  port: number,
+): TrustOptions {
+  if (config.mode === 'hosted') {
+    return {
+      allowedHosts: [...config.allowedHosts],
+      allowedOrigins: config.publicOrigin === undefined ? [] : [config.publicOrigin],
+      hostCheckExempt: ['health'],
+    };
+  }
+  return {
+    allowedHosts: [...config.allowedHosts],
+    allowedOrigins: loopbackOrigins([port, config.uiPort]),
+    hostCheckExempt: [],
+  };
 }
 
 interface CompiledRoute {
@@ -99,9 +133,15 @@ export function createRouter(
   handlers: RouteHandlers,
   options: RouterOptions = {},
 ): RequestListener {
-  const allowedOrigins = new Set(options.allowedOrigins);
+  const trust: Trust = {
+    allowedOrigins: new Set(options.allowedOrigins),
+    allowedHosts: [...(options.allowedHosts ?? LOOPBACK_HOSTNAMES)],
+    hostCheckExempt: COMPILED_ROUTES.filter(({ name }) => options.hostCheckExempt?.includes(name)),
+  };
+  const serveStatic =
+    options.staticDir === undefined ? undefined : createStaticHandler(options.staticDir);
   return (req, res) => {
-    handle(handlers, allowedOrigins, req, res).catch((error: unknown) => {
+    handle(handlers, trust, serveStatic, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
         sendError(res, error.status, {
           ...error.details,
@@ -116,16 +156,36 @@ export function createRouter(
   };
 }
 
+interface Trust {
+  allowedOrigins: ReadonlySet<string>;
+  allowedHosts: ReadonlyArray<string>;
+  hostCheckExempt: ReadonlyArray<CompiledRoute>;
+}
+
 async function handle(
   handlers: RouteHandlers,
-  allowedOrigins: ReadonlySet<string>,
+  trust: Trust,
+  serveStatic: StaticHandler | undefined,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  assertTrustedRequest(req, allowedOrigins);
-
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-  const match = matchRoute(req.method ?? 'GET', url.pathname);
+  const method = req.method ?? 'GET';
+  if (serveStatic && !isApiPath(url.pathname) && (method === 'GET' || method === 'HEAD')) {
+    // The UI's files are public and change nothing, so a link from another site may open them.
+    assertTrustedHost(req, trust.allowedHosts);
+    if (!(await serveStatic(req, res, url.pathname))) {
+      throw new ApiError(404, 'notFound', `No file at ${url.pathname}`);
+    }
+    return;
+  }
+
+  const skipHostCheck = trust.hostCheckExempt.some(
+    (route) => route.method === method && route.pattern.test(url.pathname),
+  );
+  assertTrustedRequest(req, trust, skipHostCheck);
+
+  const match = matchRoute(method, url.pathname);
   if (!match) {
     throw new ApiError(404, 'notFound', `No route for ${req.method} ${url.pathname}`);
   }
@@ -196,12 +256,12 @@ function decodeParam(value: string): string {
  * every method, because an `<img>` or `<script>` GET carries no Origin yet can still open a
  * session or spend the player's API quota.
  */
-function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<string>): void {
-  if (!isLoopbackHost(req.headers.host)) {
-    throw new ApiError(403, 'forbidden', 'Host must be 127.0.0.1 or localhost');
+function assertTrustedRequest(req: IncomingMessage, trust: Trust, skipHostCheck: boolean): void {
+  if (!skipHostCheck) {
+    assertTrustedHost(req, trust.allowedHosts);
   }
   const origin = req.headers.origin;
-  if (origin !== undefined && !allowedOrigins.has(origin)) {
+  if (origin !== undefined && !trust.allowedOrigins.has(origin)) {
     throw new ApiError(403, 'forbidden', 'Cross-origin requests are not allowed');
   }
   const site = req.headers['sec-fetch-site'];
@@ -220,15 +280,25 @@ function isJsonContentType(header: string | undefined): boolean {
   return header?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
 }
 
-function isLoopbackHost(host: string | undefined): boolean {
+function assertTrustedHost(req: IncomingMessage, allowedHosts: ReadonlyArray<string>): void {
+  if (!isAllowedHost(req.headers.host, allowedHosts)) {
+    throw new ApiError(403, 'forbidden', `Host must be ${allowedHosts.join(' or ')}`);
+  }
+}
+
+function isAllowedHost(host: string | undefined, allowedHosts: ReadonlyArray<string>): boolean {
   if (!host) {
     return false;
   }
   try {
-    return LOOPBACK_HOSTNAMES.has(new URL(`http://${host}`).hostname);
+    return allowedHosts.includes(new URL(`http://${host}`).hostname);
   } catch {
     return false;
   }
+}
+
+function isApiPath(pathname: string): boolean {
+  return pathname === '/api' || pathname.startsWith('/api/');
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
