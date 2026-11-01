@@ -101,6 +101,16 @@ describe('transportWarning', () => {
     'postgres://u:p@localhost/pr_quest',
     'postgres://u:p@127.0.0.1:5432/pr_quest',
     'postgres://u:p@[::1]:5432/pr_quest',
+    'postgres://u:p@db:5432/pr_quest',
+    'postgres://u:p@postgres/pr_quest',
+    'postgres://u:p@10.0.3.7:5432/pr_quest',
+    'postgres://u:p@172.16.0.2/pr_quest',
+    'postgres://u:p@172.31.255.254/pr_quest',
+    'postgres://u:p@192.168.1.20/pr_quest',
+    'postgres:///pr_quest',
+    'postgres:///pr_quest?host=/var/run/postgresql',
+    'postgres://u:p@%2Fvar%2Frun%2Fpostgresql/pr_quest',
+    'socket:/var/run/postgresql?db=pr_quest',
   ])('trusts %s', (url) => {
     expect(transportWarning(url)).toBeUndefined();
   });
@@ -108,10 +118,13 @@ describe('transportWarning', () => {
   test.each([
     'postgres://u:s3cret@db.example.com/pr_quest',
     'postgres://u:s3cret@db.example.com/pr_quest?sslmode=disable',
+    'postgres://u:s3cret@172.32.0.1/pr_quest',
+    'postgres://u:s3cret@11.0.0.1/pr_quest',
+    'postgres://u:s3cret@192.169.1.1/pr_quest',
   ])('warns about %s, naming the host but not the password', (url) => {
     const warning = transportWarning(url);
 
-    expect(warning).toMatch(/db\.example\.com.*sslmode=require/);
+    expect(warning).toMatch(/reaches \S+ without TLS.*sslmode=require/);
     expect(warning).not.toContain('s3cret');
   });
 });

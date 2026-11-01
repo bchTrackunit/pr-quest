@@ -155,8 +155,12 @@ async function rollback(
   }
 }
 
-/** Host names that stay on a private network or this machine, where TLS adds little. */
-const PRIVATE_HOST = /(\.internal|\.flycast|^localhost|^127\.\d+\.\d+\.\d+|^\[::1\])$/;
+/**
+ * Host names that stay on a private network or this machine, where TLS adds little: loopback,
+ * RFC 1918 addresses, Fly's private names and single-label names such as a Compose service's.
+ */
+const PRIVATE_HOST =
+  /(\.internal|\.flycast|^localhost|^127\.\d+\.\d+\.\d+|^\[::1\]|^10\.\d+\.\d+\.\d+|^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|^192\.168\.\d+\.\d+|^[a-z\d-]+)$/i;
 
 /**
  * A warning when `url` reaches a public host without TLS, which would send every user's sealed
@@ -172,10 +176,29 @@ export function transportWarning(url: string): string | undefined {
   const sslmode = parsed.searchParams.get('sslmode');
   const ssl = parsed.searchParams.get('ssl');
   const encrypted = (sslmode !== null && sslmode !== 'disable') || ssl === 'true' || ssl === '1';
-  if (encrypted || PRIVATE_HOST.test(parsed.hostname)) {
+  if (encrypted || isSocketOrDefaultHost(parsed) || PRIVATE_HOST.test(parsed.hostname)) {
     return undefined;
   }
   return `DATABASE_URL reaches ${parsed.hostname} without TLS. Add ?sslmode=require (or verify-full) unless that host is on a private network.`;
+}
+
+/**
+ * `socket:/dir`, `?host=/dir`, a host that is a percent-encoded directory, or no host at all
+ * (`pg` then uses `PGHOST` or this machine).
+ */
+function isSocketOrDefaultHost(url: URL): boolean {
+  let host = url.hostname;
+  try {
+    host = decodeURIComponent(host);
+  } catch {
+    // Not percent-encoded after all; keep it as it is.
+  }
+  return (
+    url.protocol === 'socket:' ||
+    host === '' ||
+    url.searchParams.get('host')?.startsWith('/') === true ||
+    host.startsWith('/')
+  );
 }
 
 /** A `bytea` column, which `pg` reads as a `Buffer` and PGlite as a `Uint8Array`. */
