@@ -24,7 +24,7 @@
     "format:check": "oxfmt --check",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "build": "yarn typecheck && vite build && yarn build:server",
-    "build:server": "node -e \"fs.rmSync('dist-server', { recursive: true, force: true })\" && esbuild src/app/server/main.ts src/app/server/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist-server --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning"
+    "build:server": "node -e \"fs.rmSync('dist-server', { recursive: true, force: true })\" && esbuild src/app/server/main.ts src/app/server/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist-server --external:@cursor/sdk --external:@anthropic-ai/sdk --external:pg --sourcemap --log-level=warning"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.2.0",

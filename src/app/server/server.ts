@@ -3,13 +3,17 @@ import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 
-import { type AppOptions, createApp, type UserServices } from './app.ts';
+import { type App, type AppOptions, createApp, type UserServices } from './app.ts';
 import { readGhToken } from '../../features/auth/server/index.ts';
 import {
   type AppConfig,
   assertSafeConfig,
+  type DatabaseConfig,
   LOOPBACK_HOSTNAMES,
 } from '../../platform/server/config.ts';
+import { MasterKeyring } from '../../platform/server/envelope.ts';
+import { connectPostgres, type Database } from '../../platform/server/postgres/database.ts';
+import { openPostgresStorage } from './postgresStorage.ts';
 import {
   createRouter,
   type RequestListener,
@@ -47,7 +51,10 @@ export interface ServerOverrides extends Pick<
   AppOptions,
   'fetch' | 'createMessage' | 'listCursorModels'
 > {
-  /** Replaces the JSON files in the state directory, e.g. with a database. */
+  /**
+   * Replaces the JSON files in the state directory. Hosted mode otherwise uses the Postgres
+   * database in `config.database`.
+   */
   storage?: AppStorage;
   /**
    * Keeps the JSON files but saves the machine's secrets here instead of in `secrets.json`, e.g.
@@ -100,23 +107,44 @@ export async function startServer(
       `PR_QUEST_PUBLIC_ORIGIN ${config.publicOrigin} is plain HTTP, so session cookies and API keys cross the network unencrypted. Serve it over HTTPS.`,
     );
   }
+  if (config.mode === 'hosted' && !overrides.identity) {
+    throw new Error(
+      "Hosted mode needs an identity resolver for many users. This build only has local mode's, which would let anyone act as the server's GitHub account.",
+    );
+  }
+  if (config.mode === 'hosted' && !overrides.storage && !config.database) {
+    throw new Error(
+      'Hosted mode needs storage for many users: set DATABASE_URL and PR_QUEST_MASTER_KEY.',
+    );
+  }
   const staticDir = usableStaticDir(overrides.staticDir, warn);
+  const database =
+    config.mode === 'hosted' && !overrides.storage && config.database
+      ? await openDatabase(config.database, warn)
+      : undefined;
 
-  const app = await createApp({
-    config,
-    storage:
-      overrides.storage ??
-      (overrides.secrets
-        ? createFileStorage(config.stateDir, { info, warn, secrets: overrides.secrets })
-        : undefined),
-    identity: overrides.identity,
-    ghToken: overrides.ghToken ?? readGhToken,
-    fetch: overrides.fetch,
-    createMessage: overrides.createMessage,
-    listCursorModels: overrides.listCursorModels,
-    info,
-    warn,
-  });
+  let app: App;
+  try {
+    app = await createApp({
+      config,
+      storage:
+        overrides.storage ??
+        database?.storage ??
+        (overrides.secrets
+          ? createFileStorage(config.stateDir, { info, warn, secrets: overrides.secrets })
+          : undefined),
+      identity: overrides.identity,
+      ghToken: overrides.ghToken ?? readGhToken,
+      fetch: overrides.fetch,
+      createMessage: overrides.createMessage,
+      listCursorModels: overrides.listCursorModels,
+      info,
+      warn,
+    });
+  } catch (error) {
+    await database?.db.close();
+    throw error;
+  }
 
   // The router needs the port, which port 0 only reveals once the server listens.
   const routing: { router?: RequestListener } = {};
@@ -132,6 +160,7 @@ export async function startServer(
     port = await listen(server, config.port, config.host);
   } catch (error) {
     app.close();
+    await database?.db.close();
     throw error;
   }
   routing.router = createRouter(app.handlers, {
@@ -145,19 +174,39 @@ export async function startServer(
 
   const url = `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${port}`;
   info(`${staticDir ? 'PR Quest' : 'API'} listening on ${url}`);
-  info(`state in ${config.stateDir}`);
+  info(database ? 'state in Postgres' : `state in ${config.stateDir}`);
   void app.warmUp();
 
   return {
     url,
     port,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: async () => {
+      await new Promise<void>((resolve) => {
         app.close();
         server.close(() => resolve());
         server.closeAllConnections();
-      }),
+      });
+      await database?.db.close();
+    },
   };
+}
+
+/** Connects to hosted mode's database; rejects, closing the pool, when it is unusable. */
+async function openDatabase(
+  config: DatabaseConfig,
+  warn: (message: string) => void,
+): Promise<{ db: Database; storage: AppStorage }> {
+  const keyring = MasterKeyring.fromConfig({
+    current: config.masterKey,
+    previous: config.previousMasterKeys,
+  });
+  const db = connectPostgres(config.url, { onError: warn });
+  try {
+    return { db, storage: await openPostgresStorage(db, { keyring, warn }) };
+  } catch (error) {
+    await db.close();
+    throw error;
+  }
 }
 
 /** HTTP to anything but this machine, where nothing protects what travels over it. */
