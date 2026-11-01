@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   AchievementDef,
@@ -22,7 +22,7 @@ import {
   postRun,
   startReview,
 } from './apiClient.ts';
-import { connectEventStream } from './eventStream.ts';
+import { connectEventStream, type EventStream } from './eventStream.ts';
 import {
   activeRateLimit,
   applyQuestList,
@@ -32,9 +32,12 @@ import {
   findQuest,
   markAchievementUnlocked,
   questLabel,
+  replaceRuns,
+  resetForAccountChange,
   upsertRun,
   upsertRuns,
   type GameState,
+  type QuestActionError,
   type Toast,
 } from './gameState.ts';
 import {
@@ -42,12 +45,18 @@ import {
   requestNotificationAccess,
   showBrowserNotification,
 } from './notifications.ts';
+import { settingsTargetFor, type SettingsTarget } from './settingsModel.ts';
 import { playLootSound, unlockAudio } from './sound.ts';
 import { createStore, type Store } from './store.ts';
 
 export interface GameActions {
   /** The only path that forces a GitHub refetch; does nothing while GitHub rate limits us. */
   refreshQuests: () => void;
+  /**
+   * After the GitHub account changed: forgets the previous player's game, reconnects the event
+   * stream and reloads quests, runs and player from the server's cache.
+   */
+  resync: () => void;
   sendReviewAgent: (questId: string) => void;
   openResult: (runId: string) => void;
   closeResult: () => void;
@@ -60,6 +69,8 @@ export interface GameActions {
   confirmApprove: (questId: string, headSha: string, comment: string) => Promise<void>;
   postFindings: (runId: string, event: PostReviewEvent) => Promise<void>;
   discardFindings: (runId: string) => Promise<void>;
+  openSettings: (target?: SettingsTarget) => void;
+  closeSettings: () => void;
   dismissToast: (toastId: string) => void;
   dismissXpPopup: (popupId: string) => void;
   toggleNotifications: () => void;
@@ -92,11 +103,15 @@ function withoutKey<TValue>(record: Record<string, TValue>, key: string): Record
 /** Owns the game store, the initial loads, the event stream and every user action. */
 export function useGameController(): GameController {
   const [store] = useState(() => createStore(createInitialGameState(getNotificationAccess())));
+  const streamRef = useRef<EventStream | undefined>(undefined);
 
   const controller = useMemo<GameController & InternalHandlers>(() => {
     const announcedAchievements = new Set<string>();
     const announcedRuns = new Set<string>();
     const shownXpGains = new Set<string>();
+    /** Bumped on every account change; responses started for an older account are dropped. */
+    const account = { generation: 0 };
+    const isCurrent = (started: number): boolean => started === account.generation;
 
     const pushToast = (toast: Omit<Toast, 'id'>): void => {
       store.setState((state) => ({
@@ -210,7 +225,7 @@ export function useGameController(): GameController {
     const setQuestAction = (
       questId: string,
       action: 'review' | undefined,
-      error?: string,
+      error?: QuestActionError,
     ): void => {
       store.setState((state) => ({
         ...state,
@@ -224,13 +239,16 @@ export function useGameController(): GameController {
     };
 
     const loadQuests = (signal?: AbortSignal, options: { refresh?: boolean } = {}): void => {
+      const started = account.generation;
       store.setState((state) => ({ ...state, questsLoad: 'loading', questsError: undefined }));
       fetchQuests(signal, options)
         .then((response) => {
-          store.setState((state) => applyQuestList(state, response));
+          if (isCurrent(started)) {
+            store.setState((state) => applyQuestList(state, response));
+          }
         })
         .catch((reason: unknown) => {
-          if (!signal?.aborted) {
+          if (!signal?.aborted && isCurrent(started)) {
             store.setState((state) => ({
               ...state,
               questsLoad: 'error',
@@ -240,25 +258,54 @@ export function useGameController(): GameController {
         });
     };
 
-    const loadSideData = (signal?: AbortSignal): void => {
+    /** `replaceRuns` drops runs the server no longer lists, e.g. another player's. */
+    const loadSideData = (signal?: AbortSignal, options: { replaceRuns?: boolean } = {}): void => {
+      const started = account.generation;
       fetchRuns(signal)
-        .then((response) => store.setState((state) => upsertRuns(state, response.runs)))
-        .catch(() => undefined);
-      fetchPlayer(signal)
-        .then((response) =>
+        .then((response) => {
+          if (isCurrent(started)) {
+            store.setState((state) => ({
+              ...(options.replaceRuns ? replaceRuns : upsertRuns)(state, response.runs),
+              runsError: undefined,
+            }));
+          }
+        })
+        .catch((reason: unknown) => {
+          if (signal?.aborted || !isCurrent(started)) {
+            return;
+          }
+          // An older server has no runs route, and the quest board already says to sign in.
+          const isExplained =
+            reason instanceof ApiRequestError &&
+            (reason.code === 'notImplemented' ||
+              reason.code === 'notSignedIn' ||
+              reason.status === 404 ||
+              reason.status === 501);
           store.setState((state) => ({
             ...state,
-            player: response.player,
-            playerError: undefined,
-          })),
-        )
+            runsError: isExplained ? undefined : describeError(reason),
+          }));
+        });
+      fetchPlayer(signal)
+        .then((response) => {
+          if (isCurrent(started)) {
+            store.setState((state) => ({
+              ...state,
+              player: response.player,
+              playerError: undefined,
+            }));
+          }
+        })
         .catch((reason: unknown) => {
-          if (!signal?.aborted) {
+          if (!signal?.aborted && isCurrent(started)) {
             store.setState((state) => ({ ...state, playerError: describeError(reason) }));
           }
         });
       fetchAchievements(signal)
         .then((response) => {
+          if (!isCurrent(started)) {
+            return;
+          }
           for (const achievement of response.achievements) {
             if (achievement.unlockedAt) {
               announcedAchievements.add(achievement.id);
@@ -271,7 +318,7 @@ export function useGameController(): GameController {
           }));
         })
         .catch((reason: unknown) => {
-          if (!signal?.aborted) {
+          if (!signal?.aborted && isCurrent(started)) {
             store.setState((state) => ({ ...state, achievementsError: describeError(reason) }));
           }
         });
@@ -284,15 +331,36 @@ export function useGameController(): GameController {
         }
         loadQuests(undefined, { refresh: true });
       },
+      resync: () => {
+        account.generation += 1;
+        announcedAchievements.clear();
+        announcedRuns.clear();
+        shownXpGains.clear();
+        store.setState(resetForAccountChange);
+        // The open stream was authorised for the previous account, or failed while signed out.
+        streamRef.current?.reconnectNow();
+        loadQuests();
+        loadSideData(undefined, { replaceRuns: true });
+      },
       sendReviewAgent: (questId) => {
+        const started = account.generation;
         unlockAudio();
         setQuestAction(questId, 'review');
         startReview(questId)
           .then((response) => {
-            store.setState((state) => upsertRun(state, response.run));
-            setQuestAction(questId, undefined);
+            if (isCurrent(started)) {
+              store.setState((state) => upsertRun(state, response.run));
+              setQuestAction(questId, undefined);
+            }
           })
-          .catch((reason: unknown) => setQuestAction(questId, undefined, describeError(reason)));
+          .catch((reason: unknown) => {
+            if (isCurrent(started)) {
+              setQuestAction(questId, undefined, {
+                message: describeError(reason),
+                settings: settingsTargetFor(reason),
+              });
+            }
+          });
       },
       openResult,
       closeResult: () => store.setState((state) => ({ ...state, openRunId: undefined })),
@@ -300,16 +368,24 @@ export function useGameController(): GameController {
         store.setState((state) => ({ ...state, approveQuestId: questId })),
       cancelApprove: () => store.setState((state) => ({ ...state, approveQuestId: undefined })),
       confirmApprove: async (questId, headSha, comment) => {
+        const started = account.generation;
         const quest = findQuest(store.getState(), questId);
         const response = await approveQuest(questId, headSha, comment.trim() || undefined).catch(
           (reason: unknown) => {
-            if (reason instanceof ApiRequestError && reason.code === 'headChanged') {
+            if (
+              reason instanceof ApiRequestError &&
+              reason.code === 'headChanged' &&
+              isCurrent(started)
+            ) {
               // The server already recorded the new head; this reads it from its cache.
               loadQuests();
             }
             throw reason;
           },
         );
+        if (!isCurrent(started)) {
+          return;
+        }
         store.setState((state) => {
           const openRun = state.openRunId ? state.runs[state.openRunId] : undefined;
           return {
@@ -328,7 +404,11 @@ export function useGameController(): GameController {
         applyOutcome(response.outcome);
       },
       postFindings: async (runId, event) => {
+        const started = account.generation;
         const response = await postRun(runId, { event });
+        if (!isCurrent(started)) {
+          return;
+        }
         store.setState((state) => ({ ...upsertRun(state, response.run), openRunId: undefined }));
         pushToast({
           kind: 'success',
@@ -340,9 +420,15 @@ export function useGameController(): GameController {
         applyOutcome(response.outcome);
       },
       discardFindings: async (runId) => {
+        const started = account.generation;
         const response = await discardRun(runId);
-        store.setState((state) => ({ ...upsertRun(state, response.run), openRunId: undefined }));
+        if (isCurrent(started)) {
+          store.setState((state) => ({ ...upsertRun(state, response.run), openRunId: undefined }));
+        }
       },
+      openSettings: (target = { section: 'github' }) =>
+        store.setState((state) => ({ ...state, settings: target })),
+      closeSettings: () => store.setState((state) => ({ ...state, settings: undefined })),
       dismissToast: (toastId) =>
         store.setState((state) => ({
           ...state,
@@ -388,24 +474,27 @@ export function useGameController(): GameController {
     return () => abort.abort();
   }, [controller]);
 
-  useEffect(
-    () =>
-      connectEventStream({
-        url: eventsUrl,
-        onEvent: controller.handleServerEvent,
-        onStatusChange: (connection, reconnected) => {
-          store.setState((state) =>
-            state.connection === connection ? state : { ...state, connection },
-          );
-          if (reconnected) {
-            // Never `refresh: true`: a flapping connection must not turn into GitHub calls.
-            controller.loadQuests();
-            controller.loadSideData();
-          }
-        },
-      }),
-    [store, controller],
-  );
+  useEffect(() => {
+    const stream = connectEventStream({
+      url: eventsUrl,
+      onEvent: controller.handleServerEvent,
+      onStatusChange: (connection, reconnected) => {
+        store.setState((state) =>
+          state.connection === connection ? state : { ...state, connection },
+        );
+        if (reconnected) {
+          // Never `refresh: true`: a flapping connection must not turn into GitHub calls.
+          controller.loadQuests();
+          controller.loadSideData();
+        }
+      },
+    });
+    streamRef.current = stream;
+    return () => {
+      streamRef.current = undefined;
+      stream.close();
+    };
+  }, [store, controller]);
 
   return controller;
 }

@@ -102,11 +102,21 @@ export interface ReviewFinding {
   body: string;
 }
 
+/** Why a file was left out of the diff Claude reviewed. */
+export type OmittedFileReason = 'lockfile' | 'generated' | 'binary' | 'tooLarge';
+
+export interface OmittedFile {
+  file: string;
+  reason: OmittedFileReason;
+}
+
 /** The JSON the review agent must return. The verdict is advisory; the agent never approves. */
 export interface ReviewResult {
   summary: string;
   verdict: ReviewVerdict;
   findings: Array<ReviewFinding>;
+  /** Files the reviewer never saw; set by the server for Claude reviews, never by the model. */
+  omitted?: Array<OmittedFile>;
 }
 
 export interface ReviewRunError {
@@ -131,6 +141,10 @@ export interface ReviewRun {
   id: string;
   questId: string;
   quest: ReviewRunQuest;
+  /** Who reviewed. Runs from before providers existed were all Cursor's. */
+  provider: ReviewProvider;
+  /** The model id, when one was chosen; Cursor runs without one used Cursor's default. */
+  model?: string;
   /** Cursor cloud agent id (`bc-...`); absent until the agent is created. */
   agentId?: string;
   /** Cursor run id; absent until the first send returns. */
@@ -233,6 +247,63 @@ export interface GameOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub account
+// ---------------------------------------------------------------------------
+
+/** `oauth`: the player signed in through PR Quest. `gh`: the token of a logged-in GitHub CLI. */
+export type GitHubTokenSource = 'oauth' | 'gh';
+
+/** The GitHub user PR Quest acts as. */
+export interface GitHubAccount {
+  login: string;
+  name?: string;
+  avatarUrl?: string;
+  tokenSource: GitHubTokenSource;
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/** Who reviews a quest: a Cursor cloud agent, or Claude reading the diff through Anthropic's API. */
+export type ReviewProvider = 'cursor' | 'claude';
+
+/** The API keys the settings popup manages. `anthropic` is the Claude provider's key. */
+export type ApiKeyName = 'cursor' | 'anthropic' | 'linear';
+
+export const API_KEY_NAMES: ReadonlyArray<ApiKeyName> = ['cursor', 'anthropic', 'linear'];
+
+/** `settings`: saved from the settings popup. `env`: from the environment or `.env.local`, read-only. */
+export type ApiKeySource = 'settings' | 'env';
+
+/** What the UI may know about a key. The value itself never leaves the server. */
+export interface ApiKeyStatus {
+  set: boolean;
+  source?: ApiKeySource;
+  /** The key's last four characters, only for keys long enough that this reveals little. */
+  last4?: string;
+}
+
+/**
+ * "Sign in with GitHub" through GitHub's device flow. `pending`: waiting for the player to enter
+ * `userCode` at `verificationUri`. The server polls GitHub; the UI only reads this status.
+ */
+export type DeviceFlowState = 'idle' | 'pending' | 'complete' | 'expired' | 'denied' | 'error';
+
+export interface DeviceFlowStatus {
+  state: DeviceFlowState;
+  userCode?: string;
+  verificationUri?: string;
+  expiresAt?: string;
+  error?: string;
+}
+
+export interface ModelOption {
+  id: string;
+  displayName: string;
+}
+
+// ---------------------------------------------------------------------------
 // Server-sent events (GET /api/events)
 // ---------------------------------------------------------------------------
 
@@ -258,7 +329,52 @@ export interface HealthResponse {
   config: {
     linearApiKey: boolean;
     cursorApiKey: boolean;
+    anthropicApiKey: boolean;
   };
+}
+
+export interface AuthStatusResponse {
+  /** Whether "Sign in with GitHub" can work, i.e. an OAuth App client ID is configured. */
+  clientIdConfigured: boolean;
+  /** The GitHub user PR Quest acts as; absent when there is no usable token. */
+  account?: GitHubAccount;
+  /** Why the token didn't resolve to a user, e.g. GitHub rejected it. */
+  error?: string;
+  device: DeviceFlowStatus;
+  /**
+   * Only on the sign-out reply: the OAuth login that was signed out, when PR Quest now acts as a
+   * different account through the gh CLI's token (`account`).
+   */
+  fellBackFrom?: string;
+}
+
+export interface DeviceFlowResponse {
+  device: DeviceFlowStatus;
+}
+
+export interface SettingsResponse {
+  reviewProvider: ReviewProvider;
+  /** Model id per provider; absent means the provider's default. */
+  models: Partial<Record<ReviewProvider, string>>;
+  keys: Record<ApiKeyName, ApiKeyStatus>;
+}
+
+export interface UpdateSettingsRequest {
+  reviewProvider?: ReviewProvider;
+  /** `null` goes back to the provider's default model. */
+  models?: Partial<Record<ReviewProvider, string | null>>;
+}
+
+export interface SetApiKeyRequest {
+  value: string;
+}
+
+export interface ListModelsResponse {
+  provider: ReviewProvider;
+  models: Array<ModelOption>;
+  /** `fallback`: the provider couldn't be asked (no key, offline), so this is a built-in list. */
+  source: 'api' | 'fallback';
+  error?: string;
 }
 
 /**
@@ -285,7 +401,7 @@ export interface ListQuestsResponse {
 }
 
 export interface StartReviewRequest {
-  /** Cursor model id; the server picks its default when omitted. */
+  /** Model id for the selected provider; the model chosen in the settings when omitted. */
   model?: string;
 }
 
@@ -346,6 +462,8 @@ export type ApiErrorCode =
   /** The PR's head commit is no longer the `headSha` the approval named; the quest was updated. */
   | 'headChanged'
   | 'missingConfig'
+  /** HTTP 401: there is no GitHub token; sign in with GitHub (or `gh auth login`) first. */
+  | 'notSignedIn'
   | 'upstreamFailed'
   /** GitHub is rate limited and there are no cached quests to serve yet. */
   | 'rateLimited'
@@ -357,6 +475,8 @@ export interface ApiErrorResponse {
   error: {
     code: ApiErrorCode;
     message: string;
+    /** With `missingConfig`: the review provider that needs a key, so the UI can open Settings. */
+    provider?: ReviewProvider;
   };
 }
 
@@ -364,7 +484,7 @@ export interface ApiErrorResponse {
 // Route map
 // ---------------------------------------------------------------------------
 
-export type HttpMethod = 'GET' | 'POST';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 export const API_ROUTES = {
   health: { method: 'GET', path: '/api/health' },
@@ -381,6 +501,19 @@ export const API_ROUTES = {
   discardRun: { method: 'POST', path: '/api/runs/:id/discard' },
   getPlayer: { method: 'GET', path: '/api/player' },
   listAchievements: { method: 'GET', path: '/api/achievements' },
+  authStatus: { method: 'GET', path: '/api/auth/status' },
+  /** Starts (or restarts) "Sign in with GitHub". */
+  startDeviceFlow: { method: 'POST', path: '/api/auth/device' },
+  getDeviceFlow: { method: 'GET', path: '/api/auth/device' },
+  cancelDeviceFlow: { method: 'DELETE', path: '/api/auth/device' },
+  /** Forgets the OAuth token. A logged-in gh CLI's token still works afterwards. */
+  signOut: { method: 'POST', path: '/api/auth/sign-out' },
+  getSettings: { method: 'GET', path: '/api/settings' },
+  updateSettings: { method: 'PUT', path: '/api/settings' },
+  setApiKey: { method: 'PUT', path: '/api/settings/keys/:name' },
+  removeApiKey: { method: 'DELETE', path: '/api/settings/keys/:name' },
+  /** `?provider=cursor|claude`. */
+  listModels: { method: 'GET', path: '/api/settings/models' },
   /** Server-sent event stream of `ServerEvent`. */
   events: { method: 'GET', path: '/api/events' },
 } as const satisfies Record<string, { method: HttpMethod; path: `/api/${string}` }>;
@@ -399,6 +532,16 @@ export interface ApiContract {
   discardRun: { body: undefined; response: RunResponse };
   getPlayer: { body: undefined; response: PlayerResponse };
   listAchievements: { body: undefined; response: ListAchievementsResponse };
+  authStatus: { body: undefined; response: AuthStatusResponse };
+  startDeviceFlow: { body: undefined; response: DeviceFlowResponse };
+  getDeviceFlow: { body: undefined; response: DeviceFlowResponse };
+  cancelDeviceFlow: { body: undefined; response: DeviceFlowResponse };
+  signOut: { body: undefined; response: AuthStatusResponse };
+  getSettings: { body: undefined; response: SettingsResponse };
+  updateSettings: { body: UpdateSettingsRequest; response: SettingsResponse };
+  setApiKey: { body: SetApiKeyRequest; response: SettingsResponse };
+  removeApiKey: { body: undefined; response: SettingsResponse };
+  listModels: { body: undefined; response: ListModelsResponse };
   /** The response is a `text/event-stream`, not JSON; see `ServerEvent`. */
   events: { body: undefined; response: never };
 }

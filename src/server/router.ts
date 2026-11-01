@@ -13,15 +13,25 @@ import {
 const MAX_BODY_BYTES = 1024 * 1024;
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost']);
 
+/** Extra fields of an error body beyond `code` and `message`. */
+export type ApiErrorDetails = Omit<ApiErrorResponse['error'], 'code' | 'message'>;
+
 export class ApiError extends Error {
   public readonly status: number;
   public readonly code: ApiErrorCode;
+  public readonly details: ApiErrorDetails;
 
-  public constructor(status: number, code: ApiErrorCode, message: string) {
+  public constructor(
+    status: number,
+    code: ApiErrorCode,
+    message: string,
+    details: ApiErrorDetails = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -93,11 +103,11 @@ export function createRouter(
   return (req, res) => {
     handle(handlers, allowedOrigins, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
-        sendError(res, error.status, error.code, error.message);
+        sendError(res, error.status, { ...error.details, code: error.code, message: error.message });
         return;
       }
       options.onUnexpectedError?.(error);
-      sendError(res, 500, 'internal', 'Internal server error');
+      sendError(res, 500, { code: 'internal', message: 'Internal server error' });
     });
   };
 }
@@ -116,14 +126,14 @@ async function handle(
     throw new ApiError(404, 'notFound', `No route for ${req.method} ${url.pathname}`);
   }
 
-  const isPost = req.method === 'POST';
-  if (isPost && !isJsonContentType(req.headers['content-type'])) {
-    throw new ApiError(415, 'badRequest', 'POST bodies must be application/json');
+  const changesState = isStateChanging(req.method);
+  if (changesState && !isJsonContentType(req.headers['content-type'])) {
+    throw new ApiError(415, 'badRequest', `${req.method} bodies must be application/json`);
   }
 
   const context: JsonHandlerContext = {
     params: match.params,
-    body: isPost ? await readJsonBody(req) : undefined,
+    body: changesState ? await readJsonBody(req) : undefined,
     req,
     res,
   };
@@ -178,7 +188,9 @@ function decodeParam(value: string): string {
 /**
  * Binding to 127.0.0.1 alone does not stop a web page from reaching the server. The Host check
  * stops DNS rebinding. The exact-origin and `Sec-Fetch-Site` checks stop pages on other origins,
- * including other localhost ports, which browsers count as same-site.
+ * including other localhost ports, which browsers count as same-site. `Sec-Fetch-Site` applies to
+ * every method, because an `<img>` or `<script>` GET carries no Origin yet can still open a
+ * session or spend the player's API quota.
  */
 function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<string>): void {
   if (!isLoopbackHost(req.headers.host)) {
@@ -189,9 +201,14 @@ function assertTrustedRequest(req: IncomingMessage, allowedOrigins: ReadonlySet<
     throw new ApiError(403, 'forbidden', 'Cross-origin requests are not allowed');
   }
   const site = req.headers['sec-fetch-site'];
-  if (req.method === 'POST' && site !== undefined && site !== 'same-origin' && site !== 'none') {
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') {
     throw new ApiError(403, 'forbidden', 'Cross-site requests are not allowed');
   }
+}
+
+/** Everything but GET must be JSON and same-origin; GET routes never change anything. */
+function isStateChanging(method: string | undefined): boolean {
+  return method !== 'GET' && method !== 'HEAD';
 }
 
 /** Browsers can only send JSON cross-origin after a CORS preflight, which this server never grants. */
@@ -244,11 +261,11 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.end(JSON.stringify(body));
 }
 
-function sendError(res: ServerResponse, status: number, code: ApiErrorCode, message: string): void {
+function sendError(res: ServerResponse, status: number, error: ApiErrorResponse['error']): void {
   if (res.headersSent) {
     res.end();
     return;
   }
-  const body: ApiErrorResponse = { error: { code, message } };
+  const body: ApiErrorResponse = { error };
   sendJson(res, status, body);
 }

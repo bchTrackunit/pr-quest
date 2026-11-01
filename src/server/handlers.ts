@@ -1,16 +1,17 @@
 import { z } from 'zod';
 
-import type { ServerEvent } from '../shared/api.ts';
+import type { ReviewRun, ServerEvent } from '../shared/api.ts';
 import type { AppConfig } from './config.ts';
 import type { EventHub } from './events.ts';
 import type { GameService } from './game.ts';
-import { GhError } from './gh.ts';
 import type { GitHubClient } from './github.ts';
+import { GitHubApiError, NotSignedInError } from './githubApi.ts';
 import { RateLimitedError, type QuestService } from './questService.ts';
 import { parseQuestId, type QuestRef } from './quests.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
 import type { ReviewRunService } from './reviewRuns.ts';
 import { ApiError, type RouteHandlers } from './router.ts';
+import { ModelIdSchema, parseBody } from './validation.ts';
 
 const MAX_COMMENT_LENGTH = 65_536;
 
@@ -22,15 +23,7 @@ export interface AppServices {
   events: EventHub;
 }
 
-const StartReviewSchema = z.object({
-  model: z
-    .string()
-    .trim()
-    .min(1)
-    .max(200)
-    .regex(/^[\w.:/-]+$/, 'Model ids may only contain letters, digits and . : / - _')
-    .optional(),
-});
+const StartReviewSchema = z.object({ model: ModelIdSchema.optional() });
 
 const ApproveSchema = z.object({
   confirm: z.literal(true, { error: 'Set confirm: true after the player confirms the approval' }),
@@ -46,16 +39,6 @@ const PostReviewSchema = z.object({
   findingIndexes: z.array(z.number().int().nonnegative()).max(1000).optional(),
 });
 
-function parseBody<TBody>(schema: z.ZodType<TBody>, body: unknown): TBody {
-  const parsed = schema.safeParse(body ?? {});
-  if (!parsed.success) {
-    const issue = parsed.error.issues.at(0);
-    const where = issue && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
-    throw new ApiError(400, 'badRequest', `${where}${issue?.message ?? 'Invalid request body'}`);
-  }
-  return parsed.data;
-}
-
 function requireQuestRef(id: string): QuestRef {
   const ref = parseQuestId(id);
   if (!ref) {
@@ -64,7 +47,7 @@ function requireQuestRef(id: string): QuestRef {
   return ref;
 }
 
-/** Turns `gh` failures into 502s (503 when rate limited) so the UI can tell them from server bugs. */
+/** Turns GitHub failures into 502s (503 when rate limited) so the UI can tell them from server bugs. */
 async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResult> {
   try {
     return await action();
@@ -72,7 +55,17 @@ async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResul
     if (error instanceof RateLimitedError) {
       throw new ApiError(503, 'rateLimited', error.message);
     }
-    if (error instanceof GhError) {
+    if (error instanceof NotSignedInError) {
+      throw new ApiError(401, 'notSignedIn', error.message);
+    }
+    if (error instanceof GitHubApiError && error.httpStatus === 401) {
+      throw new ApiError(
+        401,
+        'notSignedIn',
+        'GitHub rejected the sign-in (it may have been revoked). Sign in again in Settings.',
+      );
+    }
+    if (error instanceof GitHubApiError) {
       throw new ApiError(502, 'upstreamFailed', error.message);
     }
     throw error;
@@ -86,6 +79,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
     config: {
       linearApiKey: config.linearApiKey !== undefined,
       cursorApiKey: config.cursorApiKey !== undefined,
+      anthropicApiKey: config.anthropicApiKey !== undefined,
     },
   });
   if (!services) {
@@ -112,6 +106,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
     startReview: async ({ params, body }) => {
       requireQuestRef(params.id);
       const { model } = parseBody(StartReviewSchema, body);
+      runs.assertReady();
       const quest = await findQuest(params.id);
       return { run: await runs.start(quest, { model }) };
     },
@@ -161,7 +156,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       const request = parseBody(PostReviewSchema, body);
       const { stored, release } = runs.claimForPosting(params.id);
       try {
-        const draft = buildDraft(stored.run.result, stored.quest.headSha, request);
+        const draft = buildDraft(stored.run, stored.quest.headSha, request);
         const ref = requireQuestRef(stored.quest.id);
         const submitted = await upstream(() => github.submitReview(ref, draft));
         const run = await runs.markPosted(stored.run.id, submitted.url);
@@ -197,10 +192,11 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
 }
 
 function buildDraft(
-  result: NonNullable<ReturnType<ReviewRunService['get']>>['run']['result'],
+  run: ReviewRun,
   headSha: string | undefined,
   request: z.infer<typeof PostReviewSchema>,
 ): ReviewDraft {
+  const { result } = run;
   if (!result) {
     throw new ApiError(409, 'conflict', 'This review has no result to post');
   }
@@ -219,7 +215,14 @@ function buildDraft(
     summary: result.summary,
     verdict: result.verdict,
     findings,
+    provider: run.provider,
   };
+  if (run.model) {
+    draft.model = run.model;
+  }
+  if (result.omitted && result.omitted.length > 0) {
+    draft.omitted = result.omitted;
+  }
   if (headSha) {
     draft.commitId = headSha;
   }

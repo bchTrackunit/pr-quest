@@ -1,4 +1,4 @@
-import { useState, type MouseEventHandler } from 'react';
+import { useState, type MouseEventHandler, type ReactNode } from 'react';
 
 import type { AchievementStatus, PlayerState } from '../shared/api.ts';
 import { AchievementsPanel } from './AchievementsPanel.tsx';
@@ -18,6 +18,10 @@ export interface PlayerHudProps {
   soundEnabled: boolean;
   onClickNotifications: MouseEventHandler<HTMLButtonElement>;
   onClickSound: MouseEventHandler<HTMLButtonElement>;
+  /** The GitHub account corner, shown first among the controls. */
+  account?: ReactNode;
+  /** Shows the settings gear when set. */
+  onClickSettings?: MouseEventHandler<HTMLButtonElement>;
 }
 
 const RECENT_LIMIT = 3;
@@ -46,6 +50,8 @@ export const PlayerHud = ({
   soundEnabled,
   onClickNotifications,
   onClickSound,
+  account = undefined,
+  onClickSettings = undefined,
 }: PlayerHudProps) => {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const recent = [...(player?.achievements ?? [])]
@@ -110,6 +116,7 @@ export const PlayerHud = ({
       </div>
 
       <div className="hud__controls">
+        {account}
         <button className="button" onClick={() => setIsPanelOpen(true)} type="button">
           <span aria-hidden="true">🏅</span> Achievements{' '}
           <span className="count">
@@ -134,6 +141,17 @@ export const PlayerHud = ({
         <button aria-pressed={soundEnabled} className="button" onClick={onClickSound} type="button">
           <span aria-hidden="true">{soundEnabled ? '🔊' : '🔈'}</span> Sound
         </button>
+        {onClickSettings ? (
+          <button
+            aria-label="Settings"
+            className="button hud__settings"
+            onClick={onClickSettings}
+            title="Settings"
+            type="button"
+          >
+            <span aria-hidden="true">⚙️</span>
+          </button>
+        ) : null}
         <ConnectionIndicator status={connection} />
       </div>
 

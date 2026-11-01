@@ -10,6 +10,7 @@ export class EventHub {
   private readonly clients = new Set<ServerResponse>();
   private readonly heartbeatMs: number;
   private heartbeat?: NodeJS.Timeout;
+  private closed = false;
 
   public constructor(options: { heartbeatMs?: number } = {}) {
     this.heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
@@ -32,6 +33,11 @@ export class EventHub {
       'X-Accel-Buffering': 'no',
     });
     res.write(`retry: ${RECONNECT_DELAY_MS}\n\n`);
+    if (this.closed) {
+      // The player's session ended; reconnecting reaches whoever is signed in now.
+      res.end();
+      return;
+    }
     snapshot.forEach((event) => res.write(format(event)));
     this.clients.add(res);
     this.ensureHeartbeat();
@@ -52,6 +58,7 @@ export class EventHub {
   }
 
   public close(): void {
+    this.closed = true;
     this.stopHeartbeat();
     this.clients.forEach((client) => client.end());
     this.clients.clear();

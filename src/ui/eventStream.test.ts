@@ -9,7 +9,7 @@ import { MockEventSource } from './test-utils/MockEventSource.ts';
 function connect() {
   const events: Array<ServerEvent> = [];
   const statuses: Array<[ConnectionStatus, boolean]> = [];
-  const close = connectEventStream({
+  const stream = connectEventStream({
     url: '/api/events',
     onEvent: (event) => events.push(event),
     onStatusChange: (status, reconnected) => statuses.push([status, reconnected]),
@@ -17,7 +17,7 @@ function connect() {
     initialDelayMs: 1000,
     maxDelayMs: 4000,
   });
-  return { events, statuses, close };
+  return { events, statuses, stream };
 }
 
 describe('parseServerEvent', () => {
@@ -101,10 +101,44 @@ describe('connectEventStream', () => {
   });
 
   test('stops reconnecting once closed', () => {
-    const { close } = connect();
+    const { stream } = connect();
     MockEventSource.latest().fail();
-    close();
+    stream.close();
     vi.advanceTimersByTime(60_000);
+    expect(MockEventSource.instances).toHaveLength(1);
+  });
+
+  test('reconnectNow skips the backoff and does not ask for a resync', () => {
+    const { stream, statuses } = connect();
+    for (let drop = 0; drop < 3; drop += 1) {
+      MockEventSource.latest().fail();
+      vi.advanceTimersByTime(4000);
+    }
+    MockEventSource.latest().fail();
+    expect(MockEventSource.instances).toHaveLength(4);
+    const waiting = MockEventSource.latest();
+
+    stream.reconnectNow();
+
+    expect(waiting.isClosed).toBe(true);
+    expect(MockEventSource.instances).toHaveLength(5);
+    MockEventSource.latest().open();
+    expect(statuses.slice(-2)).toEqual([
+      ['connecting', false],
+      ['open', false],
+    ]);
+    vi.advanceTimersByTime(60_000);
+    expect(MockEventSource.instances).toHaveLength(5);
+
+    MockEventSource.latest().fail();
+    vi.advanceTimersByTime(1000);
+    expect(MockEventSource.instances).toHaveLength(6);
+  });
+
+  test('reconnectNow does nothing once closed', () => {
+    const { stream } = connect();
+    stream.close();
+    stream.reconnectNow();
     expect(MockEventSource.instances).toHaveLength(1);
   });
 });

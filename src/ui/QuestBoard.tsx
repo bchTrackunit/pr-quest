@@ -7,6 +7,7 @@ import {
   selectRunForQuest,
   type LoadState,
   type QuestAction,
+  type QuestActionError,
 } from './gameState.ts';
 import { QuestCard } from './QuestCard.tsx';
 import { moveFocusWithArrows, QuestFilterBar } from './QuestFilterBar.tsx';
@@ -19,6 +20,7 @@ import {
   type KindFilter,
   type RunLookup,
 } from './questFilters.ts';
+import type { SettingsTarget } from './settingsModel.ts';
 import { useBoardView } from './useBoardView.ts';
 import { useNow } from './useNow.ts';
 
@@ -32,11 +34,12 @@ export interface QuestBoardProps {
   stale?: boolean;
   rateLimit?: RateLimitStatus;
   questActions: Record<string, QuestAction>;
-  questActionErrors: Record<string, string>;
+  questActionErrors: Record<string, QuestActionError>;
   onClickRefresh: MouseEventHandler<HTMLButtonElement>;
   onClickSendAgent: (questId: string) => void;
   onClickOpenResult: (runId: string) => void;
   onClickApprove: (questId: string) => void;
+  onClickOpenSettings?: (target: SettingsTarget) => void;
 }
 
 const KIND_FILTERS: ReadonlyArray<KindFilter> = ['all', 'direct', 'team'];
@@ -68,6 +71,7 @@ export const QuestBoard = ({
   onClickSendAgent,
   onClickOpenResult,
   onClickApprove,
+  onClickOpenSettings = undefined,
 }: QuestBoardProps) => {
   const board = useBoardView();
   const { filters, sort } = board.view;
@@ -112,6 +116,7 @@ export const QuestBoard = ({
             now={now}
             onClickApprove={onClickApprove}
             onClickOpenResult={onClickOpenResult}
+            onClickOpenSettings={onClickOpenSettings}
             onClickSendAgent={onClickSendAgent}
             pendingAction={questActions[quest.id]}
             quest={quest}

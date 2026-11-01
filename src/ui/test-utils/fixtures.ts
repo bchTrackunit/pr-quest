@@ -60,6 +60,7 @@ export function makeRun(overrides: Partial<ReviewRun> = {}): ReviewRun {
       githubUrl: 'https://github.com/Trackunit/manager/pull/101',
       linearUrl: 'https://linear.app/trackunit/review/manager-101',
     },
+    provider: 'cursor',
     status: 'queued',
     disposition: 'pending',
     startedAt: '2026-10-30T10:00:00.000Z',

@@ -29,6 +29,10 @@ vi.mock('./apiClient.ts', async (importOriginal) => {
     approveQuest: vi.fn(),
     postRun: vi.fn(),
     discardRun: vi.fn(),
+    fetchAuthStatus: vi.fn(),
+    signOut: vi.fn(),
+    fetchSettings: vi.fn(),
+    fetchModels: vi.fn(),
   };
 });
 
@@ -78,6 +82,21 @@ describe('App', () => {
     api.fetchRuns.mockRejectedValue(new ApiRequestError(501, 'notImplemented', 'Not implemented'));
     api.fetchPlayer.mockResolvedValue({ player: makePlayer() });
     api.fetchAchievements.mockResolvedValue({ achievements: makeAchievements() });
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'gh' },
+      device: { state: 'idle' },
+    });
+    api.fetchSettings.mockResolvedValue({
+      reviewProvider: 'claude',
+      models: {},
+      keys: {
+        cursor: { set: true, source: 'env', last4: 'c0de' },
+        anthropic: { set: false },
+        linear: { set: false },
+      },
+    });
+    api.fetchModels.mockResolvedValue({ provider: 'claude', models: [], source: 'fallback' });
   });
 
   afterEach(() => {
@@ -92,6 +111,7 @@ describe('App', () => {
     expect(screen.getByRole('img', { name: 'Level 3' })).toBeTruthy();
     expect(screen.getByText('Live')).toBeTruthy();
     expect(MockEventSource.latest().url).toBe('/api/events');
+    expect(await screen.findByText('gh CLI')).toBeTruthy();
   });
 
   test('never asks for notification permission on load, only from the HUD toggle', async () => {
@@ -129,6 +149,59 @@ describe('App', () => {
 
     await user.click(within(toasts).getByRole('button', { name: 'View loot' }));
     expect(screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' })).toBeTruthy();
+  });
+
+  test('a missingConfig review error opens the settings at the missing key', async () => {
+    const user = userEvent.setup();
+    api.startReview.mockRejectedValue(
+      new ApiRequestError(
+        400,
+        'missingConfig',
+        'Claude reviews need an Anthropic API key. Add it in Settings.',
+        'claude',
+      ),
+    );
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    const error = await screen.findByRole('alert');
+    expect(error.textContent).toContain('Claude reviews need an Anthropic API key');
+
+    await user.click(within(error).getByRole('button', { name: /Open settings/ }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    const row = await within(dialog).findByRole('listitem', { name: 'Claude (Anthropic)' });
+    expect(within(row).getByText(/Needed for Claude reviews/)).toBeTruthy();
+    expect(document.activeElement).toBe(within(row).getByLabelText('Claude (Anthropic) key'));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement?.textContent).toContain('Open settings');
+  });
+
+  test('other review errors offer no settings shortcut', async () => {
+    const user = userEvent.setup();
+    api.startReview.mockRejectedValue(new ApiRequestError(409, 'conflict', 'Refresh the board'));
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+
+    const error = await screen.findByRole('alert');
+    expect(error.textContent).toContain('Refresh the board');
+    expect(within(error).queryByRole('button')).toBeNull();
+  });
+
+  test('the HUD gear opens the settings at the GitHub account', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole('heading', { name: 'GitHub account' }),
+    );
+    expect(within(dialog).getByText('Using the GitHub CLI login (gh fallback)')).toBeTruthy();
   });
 
   test('clicking the browser notification opens the result', async () => {
@@ -246,6 +319,78 @@ describe('App', () => {
       unlockedAt: new Date().toISOString(),
     });
     expect(screen.getAllByText('Achievement unlocked: Team Player')).toHaveLength(1);
+  });
+
+  test("signing out clears the previous player's runs, errors, toasts and player", async () => {
+    const user = userEvent.setup();
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'oauth' },
+      device: { state: 'idle' },
+    });
+    api.fetchRuns.mockResolvedValue({ runs: [makeRun({ status: 'running' })] });
+    api.startReview.mockRejectedValue(new ApiRequestError(409, 'conflict', 'Already running'));
+    await renderApp();
+    expect(await screen.findByText('Agent on quest')).toBeTruthy();
+    emit({
+      type: 'runUpdated',
+      run: makeRun({ id: 'run-old', status: 'error', error: { message: 'Agent crashed' } }),
+    });
+    expect(within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'));
+
+    const notSignedIn = new ApiRequestError(401, 'notSignedIn', 'Sign in with GitHub first.');
+    api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
+    api.fetchQuests.mockRejectedValue(notSignedIn);
+    api.fetchRuns.mockRejectedValue(notSignedIn);
+    api.fetchPlayer.mockRejectedValue(notSignedIn);
+    api.fetchAchievements.mockRejectedValue(notSignedIn);
+    const streamsBefore = MockEventSource.instances.length;
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByRole('button', { name: /Sign in with GitHub/ })).toBeTruthy();
+    expect(await screen.findAllByText(/Sign in with GitHub first/)).not.toHaveLength(0);
+    expect(screen.queryByText('Agent on quest')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Add the fleet health widget' })).toBeNull();
+    expect(screen.queryByText('Agent crashed')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Level 3' })).toBeNull();
+    expect(MockEventSource.instances).toHaveLength(streamsBefore + 1);
+    expect(MockEventSource.instances.at(streamsBefore - 1)?.isClosed).toBe(true);
+  });
+
+  test("a late response for the previous account doesn't come back after the switch", async () => {
+    const user = userEvent.setup();
+    api.fetchAuthStatus.mockResolvedValue({
+      clientIdConfigured: true,
+      account: { login: 'octocat', tokenSource: 'oauth' },
+      device: { state: 'idle' },
+    });
+    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () =>
+      undefined;
+    api.fetchRuns.mockReturnValue(
+      new Promise((resolver) => {
+        resolveRuns = resolver;
+      }),
+    );
+    await renderApp();
+
+    api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
+    api.fetchRuns.mockResolvedValue({ runs: [] });
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: /Sign in with GitHub/ });
+
+    act(() => resolveRuns({ runs: [makeRun({ status: 'running' })] }));
+    await act(() => Promise.resolve());
+    expect(screen.queryByText('Agent on quest')).toBeNull();
+  });
+
+  test('says so when the runs fail to load', async () => {
+    api.fetchRuns.mockRejectedValue(new ApiRequestError(500, 'internal', 'Disk full'));
+    await renderApp();
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      "Couldn't load your review runs: Disk full",
+    );
   });
 
   test('shows the quest error state and recovers on retry', async () => {

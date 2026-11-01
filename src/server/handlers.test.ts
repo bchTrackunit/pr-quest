@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,38 +8,22 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ReviewRun } from '../shared/api.ts';
 import { EventHub } from './events.ts';
 import { GameService } from './game.ts';
-import { GhError } from './gh.ts';
-import {
-  parsePullRequestDetails,
-  parseSearchResults,
-  type GitHubClient,
-  type ReviewRequestData,
-} from './github.ts';
+import { GitHubApiError, NotSignedInError } from './githubApi.ts';
+import { type GitHubClient, type ReviewRequestData } from './github.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
 import { LinearReviewClient } from './linear.ts';
 import { QuestService } from './questService.ts';
 import { ReviewRunService } from './reviewRuns.ts';
 import { createRouter } from './router.ts';
 import { StateStore } from './store.ts';
+import { reviewRequests } from './test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
   Agent: { create: vi.fn(), getRun: vi.fn() },
   CursorAgentError: class extends Error {},
 }));
 
-const fixture = (name: string): string =>
-  readFileSync(new URL(`./fixtures/gh/${name}`, import.meta.url), 'utf8');
-
-const searchItems = parseSearchResults(fixture('search-all.json'));
-const teamItem = searchItems.at(0);
-const directItem = searchItems.at(1);
-if (!teamItem || !directItem) {
-  throw new Error('search fixture needs two items');
-}
-const REQUESTS: Array<ReviewRequestData> = [
-  { item: teamItem, details: parsePullRequestDetails(fixture('pr-view-930.json')), direct: false },
-  { item: directItem, details: parsePullRequestDetails(fixture('pr-view-24.json')), direct: true },
-];
+const REQUESTS: Array<ReviewRequestData> = reviewRequests();
 
 const DIRECT_ID = 'Trackunit/state-of-code#24';
 const DIRECT_PATH = encodeURIComponent(DIRECT_ID);
@@ -125,7 +108,13 @@ beforeEach(async () => {
       inlineCommentsDropped: false,
     })),
   };
-  const runs = new ReviewRunService({ store, events, game, apiKey: 'key', log: () => undefined });
+  const runs = new ReviewRunService({
+    store,
+    events,
+    game,
+    cursorApiKey: () => 'key',
+    log: () => undefined,
+  });
   const linear = new LinearReviewClient();
   const quests = new QuestService({
     github,
@@ -166,16 +155,37 @@ describe('GET /api/quests', () => {
     });
   });
 
-  test('reports gh failures as upstreamFailed', async () => {
+  test('asks the player to sign in when there is no GitHub token', async () => {
+    github.fetchReviewRequests.mockRejectedValue(new NotSignedInError());
+
+    const response = await send('GET', '/api/quests');
+
+    expect(response).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
+  });
+
+  test('reports GitHub failures as upstreamFailed', async () => {
     github.fetchReviewRequests.mockRejectedValue(
-      new GhError('gh: Bad credentials (HTTP 401)', 401),
+      new GitHubApiError('Server Error (HTTP 500)', { httpStatus: 500 }),
     );
 
     const response = await send('GET', '/api/quests');
 
     expect(response).toEqual({
       status: 502,
-      body: { error: { code: 'upstreamFailed', message: 'gh: Bad credentials (HTTP 401)' } },
+      body: { error: { code: 'upstreamFailed', message: 'Server Error (HTTP 500)' } },
+    });
+  });
+
+  test('asks the player to sign in again when GitHub rejects the token', async () => {
+    github.fetchReviewRequests.mockRejectedValue(
+      new GitHubApiError('Bad credentials (HTTP 401)', { httpStatus: 401 }),
+    );
+
+    const response = await send('GET', '/api/quests');
+
+    expect(response).toMatchObject({
+      status: 401,
+      body: { error: { code: 'notSignedIn', message: expect.stringMatching(/rejected/) } },
     });
   });
 
@@ -190,7 +200,9 @@ describe('GET /api/quests', () => {
   test('answers a rate-limited refresh with the cached quests and the limit', async () => {
     await send('GET', '/api/quests');
     github.fetchReviewRequests.mockRejectedValue(
-      new GhError('gh: You have exceeded a secondary rate limit (HTTP 403)', 403),
+      new GitHubApiError('You have exceeded a secondary rate limit (HTTP 403)', {
+        httpStatus: 403,
+      }),
     );
 
     const response = await send('GET', '/api/quests?refresh=1');
@@ -205,7 +217,7 @@ describe('GET /api/quests', () => {
 
   test('reports a rate limit with nothing cached as rateLimited', async () => {
     github.fetchReviewRequests.mockRejectedValue(
-      new GhError('HTTP 403: API rate limit exceeded for user ID 1.', 403),
+      new GitHubApiError('HTTP 403: API rate limit exceeded for user ID 1.', { httpStatus: 403 }),
     );
 
     const response = await send('GET', '/api/quests');
@@ -305,7 +317,9 @@ describe('POST /api/quests/:id/approve', () => {
   });
 
   test('awards nothing when gh fails', async () => {
-    github.approve.mockRejectedValue(new GhError('gh: Forbidden (HTTP 403)', 403));
+    github.approve.mockRejectedValue(
+      new GitHubApiError('Forbidden (HTTP 403)', { httpStatus: 403 }),
+    );
 
     const response = await send('POST', `/api/quests/${DIRECT_PATH}/approve`, {
       confirm: true,
@@ -360,6 +374,7 @@ describe('runs', () => {
         event: 'requestChanges',
         summary: 'Two issues.',
         verdict: 'requestChanges',
+        provider: 'cursor',
         commitId: '0123456789abcdef0123456789abcdef01234567',
         findings: [{ file: 'src/b.ts', severity: 'nit', body: 'Style.' }],
       },
@@ -406,6 +421,25 @@ describe('runs', () => {
     });
   });
 
+  test('names the provider and model and lists the omitted files in the posted draft', async () => {
+    const run = await finishedRun();
+    const stored = services.runs.get(run.id);
+    if (!stored?.run.result) {
+      throw new Error('run missing');
+    }
+    stored.run.provider = 'claude';
+    stored.run.model = 'claude-opus-5-5';
+    stored.run.result.omitted = [{ file: 'yarn.lock', reason: 'lockfile' }];
+
+    await send('POST', `/api/runs/${run.id}/post`, {});
+
+    expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
+      provider: 'claude',
+      model: 'claude-opus-5-5',
+      omitted: [{ file: 'yarn.lock', reason: 'lockfile' }],
+    });
+  });
+
   test('posting twice is a conflict', async () => {
     const run = await finishedRun();
     await send('POST', `/api/runs/${run.id}/post`, {});
@@ -427,7 +461,9 @@ describe('runs', () => {
 
   test('a failed post can be retried', async () => {
     const run = await finishedRun();
-    github.submitReview.mockRejectedValueOnce(new GhError('gh: Server Error (HTTP 500)', 500));
+    github.submitReview.mockRejectedValueOnce(
+      new GitHubApiError('Server Error (HTTP 500)', { httpStatus: 500 }),
+    );
 
     expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(502);
     expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);

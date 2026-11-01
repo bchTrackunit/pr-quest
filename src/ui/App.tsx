@@ -1,17 +1,21 @@
 import { ApproveDialog } from './ApproveDialog.tsx';
 import { findQuest, type GameState } from './gameState.ts';
+import { GitHubAccountControl } from './GitHubAccountControl.tsx';
 import { PlayerHud } from './PlayerHud.tsx';
 import { QuestBoard } from './QuestBoard.tsx';
 import { ReviewResult } from './ReviewResult.tsx';
+import { SettingsDialog } from './SettingsDialog.tsx';
 import { useStoreState } from './store.ts';
 import { Toasts } from './Toasts.tsx';
 import { useGameController } from './useGameController.ts';
+import { useGitHubAccount } from './useGitHubAccount.ts';
 import { XpPopups } from './XpPopups.tsx';
 
 const selectState = (state: GameState): GameState => state;
 
 export const App = () => {
   const { store, actions } = useGameController();
+  const github = useGitHubAccount(actions.resync);
   const state = useStoreState(store, selectState);
   const openRun = state.openRunId ? state.runs[state.openRunId] : undefined;
   const approveQuest = findQuest(state, state.approveQuestId);
@@ -26,12 +30,14 @@ export const App = () => {
           <span aria-hidden="true">⚔️</span> PR Quest
         </h1>
         <PlayerHud
+          account={<GitHubAccountControl actions={github.actions} state={github.state} />}
           achievements={state.achievements}
           achievementsError={state.achievementsError}
           connection={state.connection}
           notificationAccess={state.notificationAccess}
           notificationsEnabled={state.notificationsEnabled}
           onClickNotifications={actions.toggleNotifications}
+          onClickSettings={() => actions.openSettings()}
           onClickSound={actions.toggleSound}
           player={state.player}
           playerError={state.playerError}
@@ -41,12 +47,18 @@ export const App = () => {
       </header>
 
       <main className="app__main" id="quest-board" tabIndex={-1}>
+        {state.runsError ? (
+          <p className="notice notice--warning" role="alert">
+            Couldn&apos;t load your review runs: {state.runsError}
+          </p>
+        ) : null}
         <QuestBoard
           error={state.questsError}
           fetchedAt={state.questsFetchedAt}
           loadState={state.questsLoad}
           onClickApprove={actions.requestApprove}
           onClickOpenResult={actions.openResult}
+          onClickOpenSettings={actions.openSettings}
           onClickRefresh={actions.refreshQuests}
           onClickSendAgent={actions.sendReviewAgent}
           questActionErrors={state.questActionErrors}
@@ -79,6 +91,14 @@ export const App = () => {
             actions.confirmApprove(approveQuest.id, headSha, comment)
           }
           quest={approveQuest}
+        />
+      ) : null}
+
+      {state.settings ? (
+        <SettingsDialog
+          github={github}
+          onClickClose={actions.closeSettings}
+          target={state.settings}
         />
       ) : null}
 

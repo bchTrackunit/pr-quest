@@ -61,6 +61,20 @@ describe('PlayerHud', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  test('shows the account slot and a settings gear only when it can open settings', async () => {
+    const user = userEvent.setup();
+    const onClickSettings = vi.fn();
+    renderHud({ account: <span>@octocat</span>, onClickSettings });
+    expect(screen.getByText('@octocat')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(onClickSettings).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    renderHud();
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
+  });
+
   test('asks for notifications from a button, and disables it when blocked', async () => {
     const user = userEvent.setup();
     const props = renderHud();

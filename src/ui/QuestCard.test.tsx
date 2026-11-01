@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -93,6 +93,30 @@ describe('QuestCard', () => {
     const handlers = renderCard(makeQuest(), makeRun({ status: 'finished', result: makeResult() }));
     await user.click(screen.getByRole('button', { name: /Loot ready: 3 findings/ }));
     expect(handlers.onClickOpenResult).toHaveBeenCalledWith('run-1');
+  });
+
+  test('offers to open the settings when sending failed for a missing setting', async () => {
+    const user = userEvent.setup();
+    const onClickOpenSettings = vi.fn();
+    render(
+      <QuestCard
+        actionError={{
+          message: 'Cursor reviews need a Cursor API key.',
+          settings: { section: 'keys', key: 'cursor' },
+        }}
+        now={NOW}
+        onClickApprove={vi.fn()}
+        onClickOpenResult={vi.fn()}
+        onClickOpenSettings={onClickOpenSettings}
+        onClickSendAgent={vi.fn()}
+        quest={makeQuest()}
+      />,
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Could not send the agent: Cursor reviews need a Cursor');
+    await user.click(within(alert).getByRole('button', { name: /Open settings/ }));
+    expect(onClickOpenSettings).toHaveBeenCalledWith({ section: 'keys', key: 'cursor' });
   });
 
   test('shows the error as static text, not an alert, and retries a failed run', async () => {

@@ -4,7 +4,7 @@ import { IncompleteQuestListError, toQuest, type GitHubClient } from './github.t
 import type { LinearReviewClient } from './linear.ts';
 import type { QuestCache, QuestSnapshot } from './questCache.ts';
 import { sortQuests } from './quests.ts';
-import { detectRateLimit, nextBackoff, type Backoff } from './rateLimit.ts';
+import { detectRateLimit, nextBackoff, rateLimitResetOf, type Backoff } from './rateLimit.ts';
 
 export const DEFAULT_CACHE_TTL_MS = 60_000;
 const DEFAULT_ACTED_ON_HOLD_MS = 5 * 60_000;
@@ -184,7 +184,7 @@ export class QuestService {
       if (!kind) {
         throw error;
       }
-      return this.enterBackoff(kind);
+      return this.enterBackoff(kind, rateLimitResetOf(error));
     }
     const quests = requests.map((request) =>
       toQuest({ ...request, linear: linear.lookup(linearInfo, request.item.url) }),
@@ -205,9 +205,14 @@ export class QuestService {
     return response;
   }
 
-  private async enterBackoff(kind: Backoff['kind']): Promise<ListQuestsResponse> {
+  /** `headerReset` comes from the failed response; `/rate_limit` fills it in for primary limits. */
+  private async enterBackoff(
+    kind: Backoff['kind'],
+    headerReset: Date | undefined,
+  ): Promise<ListQuestsResponse> {
     const resetAt =
-      kind === 'primary' ? await this.options.github.fetchRateLimitReset() : undefined;
+      headerReset ??
+      (kind === 'primary' ? await this.options.github.fetchRateLimitReset() : undefined);
     const backoff = nextBackoff({ kind, previous: this.backoff, now: this.now(), resetAt });
     this.backoff = backoff;
     this.options.log(

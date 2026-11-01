@@ -13,6 +13,7 @@ import type {
   XpReason,
 } from '../shared/api.ts';
 import type { NotificationAccess } from './notifications.ts';
+import type { SettingsTarget } from './settingsModel.ts';
 
 export type LoadState = 'loading' | 'ready' | 'error';
 
@@ -40,6 +41,12 @@ export interface XpPopup {
 /** An in-flight request started from a quest card, so its buttons can show progress. */
 export type QuestAction = 'review' | 'approve';
 
+/** Why a quest card's action failed, and the settings that fix it when there are some. */
+export interface QuestActionError {
+  message: string;
+  settings?: SettingsTarget;
+}
+
 export interface GameState {
   quests: Array<Quest>;
   questsLoad: LoadState;
@@ -51,6 +58,8 @@ export interface GameState {
   /** Set while GitHub rate limits the server's quest list. */
   questsRateLimit?: RateLimitStatus;
   runs: Record<string, ReviewRun>;
+  /** Loading the runs failed for a reason the quest board doesn't already show. */
+  runsError?: string;
   player?: PlayerState;
   playerError?: string;
   achievements: Array<AchievementStatus>;
@@ -59,9 +68,11 @@ export interface GameState {
   xpPopups: Array<XpPopup>;
   connection: ConnectionStatus;
   questActions: Record<string, QuestAction>;
-  questActionErrors: Record<string, string>;
+  questActionErrors: Record<string, QuestActionError>;
   openRunId?: string;
   approveQuestId?: string;
+  /** The settings popup is open at this section. */
+  settings?: SettingsTarget;
   soundEnabled: boolean;
   notificationsEnabled: boolean;
   notificationAccess: NotificationAccess;
@@ -111,6 +122,25 @@ export function upsertRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): Ga
     merged[run.id] = run;
   }
   return { ...state, runs: merged };
+}
+
+export function replaceRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): GameState {
+  return upsertRuns({ ...state, runs: {} }, runs);
+}
+
+/**
+ * After signing in or out the server serves another player's game, so everything that belonged
+ * to the previous one goes. The connection, sound and notification choices and an open settings
+ * popup stay.
+ */
+export function resetForAccountChange(state: GameState): GameState {
+  return {
+    ...createInitialGameState(state.notificationAccess),
+    connection: state.connection,
+    settings: state.settings,
+    soundEnabled: state.soundEnabled,
+    notificationsEnabled: state.notificationsEnabled,
+  };
 }
 
 export function markAchievementUnlocked(

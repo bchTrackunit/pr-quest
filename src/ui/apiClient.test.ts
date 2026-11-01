@@ -3,11 +3,21 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   ApiRequestError,
   approveQuest,
+  cancelDeviceFlow,
   describeError,
   discardRun,
+  fetchAuthStatus,
+  fetchDeviceFlow,
   fetchHealth,
+  fetchModels,
+  fetchSettings,
   postRun,
+  removeApiKey,
+  setApiKey,
+  signOut,
+  startDeviceFlow,
   startReview,
+  updateSettings,
 } from './apiClient.ts';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -56,6 +66,77 @@ describe('apiRequest', () => {
     );
 
     await expect(discardRun('run-1')).rejects.toEqual(new ApiRequestError(409, 'conflict', 'Busy'));
+  });
+
+  test('keeps the provider a missingConfig error names, and ignores unknown ones', async () => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        { error: { code: 'missingConfig', message: 'Need a key', provider: 'claude' } },
+        { status: 400 },
+      ),
+    );
+    await expect(startReview('o/r#1')).rejects.toMatchObject({
+      code: 'missingConfig',
+      provider: 'claude',
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      Response.json(
+        { error: { code: 'missingConfig', message: 'Need a key', provider: 'skynet' } },
+        { status: 400 },
+      ),
+    );
+    const error: unknown = await startReview('o/r#1').catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toHaveProperty('provider', undefined);
+  });
+});
+
+describe('auth and settings routes', () => {
+  const lastUrl = (): string => String(fetchMock.mock.calls.at(-1)?.[0]);
+
+  test.each([
+    ['startDeviceFlow', () => startDeviceFlow(), 'POST', '/api/auth/device', '{}'],
+    ['cancelDeviceFlow', () => cancelDeviceFlow(), 'DELETE', '/api/auth/device', '{}'],
+    ['signOut', () => signOut(), 'POST', '/api/auth/sign-out', '{}'],
+    [
+      'updateSettings',
+      () => updateSettings({ reviewProvider: 'claude', models: { claude: null } }),
+      'PUT',
+      '/api/settings',
+      '{"reviewProvider":"claude","models":{"claude":null}}',
+    ],
+    [
+      'setApiKey',
+      () => setApiKey('anthropic', 'sk-ant-123'),
+      'PUT',
+      '/api/settings/keys/anthropic',
+      '{"value":"sk-ant-123"}',
+    ],
+    ['removeApiKey', () => removeApiKey('linear'), 'DELETE', '/api/settings/keys/linear', '{}'],
+  ])('%s sends JSON with the CSRF-safe content type', async (_label, call, method, url, body) => {
+    await call();
+
+    expect(lastUrl()).toBe(url);
+    expect(lastInit()).toMatchObject({
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+  });
+
+  test.each([
+    ['fetchAuthStatus', () => fetchAuthStatus(), '/api/auth/status'],
+    ['fetchDeviceFlow', () => fetchDeviceFlow(), '/api/auth/device'],
+    ['fetchSettings', () => fetchSettings(), '/api/settings'],
+    ['fetchModels', () => fetchModels('claude'), '/api/settings/models?provider=claude'],
+  ])('%s is a plain GET', async (_label, call, url) => {
+    await call();
+
+    expect(lastUrl()).toBe(url);
+    expect(lastInit()).toMatchObject({ method: 'GET' });
+    expect(lastInit()?.body).toBeUndefined();
+    expect(lastInit()?.headers).toBeUndefined();
   });
 });
 

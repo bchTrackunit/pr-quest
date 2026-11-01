@@ -1,40 +1,22 @@
-import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { Quest, ServerEvent } from '../shared/api.ts';
-import { GhError } from './gh.ts';
-import {
-  IncompleteQuestListError,
-  parsePullRequestDetails,
-  parseSearchResults,
-  toQuest,
-  type ReviewRequestData,
-} from './github.ts';
+import { GitHubApiError } from './githubApi.ts';
+import { IncompleteQuestListError, toQuest, type ReviewRequestData } from './github.ts';
 import { LinearReviewClient, type LinearReviewInfo } from './linear.ts';
 import type { CachedQuestState } from './questCache.ts';
 import { QuestService, RateLimitedError, type QuestServiceOptions } from './questService.ts';
+import { reviewRequests } from './test-utils/fixtures.ts';
 
-const fixture = (name: string): string =>
-  readFileSync(new URL(`./fixtures/gh/${name}`, import.meta.url), 'utf8');
+const REQUESTS: Array<ReviewRequestData> = reviewRequests();
 
-const searchItems = parseSearchResults(fixture('search-all.json'));
-const teamItem = searchItems.at(0);
-const directItem = searchItems.at(1);
-if (!teamItem || !directItem) {
-  throw new Error('search fixture needs two items');
-}
-const REQUESTS: Array<ReviewRequestData> = [
-  { item: teamItem, details: parsePullRequestDetails(fixture('pr-view-930.json')), direct: false },
-  { item: directItem, details: parsePullRequestDetails(fixture('pr-view-24.json')), direct: true },
-];
-
-const SEARCH_LIMITED = new GhError(
+const SEARCH_LIMITED = new GitHubApiError(
   'HTTP 403: API rate limit exceeded for user ID 1. (https://api.github.com/search/issues)',
-  403,
+  { httpStatus: 403 },
 );
-const SECONDARY_LIMITED = new GhError(
-  'gh: You have exceeded a secondary rate limit. Please wait a few minutes. (HTTP 403)',
-  403,
+const SECONDARY_LIMITED = new GitHubApiError(
+  'You have exceeded a secondary rate limit. Please wait a few minutes. (HTTP 403)',
+  { httpStatus: 403 },
 );
 
 let nowMs: number;
@@ -312,12 +294,12 @@ describe('QuestService.findOrRefresh', () => {
 describe('QuestService.startPolling', () => {
   test('refreshes on an interval and logs failures instead of throwing', async () => {
     vi.useFakeTimers();
-    fetchReviewRequests.mockRejectedValueOnce(new Error('gh: HTTP 502'));
+    fetchReviewRequests.mockRejectedValueOnce(new Error('HTTP 502'));
     const quests = service();
 
     const stop = quests.startPolling(1000);
     await vi.advanceTimersByTimeAsync(0);
-    expect(logs.join('\n')).toContain('gh: HTTP 502');
+    expect(logs.join('\n')).toContain('HTTP 502');
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(fetchReviewRequests).toHaveBeenCalledTimes(2);
@@ -449,7 +431,37 @@ describe('QuestService rate limits', () => {
     expect(recordQueueChecked).not.toHaveBeenCalled();
   });
 
-  test('reads the primary reset from gh api rate_limit but not for secondary limits', async () => {
+  test('waits for the reset time in the response headers without calling /rate_limit', async () => {
+    const { quests } = await limitedService(
+      new GitHubApiError('API rate limit exceeded', {
+        httpStatus: 403,
+        rateLimit: { kind: 'primary', resetAt: new Date('2026-10-30T14:05:00.000Z') },
+      }),
+    );
+
+    const response = await quests.refresh();
+
+    expect(fetchRateLimitReset).not.toHaveBeenCalled();
+    expect(response.rateLimit).toEqual({
+      kind: 'primary',
+      limitedUntil: '2026-10-30T14:05:02.000Z',
+    });
+  });
+
+  test("waits out a secondary limit's Retry-After", async () => {
+    const { quests } = await limitedService(
+      new GitHubApiError('You have exceeded a secondary rate limit', {
+        httpStatus: 403,
+        rateLimit: { kind: 'secondary', resetAt: new Date('2026-10-30T14:00:20.000Z') },
+      }),
+    );
+
+    const response = await quests.refresh();
+
+    expect(response.rateLimit?.limitedUntil).toBe('2026-10-30T14:00:22.000Z');
+  });
+
+  test('reads a primary reset missing from the headers from /rate_limit, but not for secondary limits', async () => {
     const primary = await limitedService();
     await primary.quests.refresh();
     expect(fetchRateLimitReset).toHaveBeenCalledTimes(1);
@@ -536,7 +548,9 @@ describe('QuestService rate limits', () => {
   });
 
   test('still throws errors that are not rate limits', async () => {
-    const { quests } = await limitedService(new GhError('gh: Bad credentials (HTTP 401)', 401));
+    const { quests } = await limitedService(
+      new GitHubApiError('Bad credentials (HTTP 401)', { httpStatus: 401 }),
+    );
 
     await expect(quests.refresh()).rejects.toThrow('Bad credentials');
     expect(quests.snapshotEvent()).not.toHaveProperty('rateLimit');

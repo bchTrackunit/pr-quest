@@ -73,6 +73,19 @@ describe('LinearReviewClient', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  test('reads the key on each call, so a key saved in Settings is picked up', async () => {
+    const fetchMock = fakeLinear();
+    const saved: { key?: string } = {};
+    const client = new LinearReviewClient({ apiKey: () => saved.key, fetch: fetchMock });
+    await expect(client.getReviewInfo()).resolves.toBeUndefined();
+
+    saved.key = 'lin_api_saved';
+    await client.getReviewInfo();
+
+    const toolHeaders = new Headers(fetchMock.mock.calls[2]?.[1]?.headers);
+    expect(toolHeaders.get('authorization')).toBe('Bearer lin_api_saved');
+  });
+
   test('maps pending reviews by normalized GitHub URL across pages', async () => {
     const client = new LinearReviewClient({ apiKey: 'lin_api_x', fetch: fakeLinear() });
 

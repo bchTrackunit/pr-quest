@@ -57,6 +57,25 @@ describe('ReviewResult', () => {
     expect(handlers.onPost).toHaveBeenCalledWith('requestChanges');
   });
 
+  test("the post event always starts at Comment, whatever the agent's verdict", async () => {
+    const user = userEvent.setup();
+    const handlers = renderResult(
+      makeRun({ status: 'finished', result: makeResult({ verdict: 'requestChanges' }) }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Post to PR' }));
+
+    const group = screen.getByRole('group', { name: 'Post to Trackunit/manager#101?' });
+    expect(within(group).getByRole('radio', { name: 'Comment' })).toHaveProperty('checked', true);
+    expect(within(group).getByRole('radio', { name: 'Request changes' })).toHaveProperty(
+      'checked',
+      false,
+    );
+    expect(group.textContent).toContain('The agent suggests requesting changes; that is advice.');
+    await user.click(within(group).getByRole('button', { name: 'Confirm post' }));
+    expect(handlers.onPost).toHaveBeenCalledWith('comment');
+  });
+
   test('the post confirmation counts only findings with a line as inline comments', async () => {
     const user = userEvent.setup();
     renderResult();
@@ -113,6 +132,59 @@ describe('ReviewResult', () => {
     await user.click(screen.getByRole('button', { name: 'Post to PR' }));
     await user.click(screen.getByRole('button', { name: 'Confirm post' }));
     expect((await screen.findByRole('alert')).textContent).toContain('gh api failed');
+  });
+
+  test('names the provider and model that reviewed', () => {
+    renderResult(
+      makeRun({
+        status: 'finished',
+        provider: 'claude',
+        model: 'claude-opus-5',
+        result: makeResult(),
+      }),
+    );
+    expect(screen.getByText('Reviewed by Claude · claude-opus-5')).toBeTruthy();
+    cleanup();
+
+    renderResult(makeRun({ status: 'finished', result: makeResult() }));
+    expect(screen.getByText('Reviewed by Cursor')).toBeTruthy();
+  });
+
+  test('copes with a legacy run that has no provider or model', () => {
+    const { provider: _provider, ...legacy } = makeRun({
+      status: 'finished',
+      result: makeResult(),
+    });
+    renderResult({ ...legacy, provider: JSON.parse('null') });
+
+    expect(screen.queryByText(/Reviewed/)).toBeNull();
+    expect(screen.getByText('Solid change with one risky query.')).toBeTruthy();
+  });
+
+  test('lists the files the reviewer never saw', () => {
+    renderResult(
+      makeRun({
+        status: 'finished',
+        provider: 'claude',
+        result: makeResult({
+          omitted: [
+            { file: 'yarn.lock', reason: 'lockfile' },
+            { file: 'src/huge.generated.ts', reason: 'tooLarge' },
+          ],
+        }),
+      }),
+    );
+
+    const section = screen.getByRole('region', { name: /Omitted files/ });
+    expect(within(section).getByText('yarn.lock')).toBeTruthy();
+    expect(within(section).getByText('(lockfile)')).toBeTruthy();
+    expect(within(section).getByText('(too large)')).toBeTruthy();
+    expect(within(section).getByText(/never saw these files/)).toBeTruthy();
+  });
+
+  test('shows no omitted-files note when nothing was left out', () => {
+    renderResult(makeRun({ status: 'finished', result: makeResult({ omitted: [] }) }));
+    expect(screen.queryByRole('region', { name: /Omitted files/ })).toBeNull();
   });
 
   test('hides post and discard once the findings were posted', () => {

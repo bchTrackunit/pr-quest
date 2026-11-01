@@ -23,6 +23,7 @@
     "build": "yarn typecheck && vite build"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.2.0",
     "@cursor/sdk": "1.0.40",
     "@fontsource/press-start-2p": "5.3.0",
     "react": "19.3.1",

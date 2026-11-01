@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { DEFAULT_SERVER_PORT, loadConfig, SERVER_HOST } from './config.ts';
+import {
+  DEFAULT_GITHUB_CLIENT_ID,
+  DEFAULT_SERVER_PORT,
+  loadConfig,
+  SERVER_HOST,
+} from './config.ts';
 
 describe('loadConfig', () => {
   let dir: string;
@@ -40,6 +45,30 @@ describe('loadConfig', () => {
 
     expect(config.cursorApiKey).toBeUndefined();
     expect(config.linearApiKey).toBeUndefined();
+  });
+
+  test('reads the Anthropic key and the GitHub OAuth client ID', () => {
+    writeFileSync(envFilePath, 'ANTHROPIC_API_KEY=sk-ant-file\n');
+
+    const config = loadConfig({
+      env: { PR_QUEST_GITHUB_CLIENT_ID: 'Iv1.abc123' },
+      envFilePath,
+    });
+
+    expect(config.anthropicApiKey).toBe('sk-ant-file');
+    expect(config.githubClientId).toBe('Iv1.abc123');
+  });
+
+  test('falls back to the built-in GitHub client ID, which is empty by default', () => {
+    const config = loadConfig({ env: {}, envFilePath });
+
+    expect(config.githubClientId ?? '').toBe(DEFAULT_GITHUB_CLIENT_ID);
+  });
+
+  test('an empty environment value blanks the env file value', () => {
+    writeFileSync(envFilePath, 'CURSOR_API_KEY=cur_file\n');
+
+    expect(loadConfig({ env: { CURSOR_API_KEY: '' }, envFilePath }).cursorApiKey).toBeUndefined();
   });
 
   test('always binds to loopback and defaults the port', () => {
