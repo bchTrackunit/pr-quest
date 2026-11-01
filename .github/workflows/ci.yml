@@ -45,3 +45,40 @@ jobs:
 
       - name: Build
         run: yarn vite build && yarn build:server
+
+  # The suite again against a real Postgres server instead of PGlite, as `just test-postgres` runs it.
+  test-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: pr-quest-test
+          POSTGRES_DB: pr_quest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host 127.0.0.1 --username postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PR_QUEST_TEST_DATABASE_URL: postgres://postgres:pr-quest-test@127.0.0.1:5432/pr_quest_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+
+      - name: Enable Yarn from packageManager
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      - name: Test against Postgres
+        run: yarn test
