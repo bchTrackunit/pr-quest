@@ -141,6 +141,11 @@ const StoredRunSchema = z.object({
     startedAt: z.string(),
     finishedAt: z.string().optional(),
     result: StoredReviewResultSchema.optional(),
+    /** Unreadable decisions fall back to undecided, which posts nothing, instead of failing the file. */
+    findingDecisions: z
+      .array(z.enum(['undecided', 'accepted', 'rejected']))
+      .optional()
+      .catch(undefined),
     error: z.object({ message: z.string(), retryable: z.boolean().optional() }).optional(),
     postedReviewUrl: z.string().optional(),
   }),

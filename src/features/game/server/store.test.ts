@@ -137,6 +137,33 @@ describe('StateStore', () => {
     expect((await StateStore.open(dir)).state.runs).toEqual([claudeRun]);
   });
 
+  test('keeps the finding decisions of a run', async () => {
+    const decided: StoredRun = {
+      ...storedRun,
+      run: { ...storedRun.run, findingDecisions: ['rejected'] },
+    };
+    const store = await StateStore.open(dir);
+    await store.update((state) => ({ ...state, runs: [decided] }));
+
+    expect((await StateStore.open(dir)).state.runs).toEqual([decided]);
+  });
+
+  test('drops unreadable finding decisions instead of the whole state file', async () => {
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 1,
+        game: { ...initialGameState(), xp: 42 },
+        runs: [{ run: { ...storedRun.run, findingDecisions: ['maybe'] }, quest: storedRun.quest }],
+      }),
+    );
+
+    const store = await StateStore.open(dir);
+
+    expect(store.state.game.xp).toBe(42);
+    expect(store.state.runs[0]?.run).toEqual(storedRun.run);
+  });
+
   test('writes through a temporary file and leaves only state.json behind', async () => {
     const store = await StateStore.open(dir);
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 
 import type {
+  FindingDecision,
   Quest,
   ReviewProvider,
   ReviewResult,
@@ -18,6 +19,7 @@ import {
   type StoredRun,
 } from '../../game/server/index.ts';
 import { buildReviewPrompt, parseReviewResult } from '../../../shared/reviewResult.ts';
+import { findingDecisionsOf } from '../../../shared/findingDecisions.ts';
 import { ApiError } from '../../../platform/server/router.ts';
 import type { AppSettings } from '../../settings/server/index.ts';
 
@@ -203,6 +205,58 @@ export class ReviewRunService {
     } finally {
       this.posting.delete(id);
     }
+  }
+
+  /**
+   * Sets the decision on the given findings of a finished run that is still awaiting a decision.
+   * The run is checked when the write applies, so a decision queued before a post claimed the run
+   * is refused rather than landing after the post read the accepted findings.
+   */
+  public async decide(
+    id: string,
+    findingIndexes: ReadonlyArray<number>,
+    decision: FindingDecision,
+  ): Promise<ReviewRun> {
+    let updated: ReviewRun | undefined;
+    await this.store.update((state) => {
+      const entry = state.runs.find((candidate) => candidate.run.id === id);
+      if (!entry) {
+        throw new ApiError(404, 'notFound', `No review run ${id}`);
+      }
+      const { run } = entry;
+      if (run.status !== 'finished' || !run.result) {
+        throw new ApiError(409, 'conflict', 'Only a finished review has findings to decide on');
+      }
+      if (run.disposition !== 'pending' || this.posting.has(id)) {
+        throw new ApiError(
+          409,
+          'conflict',
+          `This review was already ${run.disposition === 'pending' ? 'being posted' : run.disposition}`,
+        );
+      }
+      const findingCount = run.result.findings.length;
+      const unknown = findingIndexes.find((index) => index >= findingCount);
+      if (unknown !== undefined) {
+        throw new ApiError(400, 'badRequest', `findingIndexes: ${unknown} is out of range`);
+      }
+      const findingDecisions = findingDecisionsOf(run);
+      for (const index of findingIndexes) {
+        findingDecisions[index] = decision;
+      }
+      const decided: ReviewRun = { ...run, findingDecisions };
+      updated = decided;
+      return {
+        ...state,
+        runs: state.runs.map((candidate) =>
+          candidate === entry ? { ...candidate, run: decided } : candidate,
+        ),
+      };
+    });
+    if (!updated) {
+      throw new ApiError(404, 'notFound', `No review run ${id}`);
+    }
+    this.events.broadcast({ type: 'runUpdated', run: updated });
+    return updated;
   }
 
   public async discard(id: string): Promise<ReviewRun> {

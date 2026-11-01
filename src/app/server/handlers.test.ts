@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Agent, type Run, type SDKAgent } from '@cursor/sdk';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { ReviewRun } from '../../shared/api.ts';
+import type { FindingDecision, ReviewRun } from '../../shared/api.ts';
 import { EventHub } from '../../platform/server/events.ts';
 import { GameService, StateStore } from '../../features/game/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
@@ -86,6 +86,14 @@ function mockAgentFinishing(text = REVIEW_TEXT): void {
     send: async () => run,
     [Symbol.asyncDispose]: async () => undefined,
   } as unknown as SDKAgent);
+}
+
+function decide(
+  runId: string,
+  findingIndexes: Array<number>,
+  decision: FindingDecision,
+): Promise<TestResponse> {
+  return send('PUT', `/api/runs/${runId}/decisions`, { findingIndexes, decision });
 }
 
 async function finishedRun(): Promise<ReviewRun> {
@@ -402,8 +410,10 @@ describe('runs', () => {
     expect((await send('GET', '/api/runs')).body).toMatchObject({ runs: [{ id: run.id }] });
   });
 
-  test('posting sends the selected findings as one review and awards XP', async () => {
+  test('posting sends only the accepted findings as one review and awards XP', async () => {
     const run = await finishedRun();
+    await decide(run.id, [0], 'rejected');
+    await decide(run.id, [1], 'accepted');
 
     const response = await send('POST', `/api/runs/${run.id}/post`, {
       event: 'requestChanges',
@@ -424,7 +434,11 @@ describe('runs', () => {
     );
     expect(response.body).toMatchObject({
       reviewUrl: 'https://github.com/r#pullrequestreview-9',
-      run: { disposition: 'posted', postedReviewUrl: 'https://github.com/r#pullrequestreview-9' },
+      run: {
+        disposition: 'posted',
+        postedReviewUrl: 'https://github.com/r#pullrequestreview-9',
+        findingDecisions: ['rejected', 'accepted'],
+      },
       outcome: {
         xpGained: 30 + 25 + 50,
         unlocked: [{ id: 'first-blood' }, { id: 'archaeologist' }],
@@ -435,17 +449,103 @@ describe('runs', () => {
   });
 
   test('Eagle Eye counts only the findings that were posted', async () => {
-    const nitOnly = await finishedRun();
-    const withMajor = await finishedRun();
-    await send('POST', `/api/runs/${nitOnly.id}/post`, { findingIndexes: [1] });
+    const majorRejected = await finishedRun();
+    const majorAccepted = await finishedRun();
+    await decide(majorRejected.id, [0], 'rejected');
+    await decide(majorRejected.id, [1], 'accepted');
+    await send('POST', `/api/runs/${majorRejected.id}/post`, { findingIndexes: [1] });
     const eagleEye = () =>
       services.game.achievements().find((status) => status.id === 'eagle-eye')?.unlockedAt;
     expect(eagleEye()).toBeUndefined();
 
-    const response = await send('POST', `/api/runs/${withMajor.id}/post`, {});
+    await decide(majorAccepted.id, [0, 1], 'accepted');
+    const response = await send('POST', `/api/runs/${majorAccepted.id}/post`, {
+      findingIndexes: [0, 1],
+    });
 
     expect(response.body).toMatchObject({ outcome: { unlocked: [{ id: 'eagle-eye' }] } });
     expect(eagleEye()).toBeDefined();
+  });
+
+  test('hands the posted findings, and only those, to the game', async () => {
+    const recordReviewAction = vi.spyOn(services.game, 'recordReviewAction');
+    const run = await finishedRun();
+    await decide(run.id, [0], 'accepted');
+    await decide(run.id, [1], 'rejected');
+
+    await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0] });
+
+    expect(recordReviewAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'reviewPosted',
+        postedSeverities: ['major'],
+      }),
+    );
+  });
+
+  test.each<[string, FindingDecision | undefined]>([
+    ['undecided', undefined],
+    ['rejected', 'rejected'],
+  ])('never posts a finding that is %s', async (_label, decision) => {
+    const run = await finishedRun();
+    if (decision) {
+      await decide(run.id, [0], decision);
+    }
+
+    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0] });
+
+    expect(response).toMatchObject({ status: 409, body: { error: { code: 'conflict' } } });
+    expect(github.submitReview).not.toHaveBeenCalled();
+    expect(services.runs.get(run.id)?.run.disposition).toBe('pending');
+    expect(services.game.player().xp).toBe(0);
+  });
+
+  test('refuses to post when the confirmed findings leave out an accepted one', async () => {
+    const run = await finishedRun();
+    await decide(run.id, [0, 1], 'accepted');
+
+    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [1] });
+
+    expect(response.status).toBe(409);
+    expect(github.submitReview).not.toHaveBeenCalled();
+    expect(
+      (await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [1, 0] })).status,
+    ).toBe(200);
+  });
+
+  test('refuses a post that does not say which findings to post', async () => {
+    const run = await finishedRun();
+    await decide(run.id, [0, 1], 'accepted');
+
+    const response = await send('POST', `/api/runs/${run.id}/post`, { event: 'comment' });
+
+    expect(response).toMatchObject({
+      status: 400,
+      body: { error: { code: 'badRequest', message: expect.stringContaining('findingIndexes') } },
+    });
+    expect(github.submitReview).not.toHaveBeenCalled();
+  });
+
+  test('with nothing accepted, posts the summary alone and still awards the same XP', async () => {
+    const run = await finishedRun();
+    await decide(run.id, [0, 1], 'rejected');
+
+    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
+
+    expect(response).toMatchObject({ status: 200, body: { outcome: { xpGained: 40 + 25 + 50 } } });
+    expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
+      summary: 'Two issues.',
+      findings: [],
+    });
+  });
+
+  test('deciding on findings earns no XP', async () => {
+    const run = await finishedRun();
+
+    await decide(run.id, [0], 'rejected');
+    await decide(run.id, [1], 'accepted');
+
+    expect(services.game.player().xp).toBe(0);
   });
 
   test('an agent verdict of approve still posts a comment, never an approval', async () => {
@@ -456,8 +556,13 @@ describe('runs', () => {
     await services.runs.whenIdle();
     const { run } = started.body as { run: ReviewRun };
 
-    expect((await send('POST', `/api/runs/${run.id}/post`, { event: 'approve' })).status).toBe(400);
-    expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);
+    expect(
+      (await send('POST', `/api/runs/${run.id}/post`, { event: 'approve', findingIndexes: [] }))
+        .status,
+    ).toBe(400);
+    expect((await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] })).status).toBe(
+      200,
+    );
 
     expect(github.submitReview).toHaveBeenCalledTimes(1);
     expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
@@ -475,7 +580,7 @@ describe('runs', () => {
     }
     stored.quest.repo = { owner: 'someone-else', name: 'other-repo' };
 
-    await send('POST', `/api/runs/${run.id}/post`, {});
+    await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
     expect(github.submitReview.mock.calls[0]?.[0]).toEqual({
       repo: { owner: 'Trackunit', name: 'state-of-code' },
@@ -493,7 +598,7 @@ describe('runs', () => {
     stored.run.model = 'claude-opus-5-5';
     stored.run.result.omitted = [{ file: 'yarn.lock', reason: 'lockfile' }];
 
-    await send('POST', `/api/runs/${run.id}/post`, {});
+    await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
     expect(github.submitReview.mock.calls[0]?.[1]).toMatchObject({
       provider: 'claude',
@@ -504,9 +609,9 @@ describe('runs', () => {
 
   test('posting twice is a conflict', async () => {
     const run = await finishedRun();
-    await send('POST', `/api/runs/${run.id}/post`, {});
+    await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
-    const second = await send('POST', `/api/runs/${run.id}/post`, {});
+    const second = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
     expect(second.status).toBe(409);
     expect(github.submitReview).toHaveBeenCalledTimes(1);
@@ -514,11 +619,18 @@ describe('runs', () => {
 
   test('rejects finding indexes that do not exist', async () => {
     const run = await finishedRun();
+    await decide(run.id, [0, 1], 'accepted');
 
-    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [2] });
+    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0, 1, 2] });
 
-    expect(response.status).toBe(400);
-    expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);
+    expect(response).toMatchObject({
+      status: 400,
+      body: { error: { message: expect.stringContaining('2') } },
+    });
+    expect(github.submitReview).not.toHaveBeenCalled();
+    expect(
+      (await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0, 1] })).status,
+    ).toBe(200);
   });
 
   test('a failed post can be retried', async () => {
@@ -527,8 +639,52 @@ describe('runs', () => {
       new GitHubApiError('Server Error (HTTP 500)', { httpStatus: 500 }),
     );
 
-    expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(502);
-    expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);
+    expect((await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] })).status).toBe(
+      502,
+    );
+    expect((await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] })).status).toBe(
+      200,
+    );
+  });
+
+  test('PUT /api/runs/:id/decisions saves the decisions and returns the run', async () => {
+    const run = await finishedRun();
+
+    const response = await decide(run.id, [0, 1], 'accepted');
+    const reset = await decide(run.id, [1], 'undecided');
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: { run: { id: run.id, findingDecisions: ['accepted', 'accepted'] } },
+    });
+    expect(reset.body).toMatchObject({ run: { findingDecisions: ['accepted', 'undecided'] } });
+    expect((await send('GET', `/api/runs/${run.id}`)).body).toMatchObject({
+      run: { findingDecisions: ['accepted', 'undecided'] },
+    });
+  });
+
+  test.each([
+    ['an unknown decision', { findingIndexes: [0], decision: 'maybe' }],
+    ['no findings', { findingIndexes: [], decision: 'accepted' }],
+    ['a negative id', { findingIndexes: [-1], decision: 'accepted' }],
+    ['a fractional id', { findingIndexes: [0.5], decision: 'accepted' }],
+    ['a finding the result does not have', { findingIndexes: [2], decision: 'accepted' }],
+    ['no body', undefined],
+  ])('PUT /api/runs/:id/decisions refuses %s', async (_label, body) => {
+    const run = await finishedRun();
+
+    const response = await send('PUT', `/api/runs/${run.id}/decisions`, body);
+
+    expect(response).toMatchObject({ status: 400, body: { error: { code: 'badRequest' } } });
+    expect(services.runs.get(run.id)?.run.findingDecisions).toBeUndefined();
+  });
+
+  test('PUT /api/runs/:id/decisions 404s for unknown runs and 409s once posted', async () => {
+    const run = await finishedRun();
+    await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
+
+    expect((await decide('nope', [0], 'accepted')).status).toBe(404);
+    expect((await decide(run.id, [0], 'accepted')).status).toBe(409);
   });
 
   test('discarding marks the run discarded', async () => {

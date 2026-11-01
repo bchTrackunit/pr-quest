@@ -303,7 +303,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
     def: define({
       id: 'eagle-eye',
       name: 'Eagle Eye',
-      description: 'Post a review with at least one critical or major finding.',
+      description: 'Post a review with at least one accepted critical or major finding.',
       icon: '🦅',
       rarity: 'common',
       category: 'feats',

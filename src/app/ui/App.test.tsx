@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { ServerEvent } from '../../shared/api.ts';
+import type { FindingDecision, ReviewRun, ServerEvent } from '../../shared/api.ts';
 import { ApiRequestError } from '../../platform/ui/apiClient.ts';
 import * as apiClient from '../../platform/ui/apiClient.ts';
 import { App } from './App.tsx';
@@ -28,6 +28,7 @@ vi.mock('../../platform/ui/apiClient.ts', async (importOriginal) => {
     startReview: vi.fn(),
     approveQuest: vi.fn(),
     postRun: vi.fn(),
+    saveFindingDecisions: vi.fn(),
     discardRun: vi.fn(),
     fetchAuthStatus: vi.fn(),
     signOut: vi.fn(),
@@ -252,6 +253,106 @@ describe('App', () => {
 
     expect(focus).toHaveBeenCalled();
     expect(screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' })).toBeTruthy();
+  });
+
+  describe('finding decisions', () => {
+    const finished = makeRun({ status: 'finished', result: makeResult() });
+    const withDecisions = (findingDecisions: Array<FindingDecision>): ReviewRun => ({
+      ...finished,
+      findingDecisions,
+    });
+
+    async function openLoot() {
+      const user = userEvent.setup();
+      await renderApp();
+      await user.click(await screen.findByRole('button', { name: /Loot ready/ }));
+      return {
+        user,
+        dialog: screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' }),
+      };
+    }
+
+    const toggle = (dialog: HTMLElement, location: string, name: 'Accept' | 'Reject') =>
+      within(within(dialog).getByRole('group', { name: `Decision on ${location}` })).getByRole(
+        'button',
+        { name },
+      );
+
+    test('are saved on the server and still there after a reload', async () => {
+      api.fetchRuns.mockResolvedValue({ runs: [finished] });
+      api.saveFindingDecisions.mockResolvedValue({
+        run: withDecisions(['undecided', 'accepted', 'undecided']),
+      });
+      const { user, dialog } = await openLoot();
+
+      await user.click(toggle(dialog, 'src/query.ts:40', 'Accept'));
+
+      expect(api.saveFindingDecisions).toHaveBeenCalledWith('run-1', {
+        findingIndexes: [1],
+        decision: 'accepted',
+      });
+      expect(toggle(dialog, 'src/query.ts:40', 'Accept').ariaPressed).toBe('true');
+
+      cleanup();
+      MockEventSource.reset();
+      api.fetchRuns.mockResolvedValue({
+        runs: [withDecisions(['undecided', 'accepted', 'undecided'])],
+      });
+      const reloaded = await openLoot();
+
+      expect(toggle(reloaded.dialog, 'src/query.ts:40', 'Accept').ariaPressed).toBe('true');
+      expect(within(reloaded.dialog).getByRole('status').textContent).toBe(
+        '1 accepted · 0 rejected · 2 undecided',
+      );
+    });
+
+    test('follow decisions made elsewhere, pushed over the event stream', async () => {
+      api.fetchRuns.mockResolvedValue({ runs: [finished] });
+      const { dialog } = await openLoot();
+
+      emit({ type: 'runUpdated', run: withDecisions(['rejected', 'rejected', 'rejected']) });
+
+      expect(within(dialog).getByRole('status').textContent).toBe(
+        '0 accepted · 3 rejected · 0 undecided',
+      );
+    });
+
+    test('posting sends the accepted findings once their decisions are saved', async () => {
+      api.fetchRuns.mockResolvedValue({ runs: [finished] });
+      let save = (): void => undefined;
+      api.saveFindingDecisions.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            save = () => resolve({ run: withDecisions(['accepted', 'accepted', 'accepted']) });
+          }),
+      );
+      api.postRun.mockResolvedValue({
+        run: { ...withDecisions(['accepted', 'accepted', 'accepted']), disposition: 'posted' },
+        reviewUrl: 'https://github.com/Trackunit/manager/pull/101#pullrequestreview-1',
+        outcome: { xpGained: 30, gains: [], player: makePlayer(), unlocked: [] },
+      });
+      const { user, dialog } = await openLoot();
+
+      await user.click(within(dialog).getByRole('button', { name: 'Accept all' }));
+      await user.click(within(dialog).getByRole('button', { name: 'Post to PR' }));
+      expect(within(dialog).getByRole('group', { name: /^Post to/ }).textContent).toContain(
+        'Posting all 3 findings',
+      );
+      await user.click(within(dialog).getByRole('button', { name: 'Confirm post' }));
+
+      expect(api.saveFindingDecisions).toHaveBeenCalledWith('run-1', {
+        findingIndexes: [0, 1, 2],
+        decision: 'accepted',
+      });
+      expect(api.postRun).not.toHaveBeenCalled();
+      save();
+      await vi.waitFor(() =>
+        expect(api.postRun).toHaveBeenCalledWith('run-1', {
+          event: 'comment',
+          findingIndexes: [0, 1, 2],
+        }),
+      );
+    });
   });
 
   test('a failed run shows an error toast and a retry on the card', async () => {

@@ -652,3 +652,114 @@ describe('ReviewRunService dispositions', () => {
     expect(runs.list().map((run) => run.id)).toEqual([second.id, first.id]);
   });
 });
+
+describe('ReviewRunService finding decisions', () => {
+  const THREE_FINDINGS = `\`\`\`json\n${JSON.stringify({
+    summary: 'Three things.',
+    verdict: 'comment',
+    findings: [
+      { file: 'src/a.ts', line: 2, severity: 'critical', body: 'Bug.' },
+      { file: 'src/b.ts', line: 5, severity: 'minor', body: 'Name.' },
+      { file: 'README.md', severity: 'nit', body: 'Typo.' },
+    ],
+  })}\n\`\`\``;
+
+  async function finishedRun(runs: ReviewRunService): Promise<string> {
+    fakeAgent(fakeRun({ result: THREE_FINDINGS }));
+    const { id } = await runs.start(quest);
+    await runs.whenIdle();
+    return id;
+  }
+
+  test('a finished run starts with no decisions, meaning every finding is undecided', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+
+    expect(runs.get(id)?.run.findingDecisions).toBeUndefined();
+  });
+
+  test('records each decision and broadcasts the updated run', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+    events = [];
+
+    await runs.decide(id, [0], 'accepted');
+    const run = await runs.decide(id, [2], 'rejected');
+
+    expect(run.findingDecisions).toEqual(['accepted', 'undecided', 'rejected']);
+    expect(events.at(-1)).toEqual({ type: 'runUpdated', run });
+  });
+
+  test('decides on several findings at once and resets them to undecided', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+
+    await runs.decide(id, [0, 1, 2], 'accepted');
+    expect(runs.get(id)?.run.findingDecisions).toEqual(['accepted', 'accepted', 'accepted']);
+
+    await runs.decide(id, [1, 2], 'undecided');
+    expect(runs.get(id)?.run.findingDecisions).toEqual(['accepted', 'undecided', 'undecided']);
+  });
+
+  test('keeps the decisions across a server restart', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+    await runs.decide(id, [0], 'accepted');
+    await runs.decide(id, [1], 'rejected');
+
+    const reopened = service({ store: await StateStore.open(dir) });
+
+    expect(reopened.get(id)?.run.findingDecisions).toEqual(['accepted', 'rejected', 'undecided']);
+  });
+
+  test('refuses finding ids the result does not have, and changes nothing', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+
+    await expect(runs.decide(id, [0, 3], 'accepted')).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining('3'),
+    });
+    expect(runs.get(id)?.run.findingDecisions).toBeUndefined();
+  });
+
+  test('refuses an unknown run', async () => {
+    await expect(service().decide('nope', [0], 'accepted')).rejects.toMatchObject({ status: 404 });
+  });
+
+  test('refuses while the review is still running', async () => {
+    fakeAgent(fakeRun({ result: THREE_FINDINGS }));
+    const runs = service();
+    const { id } = await runs.start(quest);
+
+    await expect(runs.decide(id, [0], 'accepted')).rejects.toMatchObject({ status: 409 });
+    await runs.whenIdle();
+  });
+
+  test('refuses once the run was posted or discarded, or while it is being posted', async () => {
+    const runs = service();
+    const posted = await finishedRun(runs);
+    await runs.decide(posted, [0], 'accepted');
+    runs.claimForPosting(posted);
+
+    await expect(runs.decide(posted, [1], 'accepted')).rejects.toMatchObject({ status: 409 });
+    await runs.markPosted(posted, 'https://github.com/x#pullrequestreview-1');
+    await expect(runs.decide(posted, [1], 'accepted')).rejects.toMatchObject({ status: 409 });
+    expect(runs.get(posted)?.run.findingDecisions).toEqual(['accepted', 'undecided', 'undecided']);
+
+    const discarded = await finishedRun(runs);
+    await runs.discard(discarded);
+    await expect(runs.decide(discarded, [0], 'accepted')).rejects.toMatchObject({ status: 409 });
+  });
+
+  test('a decision queued before the run was claimed for posting is refused, not applied', async () => {
+    const runs = service();
+    const id = await finishedRun(runs);
+
+    const decision = runs.decide(id, [1], 'accepted');
+    runs.claimForPosting(id);
+
+    await expect(decision).rejects.toMatchObject({ status: 409 });
+    expect(runs.get(id)?.run.findingDecisions).toBeUndefined();
+  });
+});

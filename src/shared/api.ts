@@ -92,6 +92,13 @@ export type FindingSeverity = 'critical' | 'major' | 'minor' | 'nit';
 
 export type ReviewVerdict = 'approve' | 'comment' | 'requestChanges';
 
+/** The player's call on one finding. Only `accepted` findings are ever posted. */
+export type FindingDecision = 'undecided' | 'accepted' | 'rejected';
+
+/**
+ * A finding's id is its index in `ReviewResult.findings`. A result never changes once its run has
+ * finished, so the index stays stable.
+ */
 export interface ReviewFinding {
   /** Repository-relative path. */
   file: string;
@@ -155,6 +162,12 @@ export interface ReviewRun {
   finishedAt?: string;
   /** Set when `status` is `finished` and the agent output parsed as a `ReviewResult`. */
   result?: ReviewResult;
+  /**
+   * One decision per entry of `result.findings`, in the same order. Absent until the player
+   * decides on a finding; a missing entry is `undecided`. Fixed once the run is posted, when the
+   * accepted findings are exactly the ones that were posted.
+   */
+  findingDecisions?: Array<FindingDecision>;
   error?: ReviewRunError;
   /** GitHub URL of the review created by `POST /api/runs/:id/post`. */
   postedReviewUrl?: string;
@@ -470,11 +483,23 @@ export interface ListRunsResponse {
 
 export type PostReviewEvent = 'comment' | 'requestChanges';
 
+export interface DecideFindingsRequest {
+  /** The findings to decide on, as indexes into `result.findings`. */
+  findingIndexes: Array<number>;
+  /** `undecided` resets them. */
+  decision: FindingDecision;
+}
+
 export interface PostReviewRequest {
   /** GitHub review event. Defaults to `comment`. Approving is a separate, explicit action. */
   event?: PostReviewEvent;
-  /** Indexes into `result.findings` to post; all findings when omitted. */
-  findingIndexes?: Array<number>;
+  /**
+   * The accepted findings the player confirmed, as indexes into `result.findings`; `[]` posts only
+   * the summary. They must be exactly the run's accepted findings, or the server posts nothing and
+   * answers `conflict`. A request without them is refused with `badRequest` rather than posting
+   * every finding, because that could post findings the player rejected.
+   */
+  findingIndexes: Array<number>;
 }
 
 export interface PostReviewResponse {
@@ -553,6 +578,8 @@ export const API_ROUTES = {
   listRuns: { method: 'GET', path: '/api/runs' },
   getRun: { method: 'GET', path: '/api/runs/:id' },
   postRun: { method: 'POST', path: '/api/runs/:id/post' },
+  /** Accepts, rejects or resets findings of a finished run that is still awaiting a decision. */
+  decideFindings: { method: 'PUT', path: '/api/runs/:id/decisions' },
   discardRun: { method: 'POST', path: '/api/runs/:id/discard' },
   getPlayer: { method: 'GET', path: '/api/player' },
   listAchievements: { method: 'GET', path: '/api/achievements' },
@@ -584,6 +611,7 @@ export interface ApiContract {
   listRuns: { body: undefined; response: ListRunsResponse };
   getRun: { body: undefined; response: RunResponse };
   postRun: { body: PostReviewRequest; response: PostReviewResponse };
+  decideFindings: { body: DecideFindingsRequest; response: RunResponse };
   discardRun: { body: undefined; response: RunResponse };
   getPlayer: { body: undefined; response: PlayerResponse };
   listAchievements: { body: undefined; response: ListAchievementsResponse };

@@ -84,7 +84,7 @@ export interface ReviewAction {
   /** Absent for quests saved before PR Quest kept the author. */
   author?: QuestAuthor;
   diffStats?: Pick<DiffStats, 'additions' | 'deletions'>;
-  /** The severities of the findings a posted review carried. */
+  /** The severities of the findings a posted review carried: the accepted ones only. */
   postedSeverities?: Array<FindingSeverity>;
   /** Every quest on the board when the player acted, this one included; absent when unknown. */
   board?: Array<BoardQuest>;

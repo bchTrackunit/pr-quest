@@ -444,13 +444,37 @@ as advice. The diff, title and branch names are sent to Anthropic under your API
 **What PR Quest itself does.** PR Quest never turns agent output into an approval. The verdict is
 shown as advice only, the post endpoint accepts only `comment` and `requestChanges`, and the only
 approve path is the **Approve** dialog. Findings appear on a result screen first, and nothing
-reaches GitHub until you choose **Post to PR** and confirm. The confirmation always starts at
-**Comment**; when the agent suggests requesting changes, it says so next to the choice but never
-picks it for you. That posts one GitHub review (comment or request changes) anchored to the same
-commit the agent reviewed, with inline comments for
+reaches GitHub until you choose **Post to PR** and confirm.
+
+**Accepting and rejecting findings.** Every finding starts undecided. Each finding card has a
+✓ **Accept** and a ✕ **Reject** toggle; pressing the one that's on makes the finding undecided
+again. **Accept all**, **Reject all** and **Reset** decide on every finding at once, and a line
+such as "3 accepted · 1 rejected · 2 undecided" keeps count. Accepted findings get a green edge;
+rejected ones are dimmed and struck through, and **Hide rejected** takes them off the screen. The
+toggles are ordinary buttons that report their state with `aria-pressed`, and each has a tooltip.
+Decisions are saved on the server with the run as you make them (`PUT /api/runs/:id/decisions`),
+so they survive a page reload and a server restart, and other open tabs see them through the live
+updates stream. Once a run is posted, its decisions are shown but can't change. Deciding earns no
+XP and costs none.
+
+**Posting.** Only accepted findings are posted; rejected and undecided findings never are, and the
+summary always is. The confirmation says what will go out, for example "Posting 3 of 6 findings in
+one GitHub review: 2 as inline comments and 1 in the review body. 1 rejected and 2 undecided won't
+be posted." With nothing accepted, it says the review will hold only the summary, and you can
+still post it. The server enforces this rather than trusting the page: the post request names the
+accepted findings you confirmed, and the server posts the findings its saved decisions accept,
+refusing with `409` if the two differ (for example because another tab changed a decision) and
+with `400` for a finding the review doesn't have or for a request that names no findings at all.
+A finding's id is its position in the review's findings, which never changes once the review has
+finished.
+
+The confirmation always starts at **Comment**; when the agent suggests requesting changes, it says
+so next to the choice but never picks it for you. That posts one GitHub review (comment or request
+changes) anchored to the same commit the agent reviewed, with inline comments for accepted
 findings that have a line. If GitHub rejects the inline line numbers, it posts them in the review
-body instead. The footer names the provider and model that wrote the review, and `@user` or
-`@org/team` in the model's text is wrapped in backticks so posting never pings anyone.
+body instead. The omitted files are still listed, the footer names the provider and model that
+wrote the review, and `@user` or `@org/team` in the model's text is wrapped in backticks so
+posting never pings anyone. Posting earns the same XP however many findings it includes.
 
 **Approve** is a separate action with its own confirmation dialog, which names the PR and the
 short head commit you're approving. The approval is pinned to that commit: the server reads the
@@ -533,7 +557,7 @@ local clock.
 | Clean Sweep      | Act on 5 direct requests in a day, and leave no direct request on the board   | Epic      |
 | Necromancer      | A review action on a PR requested 30 days or more ago                         | Rare      |
 | The Long Read    | A review action on a PR with 2,000 or more changed lines                      | Rare      |
-| Eagle Eye        | Post a review with at least one critical or major finding                     | Common    |
+| Eagle Eye        | Post a review with at least one accepted critical or major finding            | Common    |
 | Featherweight    | Approve 10 Trivial PRs in a day, each after a posted review or finished agent | Rare      |
 | Second Opinion   | A finished Claude review and a finished Cursor review on the same PR          | Rare      |
 | **Variety**      |                                                                               |           |
@@ -579,7 +603,8 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 ├── settings.json       the review provider and the model per provider
 └── users/
     └── <login>/        one folder per GitHub user, named by the lower-cased login
-        ├── state.json  XP, counters, streak, achievements, the last 200 review runs
+        ├── state.json  XP, counters, streak, achievements, the last 200 review runs and
+        │               their finding decisions
         └── quests.json the last quest list, when it was fetched, any rate-limit backoff
 ```
 
@@ -588,7 +613,8 @@ the current token is. Signing in as someone else opens their own folder, startin
 set in the environment or `.env.local` are never written to `secrets.json`.
 
 An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
-Quest starts without it. An unreadable `settings.json` is replaced with the defaults (Cursor
+Quest starts without it. Unreadable finding decisions on a run are the exception: they are
+dropped, which leaves that run's findings undecided, and the rest of `state.json` is kept. An unreadable `settings.json` is replaced with the defaults (Cursor
 reviews, default models) without a copy, and the next settings change overwrites it. An
 unreadable `quests.json` is ignored and replaced on the next successful fetch. A `secrets.json`
 or `settings.json` written by a newer PR Quest stops the server at startup with a message, so
