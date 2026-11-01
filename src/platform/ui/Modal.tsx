@@ -12,11 +12,16 @@ export interface ModalProps {
   returnFocusTo?: () => HTMLElement | null | undefined;
 }
 
-const FOCUSABLE =
+export const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Open panels, newest last; only the top one handles keys and focus. */
 const openPanels: Array<HTMLElement> = [];
+
+/** True while any modal is open; popovers leave Escape to it. */
+export function isModalOpen(): boolean {
+  return openPanels.length > 0;
+}
 
 /**
  * True while nothing in the top dialog has taken focus since it opened: focus is still on the
