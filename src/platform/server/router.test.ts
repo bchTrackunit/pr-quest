@@ -743,6 +743,12 @@ describe('raw routes', () => {
     expect(() => createRouter({}, { routes: [signIn, signIn] })).toThrow(/twice/);
     expect(() => createRouter({}, { routes: [{ ...signIn, path: 'auth' }] })).toThrow(/start/);
   });
+
+  test('refuses a cross-site POST route, which any site could submit a form to', () => {
+    expect(() => createRouter({}, { routes: [{ ...callback, method: 'POST' }] })).toThrow(
+      /POST \/auth\/github\/callback.*GET/,
+    );
+  });
 });
 
 describe('loopbackOrigins', () => {

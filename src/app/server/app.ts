@@ -296,6 +296,14 @@ export async function createApp(options: AppOptions): Promise<App> {
       fetch: options.fetch,
     });
   }
+  const routes = identity.routes ?? [];
+  const crossSite = routes.find((route) => route.crossSite);
+  if (!hosted && crossSite) {
+    identity.close();
+    throw new Error(
+      `${crossSite.method} ${crossSite.path} is cross-site, which only hosted mode allows: local mode acts as the player's GitHub account`,
+    );
+  }
 
   const auth = (req: IncomingMessage, res: ServerResponse): AuthServices['auth'] => ({
     current: async () => {
@@ -396,7 +404,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         );
       }
     },
-    routes: identity.routes ?? [],
+    routes,
     close: () => {
       identity.close();
     },

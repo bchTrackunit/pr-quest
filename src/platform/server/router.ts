@@ -70,7 +70,8 @@ export interface RawRoute {
   /**
    * Skips the Origin and `Sec-Fetch-Site` checks, which a top-level navigation back from another
    * site fails, such as an OAuth callback from github.com. The Host is still checked, so the
-   * handler must prove the request is genuine itself, for example with the OAuth `state`.
+   * handler must prove the request is genuine itself, for example with the OAuth `state`. Only a
+   * GET route can be cross-site, and only in hosted mode.
    */
   crossSite?: boolean;
   handle: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
@@ -210,6 +211,11 @@ function compileRawRoutes(routes: ReadonlyArray<RawRoute>): ReadonlyMap<string, 
     }
     if (compiled.has(key)) {
       throw new Error(`Raw route ${key} is registered twice`);
+    }
+    if (route.crossSite && route.method !== 'GET') {
+      throw new Error(
+        `Raw route ${key} can't be cross-site: only a GET may come from another site`,
+      );
     }
     compiled.set(key, route);
   }

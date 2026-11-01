@@ -602,6 +602,17 @@ describe('createApp with an injected identity and storage', () => {
     expect(response.headers.location).toBe('/');
   });
 
+  test('refuses cross-site routes in local mode, whose sign-in needs no callback', async () => {
+    const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      routes: [{ method: 'GET', path: '/auth/cross', crossSite: true, handle: () => undefined }],
+    });
+
+    await expect(start({ identity: crossSiteIdentity, storage: perUserStorage() })).rejects.toThrow(
+      /GET \/auth\/cross.*hosted mode/i,
+    );
+  });
+
   test("never falls back to the gh CLI's token or offers the device flow (local mode)", async () => {
     ghToken = GH_TOKEN;
     await start({ identity: headerIdentity, storage: perUserStorage() });
@@ -710,6 +721,29 @@ describe('createApp in hosted mode', () => {
 
     expect(gameStates).toBe(2);
     expect(scopes.filter((key) => key === 'user:brianchristensen')).toHaveLength(4);
+  });
+
+  test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
+    const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      routes: [
+        {
+          method: 'GET',
+          path: '/auth/callback',
+          crossSite: true,
+          handle: (_req, res) => {
+            res.writeHead(302, { Location: '/' }).end();
+          },
+        },
+      ],
+    });
+    await start({ config: hostedConfig(), identity: crossSiteIdentity, storage: perUserStorage() });
+
+    const response = await send('GET', '/auth/callback', undefined, {
+      'Sec-Fetch-Site': 'cross-site',
+    });
+
+    expect(response.status).toBe(302);
   });
 
   test('answers the health check without saying which keys exist', async () => {
