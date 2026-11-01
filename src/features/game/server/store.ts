@@ -24,6 +24,7 @@ import {
   withRunProvider,
   type AchievementLedger,
 } from './ledger.ts';
+import { type DocumentCodec, documentVersion } from '../../../platform/server/documentCodec.ts';
 import { refuseNewerVersion } from '../../../platform/server/privateFiles.ts';
 import { StoredReviewResultSchema, type ReviewTarget } from '../../../shared/reviewResult.ts';
 
@@ -266,25 +267,41 @@ async function readState(
 
   const json = safeJson(text);
   refuseNewerVersion(json, STATE_VERSION, file);
-  const parsed = PersistedStateSchema.safeParse(json);
-  if (parsed.success) {
-    return { ...parsed.data, runs: withRunQuests(parsed.data.runs) };
-  }
-  const legacy = PersistedStateV1Schema.safeParse(json);
-  if (legacy.success) {
-    await keepCopy(file, `${file}.v1.bak`);
-    const runs = withRunQuests(legacy.data.runs);
-    const game: GameState = {
-      ...legacy.data.game,
-      ledger: backfillLedger(legacy.data.game.rewardedApprovals, runs),
-    };
-    return { version: STATE_VERSION, game, runs };
+  const state = STATE_DOCUMENT.decode(json);
+  if (state) {
+    if (documentVersion(json) !== STATE_VERSION) {
+      await keepCopy(file, `${file}.v${documentVersion(json)}.bak`);
+    }
+    return state;
   }
   const aside = `${file}.corrupt-${Date.now()}`;
   await rename(file, aside);
   onWarning(`State file was unreadable; moved it to ${aside} and started fresh`);
   return emptyState();
 }
+
+/** One player's state as a JSON document, wherever it is saved. Version 1 is upgraded on read. */
+export const STATE_DOCUMENT: DocumentCodec<PersistedState> = {
+  version: STATE_VERSION,
+  empty: emptyState,
+  decode: (json) => {
+    const parsed = PersistedStateSchema.safeParse(json);
+    if (parsed.success) {
+      return { ...parsed.data, runs: withRunQuests(parsed.data.runs) };
+    }
+    const legacy = PersistedStateV1Schema.safeParse(json);
+    if (!legacy.success) {
+      return undefined;
+    }
+    const runs = withRunQuests(legacy.data.runs);
+    const game: GameState = {
+      ...legacy.data.game,
+      ledger: backfillLedger(legacy.data.game.rewardedApprovals, runs),
+    };
+    return { version: STATE_VERSION, game, runs };
+  },
+  encode: (state) => state,
+};
 
 type ParsedRun = z.infer<typeof StoredRunSchema>;
 
