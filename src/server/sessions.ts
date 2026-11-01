@@ -78,6 +78,8 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
   private readonly options: SessionManagerOptions<TServices>;
   private readonly now: () => number;
   private readonly identities = new Map<string, Identity>();
+  /** The owner `/user` last confirmed per token, so a GitHub outage keeps the cached board open. */
+  private readonly confirmed = new Map<string, GitHubViewer>();
   private open?: OpenSession<TServices>;
   private latest?: Session<TServices>;
 
@@ -132,6 +134,7 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
   /** GitHub answered 401 for `token`: forget its owner and stop the session acting with it. */
   public rejected(token: string): void {
     this.identities.delete(token);
+    this.confirmed.delete(token);
     this.options.tokens.invalidate();
     if (this.open?.binding.token === token) {
       this.close();
@@ -155,10 +158,17 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
 
   private async identify(token: ResolvedToken): Promise<GitHubViewer> {
     try {
-      return await this.lookUp(token.token);
+      const viewer = await this.lookUp(token.token);
+      this.confirmed.set(token.token, viewer);
+      return viewer;
     } catch (error) {
       if (error instanceof GitHubApiError && error.httpStatus === 401) {
+        this.confirmed.delete(token.token);
         throw new NotSignedInError(rejectedMessage(token.source));
+      }
+      const confirmed = this.confirmed.get(token.token);
+      if (confirmed) {
+        return confirmed;
       }
       throw error;
     }

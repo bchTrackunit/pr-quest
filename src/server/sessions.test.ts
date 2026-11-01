@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import type { GitHubViewer } from './github.ts';
-import { GitHubApiError, NotSignedInError } from './githubApi.ts';
+import { GitHubApiError, GitHubNetworkError, NotSignedInError } from './githubApi.ts';
 import type { ResolvedToken } from './githubToken.ts';
 import {
   SessionEndedError,
@@ -249,6 +249,42 @@ describe('SessionManager', () => {
     advance(30_001);
     await expect(sessions.current()).rejects.toThrow(/rejected/);
     expect(fetchViewer).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps the token's known owner while GitHub can't be reached", async () => {
+    const { sessions, fetchViewer, create, advance } = setup({
+      token: { token: 'gho_a', source: 'gh' },
+    });
+    const first = await sessions.current();
+    fetchViewer.mockRejectedValue(new GitHubNetworkError('GitHub GET /user failed: offline'));
+
+    advance(10 * 60_000 + 1);
+    const during = await sessions.current();
+
+    expect(fetchViewer).toHaveBeenCalledTimes(2);
+    expect(during?.account.login).toBe('Alice');
+    expect(during?.services).toBe(first?.services);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  test('forgets the known owner once GitHub rejects the token', async () => {
+    const { sessions, fetchViewer, advance } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    await sessions.current();
+    fetchViewer.mockRejectedValue(new GitHubApiError('Bad credentials', { httpStatus: 401 }));
+
+    advance(10 * 60_000 + 1);
+    await expect(sessions.current()).rejects.toBeInstanceOf(NotSignedInError);
+    fetchViewer.mockRejectedValue(new GitHubNetworkError('GitHub GET /user failed: offline'));
+    advance(30_001);
+
+    await expect(sessions.current()).rejects.toBeInstanceOf(GitHubNetworkError);
+  });
+
+  test("passes the failure on when GitHub can't be reached for a token it never confirmed", async () => {
+    const { sessions, fetchViewer } = setup({ token: { token: 'gho_a', source: 'gh' } });
+    fetchViewer.mockRejectedValue(new GitHubNetworkError('GitHub GET /user failed: offline'));
+
+    await expect(sessions.current()).rejects.toBeInstanceOf(GitHubNetworkError);
   });
 
   test('close stops the open session, as on shutdown', async () => {

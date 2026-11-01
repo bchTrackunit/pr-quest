@@ -8,7 +8,7 @@ import { DeviceFlow } from './deviceFlow.ts';
 import { EventHub } from './events.ts';
 import { GameService } from './game.ts';
 import { GitHubClient } from './github.ts';
-import { GitHubApi, NotSignedInError, type FetchLike } from './githubApi.ts';
+import { GitHubApi, GitHubApiError, NotSignedInError, type FetchLike } from './githubApi.ts';
 import { GitHubTokenProvider } from './githubToken.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
 import { LinearReviewClient } from './linear.ts';
@@ -206,6 +206,13 @@ export async function createApp(options: AppOptions): Promise<App> {
     } catch (error) {
       if (error instanceof NotSignedInError) {
         throw new ApiError(401, 'notSignedIn', error.message);
+      }
+      if (error instanceof GitHubApiError) {
+        throw new ApiError(
+          502,
+          'upstreamFailed',
+          `GitHub couldn't confirm who is signed in: ${error.message}`,
+        );
       }
       throw error;
     }

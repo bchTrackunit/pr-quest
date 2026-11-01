@@ -3,10 +3,13 @@ import { createServer, request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { z } from 'zod';
 
 import { createApp, type App } from './app.ts';
+import type { CreateMessage } from './claudeReview.ts';
 import type { AppConfig } from './config.ts';
 import { createRouter } from './router.ts';
+import { SOURCE_DIFF, toolMessage } from './test-utils/claude.ts';
 import { fixture } from './test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
@@ -29,6 +32,7 @@ let logs: Array<string>;
 
 type Route = (url: URL, init: RequestInit, token: string) => Promise<Response | undefined>;
 let route: Route | undefined;
+let createMessage: CreateMessage;
 
 /** GitHub as seen through fetch: `/user` per token, and an empty review queue unless `route` answers. */
 const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Response> => {
@@ -64,9 +68,7 @@ async function start(): Promise<void> {
     config: config(),
     ghToken: async () => ghToken,
     fetch: fakeGitHub,
-    createMessage: vi.fn(async () => {
-      throw new Error('Claude must not be called in tests');
-    }),
+    createMessage: (...args) => createMessage(...args),
     info: (message) => logs.push(message),
     warn: (message) => logs.push(message),
   });
@@ -145,6 +147,9 @@ beforeEach(async () => {
   logins = { [GH_TOKEN]: 'BrianChristensen', [OAUTH_TOKEN]: 'Other-Player' };
   logs = [];
   route = undefined;
+  createMessage = async () => {
+    throw new Error('Claude must not be called in tests');
+  };
   fakeGitHub.mockClear();
 });
 
@@ -271,6 +276,59 @@ describe('createApp', () => {
     const tokens = fakeGitHub.mock.calls.map(([, init]) => new Headers(init.headers).get('authorization'));
     expect(tokens.length).toBeGreaterThan(0);
     expect(tokens).not.toContain(`Bearer ${OAUTH_TOKEN}`);
+  });
+
+  test('a review that finishes after signing out and back in is kept, with its XP', async () => {
+    ghToken = GH_TOKEN;
+    const replyGate = deferred();
+    const claudeCalled = deferred();
+    createMessage = vi.fn(async () => {
+      claudeCalled.resolve();
+      await replyGate.promise;
+      return toolMessage({ summary: 'Looks fine.', verdict: 'comment', findings: [] });
+    });
+    route = async (url) =>
+      (await reviewQueue(url)) ??
+      (url.pathname.includes('/compare/') ? new Response(SOURCE_DIFF) : undefined);
+    await start();
+    await send('PUT', '/api/settings/keys/anthropic', { value: 'sk-ant-api03-TEST-0000' });
+    await send('PUT', '/api/settings', { reviewProvider: 'claude' });
+    await settleQuests();
+
+    const started = await send('POST', `/api/quests/${encodeURIComponent(QUEST_ID)}/review`, {});
+    await claudeCalled.promise;
+    await send('POST', '/api/auth/sign-out');
+    const reopened = await send('GET', '/api/runs');
+    replyGate.resolve();
+    await vi.waitFor(async () => {
+      expect((await send('GET', '/api/runs')).body).toMatchObject({
+        runs: [{ status: 'finished' }],
+      });
+    });
+
+    expect(started.status).toBe(200);
+    expect(reopened.body).toMatchObject({ runs: [{ status: 'running' }] });
+    expect((await send('GET', '/api/player')).body).toMatchObject({
+      player: { counters: { agentReviews: 1 } },
+    });
+    const saved = z
+      .object({ runs: z.array(z.object({ run: z.object({ status: z.string() }) })) })
+      .parse(JSON.parse(await readFile(join(dir, 'users', 'brianchristensen', 'state.json'), 'utf8')));
+    expect(saved.runs.map(({ run }) => run.status)).toEqual(['finished']);
+  });
+
+  test("answers upstreamFailed, not a server error, when GitHub can't confirm the account", async () => {
+    ghToken = GH_TOKEN;
+    route = async (url) =>
+      url.pathname === '/user'
+        ? Response.json({ message: 'Service Unavailable' }, { status: 503 })
+        : undefined;
+    await start();
+
+    const player = await send('GET', '/api/player');
+
+    expect(player).toMatchObject({ status: 502, body: { error: { code: 'upstreamFailed' } } });
+    expect(player.text).toContain('Service Unavailable');
   });
 
   test('a sign-in GitHub has revoked shows as signed out with a reason', async () => {

@@ -11,6 +11,7 @@ import {
 import { ANTHROPIC_API_URL } from './config.ts';
 import { GitHubApiError, GitHubNetworkError, NotSignedInError } from './githubApi.ts';
 import type { QuestSnapshot } from './store.ts';
+import { SOURCE_DIFF, toolMessage } from './test-utils/claude.ts';
 
 const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';
 
@@ -28,23 +29,7 @@ const quest: QuestSnapshot = {
   requestedAt: '2026-10-30T08:00:00.000Z',
 };
 
-const SOURCE_DIFF =
-  'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n';
 const LOCK_DIFF = 'diff --git a/yarn.lock b/yarn.lock\n--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1 +1 @@\n-a\n+b\n';
-
-function toolMessage(input: unknown, overrides: Partial<Message> = {}): Message {
-  return {
-    id: 'msg_1',
-    type: 'message',
-    role: 'assistant',
-    model: DEFAULT_CLAUDE_MODEL,
-    content: [{ type: 'tool_use', id: 'tu_1', name: 'submit_review', input, caller: { type: 'direct' } }],
-    stop_reason: 'tool_use',
-    stop_sequence: null,
-    usage: { input_tokens: 10, output_tokens: 10 },
-    ...overrides,
-  } as unknown as Message;
-}
 
 const REVIEW = {
   summary: 'Adds a cache.',
