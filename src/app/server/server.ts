@@ -5,7 +5,7 @@ import { inspect } from 'node:util';
 
 import { type AppOptions, createApp, type UserServices } from './app.ts';
 import { readGhToken } from '../../features/auth/server/index.ts';
-import type { AppConfig } from '../../platform/server/config.ts';
+import { type AppConfig, assertSafeConfig } from '../../platform/server/config.ts';
 import {
   createRouter,
   type RequestListener,
@@ -15,7 +15,12 @@ import type { SecretStore } from '../../platform/server/secrets.ts';
 import type { IdentityFactory } from './identity.ts';
 import { type AppStorage, createFileStorage } from './storage.ts';
 
-export { type AppConfig, loadConfig } from '../../platform/server/config.ts';
+export {
+  type AppConfig,
+  type HostedConfig,
+  loadConfig,
+  type LocalConfig,
+} from '../../platform/server/config.ts';
 export type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 export type { IdentityContext, IdentityFactory, IdentityResolver } from './identity.ts';
 export {
@@ -74,6 +79,7 @@ export async function startServer(
 ): Promise<RunningServer> {
   const info = overrides.info ?? defaultInfo;
   const warn = overrides.warn ?? defaultWarn;
+  assertSafeConfig(config);
   if (config.mode === 'hosted' && (!overrides.identity || !overrides.storage)) {
     throw new Error(
       "Hosted mode needs an identity resolver and storage for many users. This build only has local mode's, which would let anyone act as the server's GitHub account.",

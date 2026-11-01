@@ -175,6 +175,12 @@ afterEach(async () => {
 });
 
 describe('createApp', () => {
+  test('refuses a local config that trusts more than loopback', async () => {
+    const wide: AppConfig = Object.assign(config(), { allowedHosts: ['evil.example'] });
+
+    await expect(start({ config: wide })).rejects.toThrow(/loopback Host names/);
+  });
+
   test("opens the gh token owner's game from the migrated legacy state", async () => {
     await copyFile(join(FIXTURES, 'state.json'), join(dir, 'state.json'));
     await copyFile(join(FIXTURES, 'quests.json'), join(dir, 'quests.json'));

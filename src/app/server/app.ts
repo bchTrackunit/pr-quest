@@ -12,7 +12,7 @@ import {
   type CreateMessage,
   ReviewRunService,
 } from '../../features/reviews/server/index.ts';
-import type { AppConfig } from '../../platform/server/config.ts';
+import { type AppConfig, assertSafeConfig } from '../../platform/server/config.ts';
 import { DeviceFlow } from '../../features/auth/server/index.ts';
 import { EventHub } from '../../platform/server/events.ts';
 import { GameService, type StateStore } from '../../features/game/server/index.ts';
@@ -133,6 +133,7 @@ interface ScopedServices {
  */
 export async function createApp(options: AppOptions): Promise<App> {
   const { config, info, warn } = options;
+  assertSafeConfig(config);
   const storage = options.storage ?? createFileStorage(config.stateDir, { info, warn });
   const envKeys: Partial<Record<ApiKeyName, string>> = {
     cursor: config.cursorApiKey,

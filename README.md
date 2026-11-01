@@ -241,7 +241,7 @@ settings, so a typo can't expose the server.
 
 `PR_QUEST_MODE=hosted` is groundwork for serving many players from one address. It needs
 `PR_QUEST_PUBLIC_ORIGIN`, the origin browsers load PR Quest from (for example
-`https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `0.0.0.0`) and accepts the Host
+`https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `::`, every interface) and accepts the Host
 names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's host name).
 Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
 don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server

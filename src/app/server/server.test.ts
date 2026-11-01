@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { AppConfig } from '../../platform/server/config.ts';
+import { type AppConfig, loadConfig } from '../../platform/server/config.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 import { LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import { type RunningServer, startServer, type ServerOverrides } from './server.ts';
@@ -37,14 +37,19 @@ const offline: ServerOverrides = {
 };
 
 async function start(
-  config: Partial<AppConfig> = {},
+  config: AppConfig = LOCAL_CONFIG,
   overrides: ServerOverrides = {},
 ): Promise<RunningServer> {
   running = await startServer(
-    { ...LOCAL_CONFIG, stateDir: join(dir, 'state'), ...config },
+    { ...config, stateDir: join(dir, 'state') },
     { ...offline, ...overrides },
   );
   return running;
+}
+
+/** A local config with fields the types forbid, as plain JavaScript could build it. */
+function misconfigured(patch: Record<string, unknown>): AppConfig {
+  return Object.assign({ ...LOCAL_CONFIG }, patch);
 }
 
 describe('startServer', () => {
@@ -72,7 +77,7 @@ describe('startServer', () => {
     const staticDir = join(dir, 'dist');
     await mkdir(staticDir);
     await writeFile(join(staticDir, 'index.html'), '<!doctype html><title>PR Quest</title>');
-    const server = await start({}, { staticDir });
+    const server = await start(LOCAL_CONFIG, { staticDir });
 
     const response = await fetch(`${server.url}/quests`);
 
@@ -81,7 +86,7 @@ describe('startServer', () => {
   });
 
   test('warns and serves only the API when the static directory has no build', async () => {
-    const server = await start({}, { staticDir: join(dir, 'missing') });
+    const server = await start(LOCAL_CONFIG, { staticDir: join(dir, 'missing') });
 
     expect((await fetch(`${server.url}/`)).status).toBe(404);
     expect(logs.join('\n')).toMatch(/No UI build/);
@@ -98,7 +103,7 @@ describe('startServer', () => {
         saved.delete(name);
       },
     };
-    const server = await start({}, { secrets });
+    const server = await start(LOCAL_CONFIG, { secrets });
 
     await fetch(`${server.url}/api/settings/keys/anthropic`, {
       method: 'PUT',
@@ -110,9 +115,34 @@ describe('startServer', () => {
     await expect(stat(join(dir, 'state', 'secrets.json'))).rejects.toThrow(/ENOENT/);
   });
 
+  test('starts from loadConfig with port 0 for a free port', async () => {
+    running = await startServer(
+      { ...loadConfig({ env: { PR_QUEST_STATE_DIR: join(dir, 'state') } }), port: 0 },
+      offline,
+    );
+
+    expect(running.port).toBeGreaterThan(0);
+    expect((await fetch(`${running.url}/api/health`)).status).toBe(200);
+  });
+
+  test.each([
+    ['listens on every interface', { host: '0.0.0.0' }],
+    ['listens on another address', { host: '192.168.1.20' }],
+    ['accepts a non-loopback Host', { allowedHosts: ['127.0.0.1', 'evil.example'] }],
+    ['trusts a public origin', { publicOrigin: 'https://evil.example' }],
+  ])('refuses a local config that %s', async (_name, patch) => {
+    await expect(start(misconfigured(patch))).rejects.toThrow(/local mode/i);
+    expect(running).toBeUndefined();
+  });
+
+  test('refuses a port outside 0 to 65535', async () => {
+    await expect(start(misconfigured({ port: 70000 }))).rejects.toThrow(/port must be/);
+  });
+
   test('refuses hosted mode without a hosted identity and storage', async () => {
     await expect(
       start({
+        ...LOCAL_CONFIG,
         mode: 'hosted',
         host: '127.0.0.1',
         publicOrigin: 'https://pr-quest.example',

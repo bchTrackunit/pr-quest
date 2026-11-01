@@ -1,7 +1,7 @@
-import { type AppConfig, LOOPBACK_HOST, LOOPBACK_HOSTNAMES } from '../config.ts';
+import { LOOPBACK_HOST, LOOPBACK_HOSTNAMES, type LocalConfig } from '../config.ts';
 
 /** A local-mode config on ephemeral ports; tests set `stateDir` to their own temp directory. */
-export const LOCAL_CONFIG: AppConfig = {
+export const LOCAL_CONFIG: LocalConfig = {
   mode: 'local',
   host: LOOPBACK_HOST,
   port: 0,

@@ -85,14 +85,11 @@ export function loopbackOrigins(ports: ReadonlyArray<number>): Array<string> {
  * loopback names and the API and UI origins. Hosted mode trusts its public origin and allowed
  * hosts, and answers `/api/health` on any Host so the platform can check it by IP address.
  */
-export function trustedRequests(
-  config: Pick<AppConfig, 'mode' | 'uiPort' | 'publicOrigin' | 'allowedHosts'>,
-  port: number,
-): TrustOptions {
+export function trustedRequests(config: AppConfig, port: number): TrustOptions {
   if (config.mode === 'hosted') {
     return {
       allowedHosts: [...config.allowedHosts],
-      allowedOrigins: config.publicOrigin === undefined ? [] : [config.publicOrigin],
+      allowedOrigins: [config.publicOrigin],
       hostCheckExempt: ['health'],
     };
   }

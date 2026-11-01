@@ -11,9 +11,12 @@ export type ServerMode = 'local' | 'hosted';
 
 /** In local mode the server acts as the player, so it only ever listens here. */
 export const LOOPBACK_HOST = '127.0.0.1';
+export type LoopbackHost = typeof LOOPBACK_HOST;
+export type LoopbackHostname = LoopbackHost | 'localhost';
 /** The Host header names local mode accepts, which stops DNS rebinding. */
-export const LOOPBACK_HOSTNAMES: ReadonlyArray<string> = ['127.0.0.1', 'localhost'];
-export const HOSTED_DEFAULT_HOST = '0.0.0.0';
+export const LOOPBACK_HOSTNAMES: ReadonlyArray<LoopbackHostname> = ['127.0.0.1', 'localhost'];
+/** Every interface, IPv6 and (on dual-stack hosts) IPv4, as private networks such as Fly's need. */
+export const HOSTED_DEFAULT_HOST = '::';
 export const DEFAULT_SERVER_PORT = 4317;
 export const DEFAULT_UI_PORT = 4318;
 /** The env file read from the state directory. */
@@ -31,24 +34,39 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
  */
 export const DEFAULT_GITHUB_CLIENT_ID = '';
 
-export interface AppConfig {
-  mode: ServerMode;
+interface BaseConfig {
   linearApiKey?: string;
   cursorApiKey?: string;
   anthropicApiKey?: string;
   /** Enables "Sign in with GitHub"; without it PR Quest relies on the gh CLI's token. */
   githubClientId?: string;
-  /** The address to listen on. Always `LOOPBACK_HOST` in local mode. */
-  host: string;
+  /** 0 picks a free port when the server starts in-process. */
   port: number;
   uiPort: number;
-  /** Hosted mode only: the origin browsers load PR Quest from, such as `https://pr-quest.example`. */
-  publicOrigin?: string;
-  /** Lower-cased host names, without a port, that the Host header may name. */
-  allowedHosts: ReadonlyArray<string>;
   /** Directory for the local state file (XP, achievements, runs). */
   stateDir: string;
 }
+
+/** One player on their own machine. The server acts as them, so nothing but loopback may reach it. */
+export interface LocalConfig extends BaseConfig {
+  mode: 'local';
+  host: LoopbackHost;
+  allowedHosts: ReadonlyArray<LoopbackHostname>;
+  publicOrigin?: never;
+}
+
+/** Many players behind HTTPS. */
+export interface HostedConfig extends BaseConfig {
+  mode: 'hosted';
+  /** The address to listen on. */
+  host: string;
+  /** The origin browsers load PR Quest from, such as `https://pr-quest.example`. */
+  publicOrigin: string;
+  /** Lower-cased host names, without a port, that the Host header may name. */
+  allowedHosts: ReadonlyArray<string>;
+}
+
+export type AppConfig = LocalConfig | HostedConfig;
 
 export interface LoadConfigOptions {
   env?: NodeJS.ProcessEnv;
@@ -81,8 +99,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const read = (name: string): string | undefined =>
     pick(env[name] ?? fileEnv[name] ?? legacyEnv[name]);
 
-  return {
-    ...trustBoundary(read),
+  const base: BaseConfig = {
     linearApiKey: read('LINEAR_API_KEY'),
     cursorApiKey: read('CURSOR_API_KEY'),
     anthropicApiKey: read('ANTHROPIC_API_KEY'),
@@ -91,9 +108,46 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     uiPort: parsePort(read('PR_QUEST_UI_PORT'), DEFAULT_UI_PORT, 'PR_QUEST_UI_PORT'),
     stateDir,
   };
+  return { ...base, ...trustBoundary(read) };
 }
 
-type TrustBoundary = Pick<AppConfig, 'mode' | 'host' | 'publicOrigin' | 'allowedHosts'>;
+type TrustBoundary =
+  | Pick<LocalConfig, 'mode' | 'host' | 'allowedHosts'>
+  | Pick<HostedConfig, 'mode' | 'host' | 'publicOrigin' | 'allowedHosts'>;
+
+/**
+ * Checks a config built by hand, such as `{ ...loadConfig(), port: 0 }` from an embedding app,
+ * where plain JavaScript can get past the types. Local mode acts as the player's GitHub account,
+ * so it must listen on loopback and accept only loopback Host names.
+ */
+export function assertSafeConfig(config: AppConfig): void {
+  const mode: string = config.mode;
+  if (mode !== 'local' && mode !== 'hosted') {
+    throw new Error(`mode must be "local" or "hosted", got "${mode}"`);
+  }
+  assertPort(config.port, 'port', 0);
+  assertPort(config.uiPort, 'uiPort', 0);
+  if (config.mode === 'hosted') {
+    parseOrigin(config.publicOrigin);
+    if (config.allowedHosts.length === 0) {
+      throw new Error('Hosted mode needs at least one allowed host');
+    }
+    return;
+  }
+  const host: string = config.host;
+  if (host !== LOOPBACK_HOST) {
+    throw new Error(`Local mode listens only on ${LOOPBACK_HOST}, got "${host}"`);
+  }
+  const allowedHosts: ReadonlyArray<string> = config.allowedHosts;
+  const foreign = allowedHosts.filter((name) => !LOOPBACK_HOSTNAMES.some((ok) => ok === name));
+  if (foreign.length > 0) {
+    throw new Error(`Local mode accepts only loopback Host names, got ${foreign.join(', ')}`);
+  }
+  const { publicOrigin }: { publicOrigin?: unknown } = config;
+  if (publicOrigin !== undefined) {
+    throw new Error('Local mode has no public origin; that is hosted mode (PR_QUEST_MODE=hosted)');
+  }
+}
 
 /** Who may reach the server: loopback only in local mode, the public origin's hosts when hosted. */
 function trustBoundary(read: (name: string) => string | undefined): TrustBoundary {
@@ -116,7 +170,7 @@ function trustBoundary(read: (name: string) => string | undefined): TrustBoundar
         throw new Error(`${name} only applies in hosted mode (PR_QUEST_MODE=hosted)`);
       }
     }
-    return { mode, host: LOOPBACK_HOST, allowedHosts: LOOPBACK_HOSTNAMES };
+    return { mode: 'local', host: LOOPBACK_HOST, allowedHosts: LOOPBACK_HOSTNAMES };
   }
 
   if (publicOrigin === undefined) {
@@ -126,7 +180,7 @@ function trustBoundary(read: (name: string) => string | undefined): TrustBoundar
   }
   const origin = parseOrigin(publicOrigin);
   return {
-    mode,
+    mode: 'hosted',
     host: host ?? HOSTED_DEFAULT_HOST,
     publicOrigin: origin.origin,
     allowedHosts: allowedHosts === undefined ? [origin.hostname] : parseAllowedHosts(allowedHosts),
@@ -201,8 +255,12 @@ function parsePort(value: string | undefined, fallback: number, name: string): n
     return fallback;
   }
   const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${name} must be an integer between 1 and 65535, got "${value}"`);
-  }
+  assertPort(port, name, 1, value);
   return port;
+}
+
+function assertPort(port: number, name: string, min: number, shown = String(port)): void {
+  if (!Number.isInteger(port) || port < min || port > 65535) {
+    throw new Error(`${name} must be an integer between ${min} and 65535, got "${shown}"`);
+  }
 }
