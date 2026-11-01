@@ -14,10 +14,15 @@ import {
   type SessionFactory,
 } from './sessions.ts';
 
+const ALICE_ID = 1001;
+const BOB_ID = 1002;
+
 function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHubViewer> } = {}) {
   let token = initial.token;
   let nowMs = 0;
-  const viewers = initial.viewers ?? { gho_a: { login: 'Alice', avatarUrl: 'https://a' } };
+  const viewers: Record<string, GitHubViewer> = initial.viewers ?? {
+    gho_a: { id: ALICE_ID, login: 'Alice', avatarUrl: 'https://a' },
+  };
   const fetchViewer = vi.fn(async (forToken: string) => {
     const viewer = viewers[forToken];
     if (!viewer) {
@@ -28,8 +33,9 @@ function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHub
   const stops: Array<string> = [];
   const contexts = new Map<string, SessionContext>();
   const create = vi.fn<SessionFactory>(async (context) => {
-    contexts.set(context.login, context);
-    return { login: context.login, stop: () => stops.push(context.login) };
+    const { login } = context.user;
+    contexts.set(login, context);
+    return { login, stop: () => stops.push(login) };
   });
   const invalidate = vi.fn();
   const sessions = new SessionManager({
@@ -62,7 +68,7 @@ function setup(initial: { token?: ResolvedToken; viewers?: Record<string, GitHub
 }
 
 describe('SessionManager', () => {
-  test("opens the token owner's session with their lower-cased login", async () => {
+  test("opens the token owner's session with their account id and lower-cased login", async () => {
     const { sessions, create } = setup({ token: { token: 'gho_a', source: 'gh' } });
 
     const session = await sessions.current();
@@ -73,7 +79,9 @@ describe('SessionManager', () => {
       avatarUrl: 'https://a',
       tokenSource: 'gh',
     });
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ login: 'alice' }));
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ user: { id: ALICE_ID, login: 'alice' } }),
+    );
   });
 
   test('reuses the session and the identity for the same token', async () => {
@@ -96,7 +104,10 @@ describe('SessionManager', () => {
   test("keeps the session and moves it to the new token when the same user's token changes", async () => {
     const { sessions, setToken, create, stops, contextOf } = setup({
       token: { token: 'gho_a', source: 'gh' },
-      viewers: { gho_a: { login: 'Alice' }, gho_oauth: { login: 'alice' } },
+      viewers: {
+        gho_a: { id: ALICE_ID, login: 'Alice' },
+        gho_oauth: { id: ALICE_ID, login: 'alice' },
+      },
     });
     await sessions.current();
 
@@ -109,10 +120,28 @@ describe('SessionManager', () => {
     await expect(contextOf('alice').token()).resolves.toBe('gho_oauth');
   });
 
+  test('opens a new session when another account now has the same login', async () => {
+    const { sessions, setToken, create, stops, contextOf } = setup({
+      token: { token: 'gho_a', source: 'gh' },
+      viewers: { gho_a: { id: ALICE_ID, login: 'alice' }, gho_new: { id: 2002, login: 'alice' } },
+    });
+    await sessions.current();
+
+    setToken({ token: 'gho_new', source: 'gh' });
+    await sessions.current();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(stops).toEqual(['alice']);
+    expect(contextOf('alice').user).toEqual({ id: 2002, login: 'alice' });
+  });
+
   test('reset closes the open session right away, even before the next lookup', async () => {
     const { sessions, setToken, create, stops, invalidate } = setup({
       token: { token: 'gho_a', source: 'gh' },
-      viewers: { gho_a: { login: 'alice' }, gho_oauth: { login: 'alice' } },
+      viewers: {
+        gho_a: { id: ALICE_ID, login: 'alice' },
+        gho_oauth: { id: ALICE_ID, login: 'alice' },
+      },
     });
     await sessions.current();
 
@@ -137,7 +166,7 @@ describe('SessionManager', () => {
   test("refuses the old session's calls once the token belongs to someone else, mid-flight", async () => {
     const { sessions, setToken, contextOf } = setup({
       token: { token: 'gho_a', source: 'gh' },
-      viewers: { gho_a: { login: 'alice' }, gho_b: { login: 'bob' } },
+      viewers: { gho_a: { id: ALICE_ID, login: 'alice' }, gho_b: { id: BOB_ID, login: 'bob' } },
     });
     await sessions.current();
     const alice = contextOf('alice');
@@ -220,7 +249,7 @@ describe('SessionManager', () => {
   test("stops the previous user's session when another user signs in", async () => {
     const { sessions, setToken, stops } = setup({
       token: { token: 'gho_a', source: 'gh' },
-      viewers: { gho_a: { login: 'alice' }, gho_b: { login: 'bob' } },
+      viewers: { gho_a: { id: ALICE_ID, login: 'alice' }, gho_b: { id: BOB_ID, login: 'bob' } },
     });
     await sessions.current();
 

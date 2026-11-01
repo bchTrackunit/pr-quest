@@ -49,6 +49,8 @@ export type {
 export {
   type AppStorage,
   createFileStorage,
+  type GitHubUser,
+  githubUser,
   MACHINE_SCOPE,
   type StorageScope,
   userScope,

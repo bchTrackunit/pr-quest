@@ -1,13 +1,8 @@
 import { chmod, copyFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { githubLogin, isGitHubLogin } from '../../platform/server/githubUser.ts';
 import { ensurePrivateDir, readIfExists, WriteQueue } from '../../platform/server/privateFiles.ts';
-
-/**
- * GitHub logins are letters, digits and hyphens, never starting with a hyphen, at most 39 long.
- * Enterprise Managed User logins add an underscore and the enterprise's shortcode.
- */
-const LOGIN_PATTERN = /^[a-z\d][a-z\d_-]{0,38}$/i;
 
 /**
  * Files that used to be shared by everyone and now live in each user's folder. `state.json` goes
@@ -24,14 +19,6 @@ const BACKUP_PATTERN =
 
 /** One migration at a time, so two users signing in at once can't both copy the shared state. */
 const migrations = new WriteQueue();
-
-/** `login` lower-cased, as GitHub logins are case-insensitive. Throws when it isn't a login. */
-export function githubLogin(login: string): string {
-  if (!LOGIN_PATTERN.test(login)) {
-    throw new Error(`Not a GitHub login: ${JSON.stringify(login.slice(0, 50))}`);
-  }
-  return login.toLowerCase();
-}
 
 /** `<stateDir>/users/<login>`: one player's game state and quest cache. */
 export function userStateDir(stateDir: string, login: string): string {
@@ -71,8 +58,7 @@ async function migrate(
   await ensurePrivateDir(userDir);
   const ownerFile = join(usersDir, OWNER_FILE);
   let recorded = (await readIfExists(ownerFile))?.trim().toLowerCase();
-  let owner =
-    recorded && LOGIN_PATTERN.test(recorded) ? recorded : await ownerFromBackups(stateDir);
+  let owner = recorded && isGitHubLogin(recorded) ? recorded : await ownerFromBackups(stateDir);
   const hasState = await exists(join(userDir, 'state.json'));
   const stamp = timestamp((options.now ?? (() => new Date()))());
   if (owner === undefined && !hasState && (await anyLegacyFile(stateDir))) {

@@ -1,6 +1,7 @@
 import type { GitHubAccount, GitHubTokenSource } from '../../shared/api.ts';
 import type { GitHubViewer } from '../../features/quests/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
+import { type GitHubUser, githubUser } from '../../platform/server/githubUser.ts';
 import type { ResolvedToken } from '../../features/auth/server/index.ts';
 
 /** A failed `/user` lookup is retried after this long rather than on every request. */
@@ -20,7 +21,8 @@ export interface SessionServices {
 
 /** What a session acts with. Every GitHub call must take its token from `token()`. */
 export interface SessionContext {
-  login: string;
+  /** The token's owner: their immutable account id and lower-cased login. */
+  user: GitHubUser;
   /**
    * The token this session was opened with. Rejects with `SessionEndedError` once the session is
    * closed or the current token is someone else's, so a call never goes out as another account.
@@ -62,8 +64,8 @@ interface Identity {
 }
 
 interface Binding {
-  login: string;
-  /** Moves to a new token only after `/user` showed it belongs to the same login. */
+  user: GitHubUser;
+  /** Moves to a new token only after `/user` showed it belongs to the same account and login. */
   token: string;
   closed: boolean;
 }
@@ -99,7 +101,7 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
       return undefined;
     }
     const viewer = await this.identify(token);
-    const services = await this.servicesFor(viewer.login.toLowerCase(), token.token);
+    const services = await this.servicesFor(githubUser(viewer.id, viewer.login), token.token);
     const account: GitHubAccount = { login: viewer.login, tokenSource: token.source };
     if (viewer.name) {
       account.name = viewer.name;
@@ -195,17 +197,18 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
     return identity.viewer;
   }
 
-  private servicesFor(login: string, token: string): Promise<TServices> {
-    if (this.open?.binding.login === login) {
+  private servicesFor(user: GitHubUser, token: string): Promise<TServices> {
+    const bound = this.open?.binding.user;
+    if (this.open && bound?.id === user.id && bound.login === user.login) {
       this.open.binding.token = token;
       return this.open.services;
     }
     this.close();
-    this.options.log(`Opening ${login}'s game`);
-    const binding: Binding = { login, token, closed: false };
+    this.options.log(`Opening ${user.login}'s game`);
+    const binding: Binding = { user, token, closed: false };
     const open = {
       binding,
-      services: this.options.create({ login, token: () => this.tokenFor(binding) }),
+      services: this.options.create({ user, token: () => this.tokenFor(binding) }),
     };
     this.open = open;
     open.services.catch(() => {
@@ -222,7 +225,7 @@ export class SessionManager<TServices extends SessionServices = SessionServices>
       throw new NotSignedInError();
     }
     if (binding.closed || current.token !== binding.token) {
-      throw new SessionEndedError(binding.login);
+      throw new SessionEndedError(binding.user.login);
     }
     return current.token;
   }

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { DocumentCodec } from '../documentCodec.ts';
 import { openTestDatabase, type TestDatabase } from '../test-utils/postgres.ts';
 import type { Database } from './database.ts';
-import { PostgresDocument, readDocument, writeDocument } from './documents.ts';
+import { ensureUser, PostgresDocument, readDocument, writeDocument } from './documents.ts';
 
 interface Counter {
   count: number;
@@ -25,7 +25,8 @@ const COUNTER: DocumentCodec<Counter> = {
   encode: (value) => ({ version: 2, count: value.count }),
 };
 
-const KEY = { login: 'octocat', kind: 'counter' };
+const OCTOCAT = { id: 583231, login: 'octocat' };
+const KEY = { user: OCTOCAT, kind: 'counter' };
 
 let database: TestDatabase;
 let db: Database;
@@ -37,6 +38,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await database.reset();
+  await ensureUser(db, OCTOCAT);
 });
 
 afterAll(async () => {
@@ -53,11 +55,10 @@ async function storedRow(): Promise<unknown> {
 }
 
 async function putBody(body: unknown, revision = 1): Promise<void> {
-  await db.query("INSERT INTO users (login) VALUES ('octocat') ON CONFLICT DO NOTHING");
   await db.query(
-    `INSERT INTO user_documents (login, kind, body, revision) VALUES ('octocat', 'counter', $1::jsonb, $2)
-     ON CONFLICT (login, kind) DO UPDATE SET body = EXCLUDED.body, revision = EXCLUDED.revision`,
-    [JSON.stringify(body), revision],
+    `INSERT INTO user_documents (github_id, kind, body, revision) VALUES ($1, 'counter', $2::jsonb, $3)
+     ON CONFLICT (github_id, kind) DO UPDATE SET body = EXCLUDED.body, revision = EXCLUDED.revision`,
+    [OCTOCAT.id, JSON.stringify(body), revision],
   );
 }
 
@@ -166,9 +167,9 @@ describe('PostgresDocument', () => {
 
     expect(document.value).toEqual({ count: 0 });
     expect(onWarning).toHaveBeenCalledWith(expect.stringMatching(/user_documents_quarantine/));
-    expect(
-      (await db.query('SELECT login, kind, body FROM user_documents_quarantine')).rows,
-    ).toEqual([{ login: 'octocat', kind: 'counter', body: { version: 2, count: 'many' } }]);
+    expect((await db.query('SELECT kind, body FROM user_documents_quarantine')).rows).toEqual([
+      { kind: 'counter', body: { version: 2, count: 'many' } },
+    ]);
     await document.update(increment);
     expect(await storedRow()).toMatchObject({ body: { version: 2, count: 1 } });
   });
@@ -176,12 +177,43 @@ describe('PostgresDocument', () => {
 
 describe('readDocument and writeDocument', () => {
   test('read what was last written, and nothing before the first write', async () => {
-    await db.query("INSERT INTO users (login) VALUES ('octocat')");
     expect(await readDocument(db, KEY)).toBeUndefined();
 
     await writeDocument(db, KEY, { version: 1, first: true });
     await writeDocument(db, KEY, { version: 1, second: true });
 
     expect(await readDocument(db, KEY)).toEqual({ version: 1, second: true });
+  });
+});
+
+describe('ensureUser', () => {
+  const users = async () =>
+    (await db.query('SELECT github_id::int AS id, login FROM users ORDER BY github_id')).rows;
+
+  test("follows a renamed account by its id, keeping the account's documents", async () => {
+    await (await open()).update(increment);
+
+    expect(await ensureUser(db, { id: OCTOCAT.id, login: 'octo-renamed' })).toEqual({});
+
+    expect(await users()).toEqual([{ id: OCTOCAT.id, login: 'octo-renamed' }]);
+    expect((await open()).value).toEqual({ count: 1 });
+  });
+
+  test('gives a login another account now holds to that account, which starts empty', async () => {
+    await (await open()).update(increment);
+    const newcomer = { id: 9_000_001, login: 'octocat' };
+
+    expect(await ensureUser(db, newcomer)).toEqual({ detachedFrom: OCTOCAT.id });
+
+    expect(await users()).toEqual([
+      { id: OCTOCAT.id, login: null },
+      { id: newcomer.id, login: 'octocat' },
+    ]);
+    expect(
+      (await PostgresDocument.open(db, { user: newcomer, kind: 'counter' }, COUNTER)).value,
+    ).toEqual({
+      count: 0,
+    });
+    expect((await open()).value).toEqual({ count: 1 });
   });
 });

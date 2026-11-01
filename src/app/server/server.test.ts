@@ -176,7 +176,7 @@ describe('startServer', () => {
       {
         identity: async () => ({
           resolve: async () => undefined,
-          scope: async () => userScope('nobody'),
+          scope: async () => userScope({ id: 1, login: 'nobody' }),
           scopeFor: userScope,
           signOut: async () => undefined,
           rejected: () => undefined,

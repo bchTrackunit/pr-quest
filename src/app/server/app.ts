@@ -37,6 +37,7 @@ import {
   type RouteHandlers,
 } from '../../platform/server/router.ts';
 import type { SecretStore } from '../../platform/server/secrets.ts';
+import { type GitHubUser, githubUser } from '../../platform/server/githubUser.ts';
 import {
   type IdentityContext,
   type IdentityFactory,
@@ -208,8 +209,13 @@ export async function createApp(options: AppOptions): Promise<App> {
    * must not load a second copy that a run still finishing in the old session would overwrite.
    */
   const stores = new Map<string, Promise<StateStore>>();
+  /** Local games live in a folder per login, hosted ones under the account id, so key by both. */
+  const userKey = ({ id, login }: GitHubUser): string => `${id}:${login}`;
 
-  const openUser = async ({ login, token }: SessionContext): Promise<UserServices> => {
+  const openUser = async (session: SessionContext): Promise<UserServices> => {
+    const { token } = session;
+    const player = githubUser(session.user.id, session.user.login);
+    const { login } = player;
     const github = new GitHubClient(
       new GitHubApi({
         token,
@@ -219,15 +225,16 @@ export async function createApp(options: AppOptions): Promise<App> {
       { onWarning: warn },
     );
     // First, so a scope the app refuses leaves the player's game unopened.
-    const scoped = await servicesFor(identity.scopeFor(login));
-    let opening = stores.get(login);
+    const scoped = await servicesFor(identity.scopeFor(player));
+    const storeKey = userKey(player);
+    let opening = stores.get(storeKey);
     const firstOpen = opening === undefined;
     if (!opening) {
-      opening = storage.gameState(login);
-      stores.set(login, opening);
-      opening.catch(() => stores.delete(login));
+      opening = storage.gameState(player);
+      stores.set(storeKey, opening);
+      opening.catch(() => stores.delete(storeKey));
     }
-    const [store, cache] = await Promise.all([opening, storage.questCache(login)]);
+    const [store, cache] = await Promise.all([opening, storage.questCache(player)]);
     const events = new EventHub();
     const game = new GameService(store, events, {
       login,
@@ -271,9 +278,10 @@ export async function createApp(options: AppOptions): Promise<App> {
     };
   };
 
-  const releaseUser = (login: string): void => {
-    stores.delete(login);
-    const scope = identity.scopeFor(login);
+  const releaseUser = (given: GitHubUser): void => {
+    const player = githubUser(given.id, given.login);
+    stores.delete(userKey(player));
+    const scope = identity.scopeFor(player);
     if (scope.kind === 'user') {
       scopes.delete(scopeKey(scope));
     }

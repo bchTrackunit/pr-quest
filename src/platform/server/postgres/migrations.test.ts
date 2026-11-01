@@ -34,20 +34,44 @@ describe('migrate', () => {
     await expect(assertSchemaCurrent(db)).resolves.toBeUndefined();
   });
 
-  test('creates the user, document and secret tables', async () => {
+  test('creates the user, document and secret tables, keyed by GitHub account id', async () => {
     const { db } = database;
     await migrate(db);
 
-    await db.query("INSERT INTO users (login) VALUES ('octocat')");
+    await db.query("INSERT INTO users (github_id, login) VALUES (1, 'octocat')");
     await db.query(
-      "INSERT INTO user_documents (login, kind, body, revision) VALUES ('octocat', 'game', $1::jsonb, 1)",
+      "INSERT INTO user_documents (github_id, kind, body, revision) VALUES (1, 'game', $1::jsonb, 1)",
       [JSON.stringify({ version: 2 })],
     );
 
     expect((await db.query('SELECT kind, body FROM user_documents')).rows).toEqual([
       { kind: 'game', body: { version: 2 } },
     ]);
-    await expect(db.query("INSERT INTO users (login) VALUES ('OctoCat')")).rejects.toThrow();
+    await expect(
+      db.query("INSERT INTO users (github_id, login) VALUES (2, 'OctoCat')"),
+    ).rejects.toThrow();
+    await expect(
+      db.query("INSERT INTO users (github_id, login) VALUES (2, 'octocat')"),
+    ).rejects.toThrow();
+  });
+
+  test("deleting a user deletes their documents, keys and secrets, but a data key in use can't go alone", async () => {
+    const { db } = database;
+    await migrate(db);
+    await db.query("INSERT INTO users (github_id, login) VALUES (1, 'octocat')");
+    await db.query(
+      "INSERT INTO user_data_keys (github_id, version, master_key_id, wrapped_key) VALUES (1, 1, 'mk', '\\x00')",
+    );
+    await db.query(
+      "INSERT INTO user_secrets (github_id, name, data_key_version, sealed) VALUES (1, 'cursor', 1, '\\x00')",
+    );
+
+    await expect(db.query('DELETE FROM user_data_keys')).rejects.toThrow();
+    await db.query('DELETE FROM users WHERE github_id = 1');
+
+    for (const table of ['user_documents', 'user_data_keys', 'user_secrets']) {
+      expect((await db.query(`SELECT count(*)::int AS n FROM ${table}`)).rows).toEqual([{ n: 0 }]);
+    }
   });
 
   test('refuses to migrate a database a newer build migrated, before changing anything', async () => {

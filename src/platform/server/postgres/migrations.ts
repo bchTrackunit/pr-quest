@@ -24,46 +24,54 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   {
     id: '0001_users_documents_secrets',
     statements: [
+      // Keyed by GitHub's numeric account id: a login can be renamed and then taken by another
+      // account, which must never inherit the first one's rows. `login` is NULL once that happens.
       `CREATE TABLE users (
-        login text PRIMARY KEY CHECK (login = lower(login)),
-        created_at timestamptz NOT NULL DEFAULT now()
+        github_id bigint PRIMARY KEY CHECK (github_id > 0),
+        login text UNIQUE CHECK (login = lower(login)),
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
       )`,
       // One JSON document per user and kind (settings, game, quests), at the codec's `version`.
       `CREATE TABLE user_documents (
-        login text NOT NULL REFERENCES users (login) ON DELETE CASCADE,
+        github_id bigint NOT NULL REFERENCES users (github_id) ON DELETE CASCADE,
         kind text NOT NULL CHECK (kind ~ '^[a-z][a-z-]*$'),
         body jsonb NOT NULL,
         revision integer NOT NULL CHECK (revision > 0),
         updated_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (login, kind)
+        PRIMARY KEY (github_id, kind)
       )`,
-      // Documents this build couldn't read, kept instead of overwritten.
+      // Documents this build couldn't read, kept once per revision instead of overwritten. The
+      // unique key also indexes the table by user.
       `CREATE TABLE user_documents_quarantine (
         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        login text NOT NULL REFERENCES users (login) ON DELETE CASCADE,
+        github_id bigint NOT NULL REFERENCES users (github_id) ON DELETE CASCADE,
         kind text NOT NULL,
+        source_revision integer NOT NULL,
         body jsonb NOT NULL,
-        quarantined_at timestamptz NOT NULL DEFAULT now()
+        quarantined_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (github_id, kind, source_revision)
       )`,
       // Each user's data keys, wrapped by a master key. The highest version seals new secrets.
       `CREATE TABLE user_data_keys (
-        login text NOT NULL REFERENCES users (login) ON DELETE CASCADE,
+        github_id bigint NOT NULL REFERENCES users (github_id) ON DELETE CASCADE,
         version integer NOT NULL CHECK (version > 0),
         master_key_id text NOT NULL,
         wrapped_key bytea NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         rewrapped_at timestamptz,
-        PRIMARY KEY (login, version)
+        PRIMARY KEY (github_id, version)
       )`,
+      // A data key that still seals a secret can't be deleted on its own; deleting the user
+      // removes both.
       `CREATE TABLE user_secrets (
-        login text NOT NULL,
+        github_id bigint NOT NULL REFERENCES users (github_id) ON DELETE CASCADE,
         name text NOT NULL CHECK (name IN ('github', 'cursor', 'anthropic', 'linear')),
         data_key_version integer NOT NULL,
         sealed bytea NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (login, name),
-        FOREIGN KEY (login, data_key_version)
-          REFERENCES user_data_keys (login, version) ON DELETE CASCADE
+        PRIMARY KEY (github_id, name),
+        FOREIGN KEY (github_id, data_key_version) REFERENCES user_data_keys (github_id, version)
       )`,
     ],
   },

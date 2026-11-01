@@ -82,7 +82,7 @@ function fixtureRoute(
       return overrides.batch ? overrides.batch(call) : ok(BATCH);
     }
     if (call.path === '/user') {
-      return json({ login: 'player-login', avatar_url: 'https://avatars/x' });
+      return json({ id: 4242, login: 'player-login', avatar_url: 'https://avatars/x' });
     }
     if (call.path === '/rate_limit') {
       return ok(RATE_LIMIT);
@@ -459,16 +459,25 @@ describe('GitHubClient.fetchRateLimitReset', () => {
 });
 
 describe('GitHubClient.fetchViewer', () => {
-  test("reads the player's login, name and avatar from /user", async () => {
+  test("reads the player's account id, login, name and avatar from /user", async () => {
     const github = fakeGitHub(() =>
-      json({ login: 'Player', name: 'Pat Player', avatar_url: 'https://avatars/p' }),
+      json({ id: 583231, login: 'Player', name: 'Pat Player', avatar_url: 'https://avatars/p' }),
     );
 
     await expect(github.client().fetchViewer()).resolves.toEqual({
+      id: 583231,
       login: 'Player',
       name: 'Pat Player',
       avatarUrl: 'https://avatars/p',
     });
+  });
+
+  test('refuses a /user response without a numeric account id', async () => {
+    for (const id of [undefined, '583231', 0, 1.5]) {
+      const github = fakeGitHub(() => json({ id, login: 'Player' }));
+
+      await expect(github.client().fetchViewer()).rejects.toThrow();
+    }
   });
 });
 

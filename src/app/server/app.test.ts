@@ -30,6 +30,7 @@ import {
   type StorageScope,
   userScope,
 } from './storage.ts';
+import { type GitHubUser, githubUser } from '../../platform/server/githubUser.ts';
 import type { CreateMessage } from '../../features/reviews/server/index.ts';
 import type { AppConfig, HostedConfig } from '../../platform/server/config.ts';
 import { createRouter } from '../../platform/server/router.ts';
@@ -53,6 +54,15 @@ let server: Server | undefined;
 let port: number;
 let ghToken: string | undefined;
 let logins: Record<string, string>;
+/** Overrides the account id `/user` answers with for a token, as for a login another account took. */
+let tokenIds: Record<string, number>;
+
+/** GitHub's account id for each login the fake GitHub answers for. */
+const ACCOUNT_IDS: Record<string, number> = { brianchristensen: 4101, 'other-player': 4102 };
+const accountOf = (login: string): GitHubUser => ({
+  id: ACCOUNT_IDS[login.toLowerCase()] ?? 4199,
+  login: login.toLowerCase(),
+});
 let logs: Array<string>;
 
 type Route = (url: URL, init: RequestInit, token: string) => Promise<Response | undefined>;
@@ -71,7 +81,7 @@ const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Respons
   if (pathname === '/user') {
     const login = logins[auth.replace(/^Bearer /, '')];
     return login
-      ? Response.json({ login })
+      ? Response.json({ id: tokenIds[auth.replace(/^Bearer /, '')] ?? accountOf(login).id, login })
       : Response.json({ message: 'Bad credentials' }, { status: 401 });
   }
   if (pathname === '/search/issues') {
@@ -184,6 +194,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-app-'));
   ghToken = undefined;
   logins = { [GH_TOKEN]: 'BrianChristensen', [OAUTH_TOKEN]: 'Other-Player' };
+  tokenIds = {};
   logs = [];
   route = undefined;
   createMessage = async () => {
@@ -437,7 +448,7 @@ describe('createApp', () => {
 
 /**
  * A stand-in for a hosted sign-in: the `X-Test-Token` header names the GitHub token, and every
- * login keeps its own session open at the same time. It names the session in an `X-Test-Session`
+ * account keeps its own session open at the same time. It names the session in an `X-Test-Session`
  * response header, as a hosted resolver would set its cookie, and releases a player who signs out.
  */
 const headerIdentity: IdentityFactory<UserServices> = async ({
@@ -446,45 +457,45 @@ const headerIdentity: IdentityFactory<UserServices> = async ({
   releaseUser,
 }) => {
   const open = new Map<string, Promise<Session<UserServices>>>();
-  const sessionOf = async (req: IncomingMessage, res: ServerResponse) => {
+  const signedIn = async (req: IncomingMessage, res: ServerResponse) => {
     const token = req.headers['x-test-token'];
     if (typeof token !== 'string') {
       return undefined;
     }
-    const { login } = await fetchViewer(token);
-    const key = login.toLowerCase();
+    const viewer = await fetchViewer(token);
+    const user = githubUser(viewer.id, viewer.login);
+    const key = String(user.id);
     let session = open.get(key);
     if (!session) {
-      session = openUser({ login: key, token: async () => token }).then((services) => ({
-        account: { login, tokenSource: 'oauth' as const },
+      session = openUser({ user, token: async () => token }).then((services) => ({
+        account: { login: viewer.login, tokenSource: 'oauth' as const },
         services,
       }));
       open.set(key, session);
     }
     res.setHeader('X-Test-Session', key);
-    return session;
+    return { user, key, session: await session };
   };
   return {
-    resolve: sessionOf,
+    resolve: async (req, res) => (await signedIn(req, res))?.session,
     scope: async (req, res) => {
-      const session = await sessionOf(req, res);
-      if (!session) {
+      const signed = await signedIn(req, res);
+      if (!signed) {
         throw new NotSignedInError();
       }
-      return userScope(session.account.login);
+      return userScope(signed.user);
     },
     scopeFor: userScope,
     signOut: async (req, res) => {
-      const session = await sessionOf(req, res);
-      if (!session) {
+      const signed = await signedIn(req, res);
+      if (!signed) {
         return undefined;
       }
-      const key = session.account.login.toLowerCase();
       res.removeHeader('X-Test-Session');
-      open.delete(key);
-      session.services.stop();
-      releaseUser(key);
-      return session.account;
+      open.delete(signed.key);
+      signed.session.services.stop();
+      releaseUser(signed.user);
+      return signed.session.account;
     },
     rejected: () => undefined,
     warmUp: async () => undefined,
@@ -595,7 +606,7 @@ describe('createApp with an injected identity and storage', () => {
 
     const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
 
-    expect(player.headers['x-test-session']).toBe('brianchristensen');
+    expect(player.headers['x-test-session']).toBe(String(accountOf('brianchristensen').id));
   });
 
   test("serves the identity's own routes outside the JSON API", async () => {
@@ -711,9 +722,9 @@ describe('createApp in hosted mode', () => {
       identity: headerIdentity,
       storage: {
         ...storage,
-        gameState: async (login) => {
+        gameState: async (user) => {
           gameStates += 1;
-          return storage.gameState(login);
+          return storage.gameState(user);
         },
       },
     });
@@ -725,7 +736,9 @@ describe('createApp in hosted mode', () => {
     await send('GET', '/api/player', undefined, as(GH_TOKEN));
 
     expect(gameStates).toBe(2);
-    expect(scopes.filter((key) => key === 'user:brianchristensen')).toHaveLength(4);
+    expect(scopes.filter((key) => key === `user:${accountOf('brianchristensen').id}`)).toHaveLength(
+      4,
+    );
   });
 
   test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
@@ -759,9 +772,9 @@ describe('createApp in hosted mode', () => {
       identity: headerIdentity,
       storage: {
         ...storage,
-        gameState: async (login) => {
+        gameState: async (user) => {
           gameStates += 1;
-          return storage.gameState(login);
+          return storage.gameState(user);
         },
       },
     });
@@ -871,12 +884,25 @@ describe('createApp on Postgres storage', () => {
     expect(sealed).not.toContain(ANTHROPIC_KEY);
   });
 
+  test("never shows a login's new owner the keys or game of the account that held it", async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+    const reused = 'gho_login_reused';
+    logins[reused] = 'BrianChristensen';
+    tokenIds[reused] = 777_000_001;
+
+    const settings = await send('GET', '/api/settings', undefined, as(reused));
+
+    expect(settings.body).toMatchObject({ keys: { anthropic: { set: false } } });
+    expect(logs.join('\n')).toMatch(/brianchristensen now belongs to GitHub id 777000001/);
+  });
+
   test("shows the streak by the calendar of the player's time zone", async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     // 07:00 UTC on the 12th is still the 11th in Los Angeles, the day after the last review.
     vi.setSystemTime(new Date('2026-11-12T07:00:00Z'));
     const storage = await postgres();
-    const seeded = await storage.gameState('brianchristensen');
+    const seeded = await storage.gameState(accountOf('brianchristensen'));
     await seeded.update((state) => ({
       ...state,
       game: { ...state.game, streakDays: 3, lastReviewDate: '2026-11-10' },

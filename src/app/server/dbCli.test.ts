@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { MasterKeyring } from '../../platform/server/envelope.ts';
 import type { Database } from '../../platform/server/postgres/database.ts';
 import { MIGRATIONS } from '../../platform/server/postgres/migrations.ts';
+import { ensureUser } from '../../platform/server/postgres/documents.ts';
 import { PostgresSecretStore } from '../../platform/server/postgres/secrets.ts';
 import { openTestDatabase, type TestDatabase } from '../../platform/server/test-utils/postgres.ts';
 import { runDbCommand } from './dbCli.ts';
@@ -59,9 +60,11 @@ describe('runDbCommand', () => {
   test('rewrap-keys rewraps data keys from a previous master key', async () => {
     await run(['migrate']);
     const oldKey = randomBytes(32).toString('base64');
+    const octocat = { id: 583231, login: 'octocat' };
+    await ensureUser(database.db, octocat);
     const store = await PostgresSecretStore.open(
       database.db,
-      'octocat',
+      octocat,
       MasterKeyring.fromConfig({ current: oldKey }),
     );
     await store.set('cursor', 'key_cursor');

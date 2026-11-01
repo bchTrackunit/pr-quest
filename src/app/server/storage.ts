@@ -1,6 +1,7 @@
 import { FileStateStore, type StateStore } from '../../features/game/server/index.ts';
 import { FileQuestCache, type QuestCache } from '../../features/quests/server/index.ts';
 import { FileSettingsStore, type SettingsStore } from '../../features/settings/server/index.ts';
+import { type GitHubUser, githubUser } from '../../platform/server/githubUser.ts';
 import { FileSecretStore, type SecretStore } from '../../platform/server/secrets.ts';
 import { migrateLegacyState, userStateDir } from './userState.ts';
 
@@ -10,17 +11,23 @@ import { migrateLegacyState, userStateDir } from './userState.ts';
  */
 export type StorageScope =
   | { readonly kind: 'machine' }
-  | { readonly kind: 'user'; readonly login: string };
+  | { readonly kind: 'user'; readonly user: GitHubUser };
+
+export type { GitHubUser };
+export { githubUser };
 
 export const MACHINE_SCOPE: StorageScope = { kind: 'machine' };
 
-/** GitHub logins are case-insensitive, so a scope always holds the lower-cased one. */
-export function userScope(login: string): StorageScope {
-  return { kind: 'user', login: login.toLowerCase() };
+/**
+ * A signed-in user's scope. Hosted data belongs to `user.id`, which never changes; the login can be
+ * renamed and taken by another account. The login is lower-cased, as logins are case-insensitive.
+ */
+export function userScope(user: GitHubUser): StorageScope {
+  return { kind: 'user', user: githubUser(user.id, user.login) };
 }
 
 export function scopeKey(scope: StorageScope): string {
-  return scope.kind === 'machine' ? 'machine' : `user:${scope.login}`;
+  return scope.kind === 'machine' ? 'machine' : `user:${scope.user.id}`;
 }
 
 /**
@@ -32,10 +39,10 @@ export interface AppStorage {
   secrets: (scope: StorageScope) => Promise<SecretStore>;
   /** The review provider and models of `scope`. */
   settings: (scope: StorageScope) => Promise<SettingsStore>;
-  /** `login`'s XP, achievements and review runs. */
-  gameState: (login: string) => Promise<StateStore>;
-  /** `login`'s last quest list and any rate-limit backoff. */
-  questCache: (login: string) => Promise<QuestCache>;
+  /** `user`'s XP, achievements and review runs. */
+  gameState: (user: GitHubUser) => Promise<StateStore>;
+  /** `user`'s last quest list and any rate-limit backoff. */
+  questCache: (user: GitHubUser) => Promise<QuestCache>;
 }
 
 export interface FileStorageOptions {
@@ -47,7 +54,8 @@ export interface FileStorageOptions {
 
 /**
  * The JSON files in the state directory. Keys and settings are per machine, in `secrets.json` and
- * `settings.json`; each player's game and quest cache live in `users/<login>/`. A user scope is
+ * `settings.json`; each player's game and quest cache live in `users/<login>/`, as a local machine
+ * has no other owner of that login. A user scope is
  * refused, because the machine's secrets hold the local player's GitHub token.
  */
 export function createFileStorage(stateDir: string, options: FileStorageOptions): AppStorage {
@@ -68,7 +76,7 @@ export function createFileStorage(stateDir: string, options: FileStorageOptions)
       settings ??= FileSettingsStore.open(stateDir, { onWarning: warn });
       return settings;
     },
-    gameState: async (login) => {
+    gameState: async ({ login }) => {
       const dir = userStateDir(stateDir, login);
       const { migrated } = await migrateLegacyState(stateDir, login, { onWarning: warn });
       if (migrated.length > 0) {
@@ -78,7 +86,7 @@ export function createFileStorage(stateDir: string, options: FileStorageOptions)
       }
       return FileStateStore.open(dir, { onWarning: warn });
     },
-    questCache: async (login) =>
+    questCache: async ({ login }) =>
       new FileQuestCache(userStateDir(stateDir, login), { onWarning: warn }),
   };
 }
@@ -86,7 +94,7 @@ export function createFileStorage(stateDir: string, options: FileStorageOptions)
 function assertMachineScope(scope: StorageScope): void {
   if (scope.kind !== 'machine') {
     throw new Error(
-      `The file storage keeps only the machine's keys and settings, not per-user ones for ${scope.login}; inject a storage that has them`,
+      `The file storage keeps only the machine's keys and settings, not per-user ones for ${scope.user.login}; inject a storage that has them`,
     );
   }
 }

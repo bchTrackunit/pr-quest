@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
 import { type MasterKeyring, newDataKey, openSealed, seal } from '../envelope.ts';
+import type { GitHubUser } from '../githubUser.ts';
 import { WriteQueue } from '../privateFiles.ts';
 import { SECRET_NAMES, type SecretName, type SecretStore } from '../secrets.ts';
 import { BytesSchema, type Database, rowsOf, type SqlClient } from './database.ts';
-import { ensureUser } from './documents.ts';
+import { userLabel } from './documents.ts';
 
 const DataKeyRowSchema = z.object({
-  login: z.string(),
+  github_id: z.string().transform(Number),
   version: z.number().int().positive(),
   master_key_id: z.string(),
   wrapped_key: BytesSchema,
@@ -25,10 +26,17 @@ interface DataKey {
   key: Buffer;
 }
 
-/** Binds a wrapped data key to its user and version. */
-const dataKeyContext = (login: string, version: number): string => `${login}:data-key:${version}`;
-/** Binds a sealed secret to its user and name, so it can't be moved to another row. */
-const secretContext = (login: string, name: SecretName): string => `${login}:secret:${name}`;
+/**
+ * Binds a wrapped data key to its account and version. The account is its GitHub id, never the
+ * login, which another account can take over.
+ */
+const dataKeyContext = (githubId: number, version: number): string =>
+  `user:${githubId}:data-key:${version}`;
+/** Binds a sealed secret to its account and name, so it can't be moved to another row. */
+const secretContext = (githubId: number, name: SecretName): string =>
+  `user:${githubId}:secret:${name}`;
+
+const DATA_KEY_COLUMNS = 'github_id::text AS github_id, version, master_key_id, wrapped_key';
 
 /**
  * One user's secrets in `user_secrets`, each sealed with the user's data key, which the master key
@@ -37,7 +45,7 @@ const secretContext = (login: string, name: SecretName): string => `${login}:sec
  */
 export class PostgresSecretStore implements SecretStore {
   private readonly db: Database;
-  private readonly login: string;
+  private readonly user: GitHubUser;
   private readonly keyring: MasterKeyring;
   private readonly writes = new WriteQueue();
   private readonly secrets: Map<SecretName, string>;
@@ -45,30 +53,33 @@ export class PostgresSecretStore implements SecretStore {
 
   private constructor(
     db: Database,
-    login: string,
+    user: GitHubUser,
     keyring: MasterKeyring,
     secrets: Map<SecretName, string>,
   ) {
     this.db = db;
-    this.login = login;
+    this.user = user;
     this.keyring = keyring;
     this.secrets = secrets;
   }
 
-  /** `login` must be lower-cased. Throws when a secret can't be decrypted with `keyring`. */
+  /**
+   * `user` must already be in `users` (see `ensureUser`). Throws when a secret can't be decrypted
+   * with `keyring`.
+   */
   public static async open(
     db: Database,
-    login: string,
+    user: GitHubUser,
     keyring: MasterKeyring,
   ): Promise<PostgresSecretStore> {
-    await ensureUser(db, login);
     const rows = rowsOf(
       await db.query(
-        `SELECT s.name, s.sealed, k.login, k.version, k.master_key_id, k.wrapped_key
+        `SELECT s.name, s.sealed, k.github_id::text AS github_id, k.version, k.master_key_id,
+                k.wrapped_key
          FROM user_secrets s
-         JOIN user_data_keys k ON k.login = s.login AND k.version = s.data_key_version
-         WHERE s.login = $1`,
-        [login],
+         JOIN user_data_keys k ON k.github_id = s.github_id AND k.version = s.data_key_version
+         WHERE s.github_id = $1`,
+        [user.id],
       ),
       SecretRowSchema,
     );
@@ -80,9 +91,9 @@ export class PostgresSecretStore implements SecretStore {
         key = await unwrapDataKey(db, keyring, row);
         keys.set(row.version, key);
       }
-      secrets.set(row.name, openSecret(key, row.sealed, login, row.name));
+      secrets.set(row.name, openSecret(key, row.sealed, user, row.name));
     }
-    return new PostgresSecretStore(db, login, keyring, secrets);
+    return new PostgresSecretStore(db, user, keyring, secrets);
   }
 
   public get(name: SecretName): string | undefined {
@@ -92,17 +103,18 @@ export class PostgresSecretStore implements SecretStore {
   public set(name: SecretName, value: string): Promise<void> {
     return this.writes.run(async () => {
       const dataKey = await this.db.transaction(async (tx) => {
-        const current = this.dataKey ?? (await latestDataKey(tx, this.login, this.keyring));
+        const current = this.dataKey ?? (await latestDataKey(tx, this.user.id, this.keyring));
         await tx.query(
-          `INSERT INTO user_secrets (login, name, data_key_version, sealed) VALUES ($1, $2, $3, $4)
-           ON CONFLICT (login, name) DO UPDATE
+          `INSERT INTO user_secrets (github_id, name, data_key_version, sealed)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (github_id, name) DO UPDATE
              SET data_key_version = EXCLUDED.data_key_version, sealed = EXCLUDED.sealed,
                  updated_at = now()`,
           [
-            this.login,
+            this.user.id,
             name,
             current.version,
-            seal(current.key, value, secretContext(this.login, name)),
+            seal(current.key, value, secretContext(this.user.id, name)),
           ],
         );
         return current;
@@ -114,8 +126,8 @@ export class PostgresSecretStore implements SecretStore {
 
   public delete(name: SecretName): Promise<void> {
     return this.writes.run(async () => {
-      await this.db.query('DELETE FROM user_secrets WHERE login = $1 AND name = $2', [
-        this.login,
+      await this.db.query('DELETE FROM user_secrets WHERE github_id = $1 AND name = $2', [
+        this.user.id,
         name,
       ]);
       this.secrets.delete(name);
@@ -132,10 +144,9 @@ export async function rewrapDataKeys(
   keyring: MasterKeyring,
 ): Promise<{ rewrapped: number }> {
   const rows = rowsOf(
-    await db.query(
-      'SELECT login, version, master_key_id, wrapped_key FROM user_data_keys WHERE master_key_id <> $1',
-      [keyring.currentId],
-    ),
+    await db.query(`SELECT ${DATA_KEY_COLUMNS} FROM user_data_keys WHERE master_key_id <> $1`, [
+      keyring.currentId,
+    ]),
     DataKeyRowSchema,
   );
   let rewrapped = 0;
@@ -148,31 +159,31 @@ export async function rewrapDataKeys(
 /** The user's newest data key, creating version 1 when they have none yet. */
 async function latestDataKey(
   tx: SqlClient,
-  login: string,
+  githubId: number,
   keyring: MasterKeyring,
 ): Promise<DataKey> {
   const select = async () =>
     rowsOf(
       await tx.query(
-        `SELECT login, version, master_key_id, wrapped_key FROM user_data_keys
-         WHERE login = $1 ORDER BY version DESC LIMIT 1`,
-        [login],
+        `SELECT ${DATA_KEY_COLUMNS} FROM user_data_keys
+         WHERE github_id = $1 ORDER BY version DESC LIMIT 1`,
+        [githubId],
       ),
       DataKeyRowSchema,
     )[0];
   let row = await select();
   if (!row) {
-    const { masterKeyId, wrapped } = keyring.wrap(newDataKey(), dataKeyContext(login, 1));
+    const { masterKeyId, wrapped } = keyring.wrap(newDataKey(), dataKeyContext(githubId, 1));
     // A second server creating the key at the same time wins; this one then uses its key.
     await tx.query(
-      `INSERT INTO user_data_keys (login, version, master_key_id, wrapped_key)
-       VALUES ($1, 1, $2, $3) ON CONFLICT (login, version) DO NOTHING`,
-      [login, masterKeyId, wrapped],
+      `INSERT INTO user_data_keys (github_id, version, master_key_id, wrapped_key)
+       VALUES ($1, 1, $2, $3) ON CONFLICT (github_id, version) DO NOTHING`,
+      [githubId, masterKeyId, wrapped],
     );
     row = await select();
   }
   if (!row) {
-    throw new Error(`Could not create a data key for ${login}`);
+    throw new Error(`Could not create a data key for GitHub id ${githubId}`);
   }
   return { version: row.version, key: await unwrapDataKey(tx, keyring, row) };
 }
@@ -199,8 +210,8 @@ async function rewrap(
   const { masterKeyId, wrapped } = keyring.wrap(key, contextOf(row));
   const result = await db.query(
     `UPDATE user_data_keys SET master_key_id = $3, wrapped_key = $4, rewrapped_at = now()
-     WHERE login = $1 AND version = $2 AND master_key_id = $5`,
-    [row.login, row.version, masterKeyId, wrapped, row.master_key_id],
+     WHERE github_id = $1 AND version = $2 AND master_key_id = $5`,
+    [row.github_id, row.version, masterKeyId, wrapped, row.master_key_id],
   );
   return result.rowCount;
 }
@@ -209,14 +220,14 @@ const wrappedOf = (row: DataKeyRow) => ({
   masterKeyId: row.master_key_id,
   wrapped: row.wrapped_key,
 });
-const contextOf = (row: DataKeyRow): string => dataKeyContext(row.login, row.version);
+const contextOf = (row: DataKeyRow): string => dataKeyContext(row.github_id, row.version);
 
-function openSecret(key: Buffer, sealed: Buffer, login: string, name: SecretName): string {
+function openSecret(key: Buffer, sealed: Buffer, user: GitHubUser, name: SecretName): string {
   try {
-    return openSealed(key, sealed, secretContext(login, name));
+    return openSealed(key, sealed, secretContext(user.id, name));
   } catch (error) {
     throw new Error(
-      `${login}'s ${name} key could not be decrypted: ${error instanceof Error ? error.message : String(error)}`,
+      `${userLabel(user)}'s ${name} key could not be decrypted: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
