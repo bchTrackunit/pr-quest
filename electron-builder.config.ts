@@ -55,8 +55,13 @@ const config: Configuration = {
   directories: { output: 'release', buildResources: 'build' },
   files: ['dist/**/*', 'dist-desktop/**/*', '!**/*.map', 'package.json'],
   // Native code can't load from inside app.asar, and the Cursor SDK starts programs from its
-  // platform package (cursorsandbox, rg), so those stay unpacked.
-  asarUnpack: ['node_modules/@cursor/sdk-*/**', '**/*.node'],
+  // platform package's bin/ (cursorsandbox, rg) and loads tree-sitter from its vendor/, so those
+  // stay unpacked.
+  asarUnpack: [
+    'node_modules/@cursor/sdk-*/bin/**',
+    'node_modules/@cursor/sdk-*/vendor/**',
+    '**/*.node',
+  ],
   electronFuses: {
     runAsNode: false,
     enableCookieEncryption: true,
