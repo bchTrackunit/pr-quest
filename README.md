@@ -119,12 +119,30 @@ Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth t
 the token again at most every 5 minutes, so `gh auth switch` can take that long to show up. When
 you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
 Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
-account, PR Quest says so after you sign out. The HUD shows who PR Quest acts as and where the
-token came from: **OAuth** or **gh CLI**.
+account, PR Quest says so after you sign out. The account chip in the page's top-right corner
+shows who PR Quest acts as; its menu shows where the token came from (**OAuth** or **gh CLI**)
+and offers **Settings** and, for OAuth, **Sign out**. While nobody is signed in, the chip is a
+**Sign in with GitHub** button.
+
+## The header
+
+The top-right corner of the page holds the utility controls, so the player box below it shows
+only game info: level, XP, streak and achievements. From left to right:
+
+- **Live** says whether the live updates stream is connected.
+- 🔔 turns browser notifications on or off. The first click asks the browser for permission.
+- 🔊 turns sound on or off.
+- ⚙️ opens the [settings](#settings).
+- The **account chip** opens the account menu, described above.
+
+The account menu and the quest board's presets list are small popovers: they open below their
+button and move focus into themselves. `Escape` closes them and returns focus to the button;
+clicking or tabbing outside also closes them.
 
 ## Settings
 
-The ⚙️ button in the HUD opens the settings popup. It has three sections:
+The ⚙️ button in the header, or **Settings** in the account menu, opens the settings popup. It
+has three sections:
 
 - **GitHub account**: who PR Quest acts as and the token source, with sign-in and sign-out.
 - **Review provider**: who reviews your quests, and with which model.
@@ -173,8 +191,8 @@ yarn dev
 `yarn dev` starts the API on <http://127.0.0.1:4317>, restarting it when the server code changes,
 and the UI on <http://127.0.0.1:4318>. `yarn start` does the same without restarting the API on
 changes. Open the UI in a browser or in Cursor's browser tab. The UI proxies `/api` to the server
-and receives live updates over server-sent events; the indicator in the HUD shows "Live" when it
-is connected.
+and receives live updates over server-sent events; the indicator in the header shows "Live" when
+it is connected.
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
@@ -208,7 +226,8 @@ Each feature owns its server and UI code. Tests sit next to the code they test.
 src/
   app/          composition roots: they wire the features together
     server/     main.ts (entry), app.ts, the HTTP route tables, per-player sessions and state dirs
-    ui/         main.tsx (entry), App.tsx, the game controller hook and the live event stream
+    ui/         main.tsx (entry), App.tsx, the header controls, the game controller hook and the
+                live event stream
   features/
     auth/       GitHub device flow, token resolution, the GitHub account control
     settings/   API keys, review provider and model settings, the settings dialog
@@ -218,7 +237,8 @@ src/
   platform/
     server/     router and security guards, config, SSE events, GitHub API wrapper, rate limits,
                 private files and secrets
-    ui/         API client, store, Modal, formatting and clock helpers, notifications, styles
+    ui/         API client, store, Modal, Popover, formatting and clock helpers, notifications,
+                styles
   shared/       the API contract (api.ts) and the review prompt and result schema (reviewResult.ts)
 ```
 
@@ -263,8 +283,13 @@ PR Quest calls GitHub's REST and GraphQL APIs directly with `fetch` and your tok
 
 ## Filtering and sorting
 
-The panel above the quest cards narrows and orders the board. Everything runs in the browser on
+The bar above the quest cards narrows and orders the board. Everything runs in the browser on
 the list the server already has, so filtering never calls GitHub.
+
+The bar is one row: the search box, the **Sort** select, the **Presets** dropdown and a
+**Filters** button. **Filters** opens a panel with Difficulty, Agent and Hide; the button shows
+how many of those are on, and `Escape` or a second click closes the panel. Below the row, a line
+shows how many quests match and one chip per active filter.
 
 - **Search** matches the title, author, source branch and PR number. `#123` matches PR 123 in
   any repo, and `repo#123` or `owner/repo#123` matches one repo's PR. Several words must all
@@ -272,33 +297,35 @@ the list the server already has, so filtering never calls GitHub.
   without waiting for the short typing delay.
 - **Requests** (All, Direct, Team) are the buttons in the board header. With All, the board is
   grouped into direct and team requests; the other filters and the sort apply inside each group.
-- **Difficulty** and **Agent** are multi-select. Agent states are Not started, Running (queued or
-  running), Loot ready (findings you haven't posted or discarded yet) and Failed. Selecting
-  nothing in a group means "any".
-- **Hide drafts** and **Hide PRs others approved** are on/off switches.
+- **Difficulty** and **Agent** (in the Filters panel) are multi-select. Agent states are Not
+  started, Running (queued or running), Loot ready (findings you haven't posted or discarded yet)
+  and Failed. Selecting nothing in a group means "any".
+- **Hide** (in the Filters panel) has two on/off switches: **Drafts** and **Approved by others**.
 - **Sort**: _Smart_ (the default) puts direct requests first, then PRs that need attention, then
-  the longest-waiting. _Size_ orders by additions plus deletions, using changed files as the
-  tie-breaker, smallest or largest first.
+  the longest-waiting. _Smallest first_ and _Largest first_ order by additions plus deletions,
+  using changed files as the tie-breaker.
 
 Active filters show as chips you can remove one at a time, or all at once with **Clear all**.
-The count line says how many quests are shown out of the total. If the filters hide every
-quest, the board says so and offers to clear them; this is different from Inbox Zero, which
-means GitHub returned no review requests.
+The count says how many quests are shown out of the total. If the filters hide every quest, the
+board says so and offers to clear them; this is different from Inbox Zero, which means GitHub
+returned no review requests.
 
-The buttons in each group support the arrow keys, `Home` and `End`, and every toggle reports its
-state to screen readers with `aria-pressed`.
+The buttons in each filter group support the arrow keys, `Home` and `End`, and every toggle
+reports its state to screen readers with `aria-pressed`.
 
 ### Presets
 
-**Presets** save the current filters and sort under a name. Two built-in presets, marked ★,
-can't be deleted:
+**Presets** save the current filters and sort under a name. The **Presets** dropdown lists them
+and shows the name of the one that matches the current view. Choosing a preset applies it and
+closes the dropdown. Two built-in presets, marked ★, can't be deleted:
 
 | Preset     | Difficulty      | Other settings                                        |
 | ---------- | --------------- | ----------------------------------------------------- |
 | Quick wins | Trivial, Normal | Hide drafts, hide PRs others approved, smallest first |
 | Boss rush  | Hard, Boss      | Largest first                                         |
 
-Choose **Save current…** to add your own (up to 20, names up to 40 characters). Saving under an
+Choose **Save current…** in the dropdown to add your own (up to 20, names up to 40 characters);
+✕ next to one of yours deletes it. Saving under an
 existing name replaces that preset. The board remembers your last filters and sort in the
 browser's `localStorage` (`pr-quest:board-view:v1`, presets in `pr-quest:presets:v1`). Saved data
 that can't be read is ignored and the defaults are used instead.
