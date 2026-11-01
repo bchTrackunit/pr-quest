@@ -136,8 +136,8 @@ if you signed in before the approval, **Sign out** to get the organization's PRs
 Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth token`). It looks
 for `gh` on the `PATH` and, on macOS and Linux, also in `/opt/homebrew/bin` and `/usr/local/bin`,
 because the desktop app started from the Dock or a launcher doesn't get your shell's `PATH`. It
-reads the token again at most every 5 minutes, so `gh auth switch` can take that long to show up. When
-you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
+reads the token again at most every 5 minutes, so `gh auth switch` can take that long to show up.
+When you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
 Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
 account, PR Quest says so after you sign out. The account chip in the page's top-right corner
 shows who PR Quest acts as; its popout shows where the token came from (**OAuth** or **gh CLI**)
@@ -257,19 +257,90 @@ supplies them through `startServer` in
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
 
+## Desktop app
+
+The desktop app is the same server and UI in an [Electron](https://www.electronjs.org) window.
+The server runs inside the app in local mode, and the window shows only PR Quest: links to
+anywhere else, such as a PR on GitHub, open in your browser. Opening the app a second time
+brings the open window to the front.
+
+```sh
+just desktop-dev              # build the UI and the desktop bundle, then open it in Electron
+just desktop-package          # build the installers for this machine into release/
+just desktop-package --dir    # only the unpacked app, which is faster
+just desktop-smoke            # check the unpacked app in release/
+```
+
+`just desktop-package` builds for the operating system and processor it runs on: a `dmg` and a
+`zip` on macOS, an NSIS installer on Windows, and an AppImage and a `deb` on Linux. Each
+processor needs its own build machine, because `yarn install` fetches only this machine's copy of
+the Cursor SDK's native parts (its sandbox, `rg` and the tree-sitter bindings); the build stops
+if they're missing. Those parts and every `.node` binding are unpacked next to `app.asar`, since
+a program inside the archive can't be started.
+
+`just desktop-smoke` starts the packaged app with a throwaway state directory, checks that the UI
+renders, that both SDKs load with their native parts, and that a call with a made-up key reaches
+Cursor and Anthropic and is refused as unauthenticated, then quits with the result. Pass the path
+of another executable, such as the one inside a mounted `dmg`, to check that instead. It needs a
+display; on a Linux server, run it under `xvfb-run`.
+
+**Unsigned builds.** Without signing settings the app is unsigned (on macOS, ad-hoc signed), so
+macOS Gatekeeper and Windows SmartScreen warn before the first start; on macOS, right-click the
+app and choose **Open**. macOS also asks for your login password when a rebuilt app reads the
+keychain entry an earlier build created, because each unsigned build has a different signature.
+
+**State.** The app uses the same `~/.pr-quest` (or `PR_QUEST_STATE_DIR`) and `.env` as `yarn
+start`; see [Where state lives](#where-state-lives). Don't run both on the same state directory
+at once: each keeps its own copy in memory and overwrites the other's writes. The app picks a
+free port the first time and reuses it, so the board's filters and presets, which the browser
+keeps per address, survive a restart; if another program has taken the port since, the app picks
+a new one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and
+`PR_QUEST_UI_PORT`, and refuses to start with `PR_QUEST_MODE=hosted`. The port is kept in
+`desktop.json` in the app's own folder (on macOS
+`~/Library/Application Support/PR Quest`), and the log in `main.log` (on macOS
+`~/Library/Logs/PR Quest`), which starts over as `main.old.log` past 5 MB.
+
+**Saved keys.** The app keeps the GitHub token and the API keys from Settings in
+`secrets.encrypted.json`, encrypted with a key held by the OS keychain (the macOS Keychain, the
+Windows user's DPAPI, or the Secret Service or KWallet on Linux). The first start moves an
+existing `secrets.json` into it and renames the plain file to `secrets.json.bak`; delete the
+backup once the app shows your keys. From then on, `yarn start` no longer sees those keys, so
+set them in `.env` or the environment for it. Without a keychain, such as on Linux without a
+keyring, the app keeps using `secrets.json` and logs a warning.
+
+**Updates.** A packaged app checks GitHub Releases for a newer version at start and every 6
+hours, downloads it in the background and installs it when you quit. Set
+`PR_QUEST_DISABLE_UPDATES=1` to turn this off. The repository it checks, and that **Help** opens,
+is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts); macOS installs updates
+only into a signed app.
+
+**Signing and publishing.** [`electron-builder.config.ts`](electron-builder.config.ts) reads its
+secrets from the environment and lists them at the top: `CSC_LINK` and `CSC_KEY_PASSWORD` sign
+for macOS, and `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` (or `APPLE_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`) notarize. Windows signs with Azure Trusted
+Signing (`AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`,
+`AZURE_SIGNING_PUBLISHER` and the `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET`
+it authenticates with) or with a certificate (`WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`). With
+`GH_TOKEN` set, `yarn build && yarn electron-builder --config electron-builder.config.ts
+--publish always` uploads the installers and the update files to a draft release.
+`CSC_IDENTITY_AUTO_DISCOVERY=false` skips signing on a Mac with a signing certificate in its
+keychain.
+
 ## Checks
 
-| Command             | What it does                                                                    |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `yarn typecheck`    | Type-checks the UI, server and test projects                                    |
-| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware         |
-| `yarn lint:fix`     | Applies oxlint's safe fixes                                                     |
-| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)        |
-| `yarn format:check` | Fails if a file isn't formatted                                                 |
-| `yarn test`         | Runs the Vitest suite once (`yarn test:watch` keeps it open)                    |
-| `yarn build`        | Type-checks, then builds the UI into `dist/` and the server into `dist-server/` |
-| `yarn build:server` | Bundles only the server into `dist-server/`                                     |
-| `yarn start`        | Runs the production build; see [Run it](#run-it)                                |
+| Command              | What it does                                                             |
+| -------------------- | ------------------------------------------------------------------------ |
+| `yarn typecheck`     | Type-checks the UI, server, desktop and test projects                    |
+| `yarn lint`          | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
+| `yarn lint:fix`      | Applies oxlint's safe fixes                                              |
+| `yarn format`        | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
+| `yarn format:check`  | Fails if a file isn't formatted                                          |
+| `yarn test`          | Runs the Vitest suite once (`yarn test:watch` keeps it open)             |
+| `yarn build`         | Type-checks, then builds the UI, the server and the desktop bundle       |
+| `yarn build:server`  | Bundles only the server into `dist-server/`                              |
+| `yarn build:desktop` | Bundles only the desktop main process into `dist-desktop/`               |
+| `yarn start`         | Runs the production build; see [Run it](#run-it)                         |
+| `yarn desktop:dev`   | Opens the desktop app; see [Desktop app](#desktop-app) for packaging     |
 
 With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
 tests and build, as CI does on every pull request and every push to `main`.
@@ -672,6 +743,9 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
 ~/.pr-quest/
 ├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved from Settings
+├── secrets.encrypted.json
+│                       the same, encrypted; the desktop app keeps them here instead
+├── secrets.json.bak    the plain file, once the desktop app moved it into secrets.encrypted.json
 ├── settings.json       the review provider and the model per provider
 └── users/
     └── <login>/        one folder per GitHub user, named by the lower-cased login
@@ -680,6 +754,7 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
         └── quests.json the last quest list, when it was fetched, any rate-limit backoff
 ```
 
+The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`.
 `secrets.json` and `settings.json` are shared; the game and the quest cache belong to whoever
 the current token is. Signing in as someone else opens their own folder, starting fresh. Keys
 set in the environment or an env file are never written to `secrets.json`.
@@ -719,9 +794,10 @@ anyone.
   its last four characters. No route returns a key or the GitHub token, and the server doesn't
   log them. `gh auth token`, the only command PR Quest runs, gets an environment without
   `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and `LINEAR_API_KEY`.
-- **Secrets are stored in plain text.** `secrets.json` is protected by its `0600` mode and the
-  `0700` directory, not encrypted or kept in the macOS keychain. Backups of your home folder
-  include it.
+- **Outside the desktop app, secrets are stored in plain text.** `secrets.json` is protected by
+  its `0600` mode and the `0700` directory, not encrypted. Backups of your home folder include
+  it. The desktop app encrypts them with a key from the OS keychain instead (see
+  [Desktop app](#desktop-app)); its `secrets.json.bak` is still plain text until you delete it.
 - **The OAuth token is broad.** The `repo` scope grants access to every repo you can access (see
   [Scopes](#scopes)); moving to a GitHub App with narrower, expiring tokens is a possible
   improvement. **Sign out** deletes the token from `secrets.json` but doesn't revoke it on
@@ -783,6 +859,11 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
   allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
   elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
+- **The desktop app has no release yet.** `RELEASE_REPO` names a placeholder owner, so **Help**
+  and update checks fail until it's set, the version is `0.0.0`, there is no app icon, and builds
+  are unsigned. Only the macOS arm64 build has been started and checked so far.
+- **The desktop app and `yarn start` don't share a running state.** Run one at a time on a
+  state directory, as described in [Desktop app](#desktop-app).
 
 ## License
 
