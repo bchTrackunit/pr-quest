@@ -28,4 +28,22 @@ describe('createStaticHandler', () => {
 
     await expect(createStaticHandler(root)(req, res, '/assets/big-Ab12.js')).resolves.toBe(true);
   });
+
+  test('serves the build once it appears, after a request found no directory', async () => {
+    const later = join(root, 'dist');
+    const serve = createStaticHandler(later);
+    const request = () => {
+      const req = new IncomingMessage(new Socket());
+      req.method = 'GET';
+      const res = new ServerResponse(req);
+      res.destroy();
+      return serve(req, res, '/');
+    };
+    await expect(request()).rejects.toThrow(/ENOENT/);
+
+    await mkdir(later);
+    await writeFile(join(later, 'index.html'), '<!doctype html>');
+
+    await expect(request()).resolves.toBe(true);
+  });
 });

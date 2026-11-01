@@ -43,14 +43,14 @@ export type StaticHandler = (
  */
 export function createStaticHandler(root: string): StaticHandler {
   const base = resolve(root);
-  let realBase: Promise<string> | undefined;
+  let realBase: string | undefined;
   return async (req, res, pathname) => {
     const requested = relativePath(pathname);
     if (requested === undefined) {
       return false;
     }
-    realBase ??= realpath(base);
-    const inside = { base, realBase: await realBase };
+    realBase ??= await realpath(base);
+    const inside = { base, realBase };
     let path = requested;
     let file = path === '' ? undefined : await fileAt(inside, path);
     if (!file && extname(path) === '') {
