@@ -296,8 +296,10 @@ is the exception. A packaged app has no DevTools and refuses to start with
 it, at most once every 10 seconds. Quitting waits at most 5 seconds for the server to stop.
 
 **Unsigned builds.** Without signing settings the app is unsigned (on macOS, ad-hoc signed), so
-macOS Gatekeeper and Windows SmartScreen warn before the first start; on macOS, right-click the
-app and choose **Open**. macOS also asks for your login password when a rebuilt app reads the
+macOS Gatekeeper and Windows SmartScreen warn before the first start. On macOS 15 and later, try
+to open the app once, then choose **Open Anyway** under **System Settings**, **Privacy &
+Security**; on macOS 14 and earlier, right-clicking the app and choosing **Open** also works.
+macOS also asks for your login password when a rebuilt app reads the
 keychain entry an earlier build created, because each unsigned build has a different signature.
 
 **State.** The app uses the same `~/.pr-quest` (or `PR_QUEST_STATE_DIR`) and `.env` as `yarn
