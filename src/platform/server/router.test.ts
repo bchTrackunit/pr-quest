@@ -744,6 +744,26 @@ describe('raw routes', () => {
     expect(() => createRouter({}, { routes: [{ ...signIn, path: 'auth' }] })).toThrow(/start/);
   });
 
+  test('takes a POST only with an allowed Origin, which browsers send on every POST', async () => {
+    const appOrigin = `http://127.0.0.1:${API_PORT}`;
+    const signOut: RawRoute = {
+      method: 'POST',
+      path: '/auth/sign-out',
+      handle: (_req, res) => {
+        res.writeHead(204).end();
+      },
+    };
+    const port = await serve([signOut], { allowedOrigins: [appOrigin] });
+    const form = { 'Content-Type': 'application/x-www-form-urlencoded' };
+
+    expect((await sendRaw(port, 'POST', '/auth/sign-out', form, 'a=1')).status).toBe(403);
+    expect(
+      (await sendRaw(port, 'POST', '/auth/sign-out', { ...form, Origin: 'http://evil.example' }))
+        .status,
+    ).toBe(403);
+    expect((await sendRaw(port, 'POST', '/auth/sign-out', { Origin: appOrigin })).status).toBe(204);
+  });
+
   test('refuses a cross-site POST route, which any site could submit a form to', () => {
     expect(() => createRouter({}, { routes: [{ ...callback, method: 'POST' }] })).toThrow(
       /POST \/auth\/github\/callback.*GET/,

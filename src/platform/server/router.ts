@@ -64,6 +64,7 @@ export type RequestListener = (req: IncomingMessage, res: ServerResponse) => voi
  * writes the whole response; an `ApiError` it throws before writing is answered as JSON.
  */
 export interface RawRoute {
+  /** A POST must carry an allowed Origin, since its body needn't be JSON. */
   method: 'GET' | 'POST';
   /** The exact path, matched without the query string. It can't be a JSON API route. */
   path: string;
@@ -235,6 +236,10 @@ async function handle(
       assertTrustedHost(req, trust.allowedHosts);
     } else {
       assertTrustedRequest(req, trust, false);
+    }
+    // A raw POST takes any body, so a missing Origin stands in for the JSON API's content-type check.
+    if (method === 'POST' && req.headers.origin === undefined) {
+      throw new ApiError(403, 'forbidden', 'POST requests must carry an Origin header');
     }
     await raw.handle(req, res);
     return;
