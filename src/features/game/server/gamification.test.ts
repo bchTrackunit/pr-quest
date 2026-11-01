@@ -150,6 +150,72 @@ describe('streaks', () => {
   });
 });
 
+describe("streaks and days in the player's time zone", () => {
+  const utc = (iso: string): Date => new Date(iso);
+  const inZone = (timeZone: string, ats: Array<string>, state = initialGameState()): GameState =>
+    ats.reduce(
+      (current, iso) => applyReviewAction(current, action({ at: utc(iso) }), { timeZone }).state,
+      state,
+    );
+
+  test('an evening in Los Angeles is one day there, though it crosses midnight in UTC', () => {
+    const ats = ['2026-11-10T23:30:00Z', '2026-11-11T00:30:00Z'];
+
+    expect(inZone('UTC', ats)).toMatchObject({ streakDays: 2, lastReviewDate: '2026-11-11' });
+    expect(inZone('America/Los_Angeles', ats)).toMatchObject({
+      streakDays: 1,
+      lastReviewDate: '2026-11-10',
+    });
+  });
+
+  test('a zone ahead of UTC is already on the next day', () => {
+    const state = inZone('Pacific/Kiritimati', ['2026-11-10T11:00:00Z']);
+
+    expect(state.lastReviewDate).toBe('2026-11-11');
+  });
+
+  test.each([
+    ['spring-forward', ['2026-03-28T11:00:00Z', '2026-03-29T11:00:00Z', '2026-03-30T10:00:00Z']],
+    ['fall-back', ['2026-10-24T10:00:00Z', '2026-10-25T11:00:00Z', '2026-10-26T11:00:00Z']],
+  ])('a %s day keeps the streak going', (_change, ats) => {
+    expect(inZone('Europe/Copenhagen', ats).streakDays).toBe(3);
+  });
+
+  test('the streak goes up at local midnight after the 25-hour fall-back day', () => {
+    // 22:30Z is 23:30 CET on the 25th; an hour later it is 00:30 on the 26th.
+    const state = inZone('Europe/Copenhagen', ['2026-10-25T22:30:00Z', '2026-10-25T23:30:00Z']);
+
+    expect(state).toMatchObject({ streakDays: 2, lastReviewDate: '2026-10-26' });
+  });
+
+  test('the player sees the streak until the end of the next day in their zone', () => {
+    const state = inZone('America/Los_Angeles', ['2026-11-10T20:00:00Z']);
+    // 07:00Z on the 12th is still 23:00 on the 11th in Los Angeles.
+    const now = utc('2026-11-12T07:00:00Z');
+
+    expect(toPlayerState(state, now, { timeZone: 'America/Los_Angeles' }).streakDays).toBe(1);
+    expect(toPlayerState(state, now, { timeZone: 'UTC' }).streakDays).toBe(0);
+  });
+
+  test("the daily ledger starts at the player's midnight", () => {
+    const state = inZone('America/Los_Angeles', ['2026-11-11T05:00:00Z']);
+
+    expect(state.ledger.day?.date).toBe('2026-11-10');
+  });
+
+  test("Inbox Zero counts an action earlier on the player's day, not the server's", () => {
+    const reviewed = inZone('America/Los_Angeles', ['2026-11-10T20:00:00Z']);
+    const check = { questCount: 0, at: utc('2026-11-11T02:00:00Z') };
+
+    expect(
+      applyQueueChecked(reviewed, check, { timeZone: 'America/Los_Angeles' }).unlocked.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(['inbox-zero']);
+    expect(applyQueueChecked(reviewed, check, { timeZone: 'UTC' }).unlocked).toEqual([]);
+  });
+});
+
 describe('achievements', () => {
   test('First Blood unlocks once, on the first rewarded action', () => {
     const first = applyReviewAction(initialGameState(), action());

@@ -193,4 +193,23 @@ describe('GameService', () => {
       game.achievements().find((status) => status.id === 'second-opinion')?.unlockedAt,
     ).toBeDefined();
   });
+
+  test("dates every action in the player's time zone, read again for each action", async () => {
+    let clock = new Date('2026-11-10T23:30:00Z');
+    let timeZone = 'America/Los_Angeles';
+    const zoned = new GameService(
+      store,
+      { broadcast },
+      { login: 'player', now: () => clock, timeZone: () => timeZone },
+    );
+
+    await zoned.recordReviewAction(approval);
+    expect(zoned.player()).toMatchObject({ lastReviewDate: '2026-11-10', streakDays: 1 });
+
+    timeZone = 'Europe/Copenhagen';
+    clock = new Date('2026-11-11T23:30:00Z');
+    await zoned.recordReviewAction({ ...approval, questId: 'o/r#2' });
+
+    expect(zoned.player()).toMatchObject({ lastReviewDate: '2026-11-12', streakDays: 1 });
+  });
 });
