@@ -304,6 +304,7 @@ src/
                 sessions and state dirs
     ui/         main.tsx (entry), App.tsx, the header controls and preferences, the game
                 controller hook and the live event stream
+  desktop/      the Electron main process: starts the server in-process and opens its window
   features/
     auth/       GitHub device flow, token resolution, the GitHub account control
     settings/   API keys, review provider and model settings, the settings dialog
@@ -329,7 +330,10 @@ Dependency rules, enforced by `yarn lint`:
 - A feature imports its own files, `src/platform` and `src/shared`. It reaches another feature only
   through that feature's `index.ts`, never a deeper file. Tests may also use another feature's
   `test-utils/`.
-- Only `src/app` imports from `src/app`, and it also goes through each feature's `index.ts`.
+- Only `src/app` and `src/desktop` import from `src/app`, and they also go through each feature's
+  `index.ts`. `src/desktop` embeds the server through `src/app/server/server.ts`.
+- Only `src/desktop` imports from `src/desktop`. It is server code: it runs in Electron's Node
+  main process, never in the UI.
 - UI code and server code never import each other; they share only `src/shared`.
 - There are no import cycles (`import/no-cycle`). The features form one direction: `reviews`
   uses `quests`, `game` and `settings`; `quests` uses `game` and `settings`; `game` uses

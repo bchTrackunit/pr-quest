@@ -13,8 +13,9 @@ function isAllowedTypeAssertion(typeAnnotation) {
 }
 
 /**
- * Where a file under `src/` sits: `shared`, `platform`, `app` or one feature, and which runtime
- * (`server`, `ui`) it belongs to. Returns undefined for files outside `src/`.
+ * Where a file under `src/` sits: `shared`, `platform`, `app`, `desktop` or one feature, and which
+ * runtime (`server`, `ui`) it belongs to. The desktop app's main process is a Node process, so it
+ * counts as server code. Returns undefined for files outside `src/`.
  */
 function locate(path, cwd) {
   const rel = relative(cwd, path).split('\\').join('/');
@@ -24,6 +25,9 @@ function locate(path, cwd) {
   const [, top, second, third] = rel.split('/');
   if (top === 'features') {
     return { layer: 'feature', feature: second, side: third, rel };
+  }
+  if (top === 'desktop') {
+    return { layer: top, side: 'server', rel };
   }
   return { layer: top, side: top === 'shared' ? undefined : second, rel };
 }
@@ -38,8 +42,11 @@ function boundaryViolation(importer, target, importerIsTest) {
   if (target.layer === 'shared' || target.layer === 'platform') {
     return importer.layer === 'shared' && target.layer !== 'shared' ? 'sharedImport' : undefined;
   }
+  if (target.layer === 'desktop') {
+    return importer.layer === 'desktop' ? undefined : 'desktopImport';
+  }
   if (target.layer === 'app') {
-    return importer.layer === 'app' ? undefined : 'appImport';
+    return importer.layer === 'app' || importer.layer === 'desktop' ? undefined : 'appImport';
   }
   if (target.layer !== 'feature') {
     return undefined;
@@ -74,7 +81,9 @@ export default {
           deepImport:
             "Import another feature through its public entry, src/features/{{feature}}/{{side}}/index.ts, not '{{source}}'.",
           featureFromBase: 'src/platform and src/shared must not import from features.',
-          appImport: 'Only src/app may import from src/app; it is the composition root.',
+          appImport:
+            'Only src/app and src/desktop may import from src/app; they are the composition roots.',
+          desktopImport: 'Only src/desktop may import from src/desktop; it is the desktop app.',
           sharedImport: 'src/shared may only import from src/shared.',
           crossSide:
             'UI code and server code must not import each other; share code through src/shared.',

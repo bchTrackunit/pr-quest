@@ -13,6 +13,8 @@ node_modules/
 # build and test output
 dist/
 dist-server/
+dist-desktop/
+release/
 coverage/
 
 # local secrets

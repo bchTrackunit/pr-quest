@@ -8,6 +8,9 @@
       "path": "./tsconfig.server.json"
     },
     {
+      "path": "./tsconfig.desktop.json"
+    },
+    {
       "path": "./tsconfig.spec.json"
     }
   ]

@@ -10,7 +10,14 @@
     "node": true,
     "es2024": true
   },
-  "ignorePatterns": ["dist/**", "dist-server/**", "coverage/**", ".yarn/**"],
+  "ignorePatterns": [
+    "dist/**",
+    "dist-server/**",
+    "dist-desktop/**",
+    "release/**",
+    "coverage/**",
+    ".yarn/**"
+  ],
   "categories": {
     "correctness": "error"
   },
