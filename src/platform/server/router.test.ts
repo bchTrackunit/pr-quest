@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -540,10 +540,58 @@ describe('static files', () => {
 
       const response = await sendRaw(port, 'GET', path);
 
+      expect(response.status).toBe(404);
       expect(response.text).not.toContain('outside the static directory');
       expect(response.text).not.toContain('SECRET');
     },
   );
+
+  test.each(['/leak.txt', '/up/secret.txt'])(
+    'never follows a symlink out of the static directory for %s',
+    async (path) => {
+      const parent = join(staticDir, '..');
+      await symlink(join(parent, 'secret.txt'), join(staticDir, 'leak.txt'));
+      await symlink(parent, join(staticDir, 'up'));
+      const port = await serve();
+
+      const response = await sendRaw(port, 'GET', path);
+
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain('outside the static directory');
+    },
+  );
+
+  test('serves a symlink that stays inside the static directory', async () => {
+    await symlink(join(staticDir, 'favicon.svg'), join(staticDir, 'icon.svg'));
+    const port = await serve();
+
+    expect((await sendRaw(port, 'GET', '/icon.svg')).text).toBe('<svg/>');
+  });
+
+  test('answers 404, not a server error, for a name too long for the file system', async () => {
+    const onUnexpectedError = vi.fn();
+    const port = await serve({ onUnexpectedError });
+
+    const response = await sendRaw(port, 'GET', `/${'a'.repeat(300)}.js`);
+
+    expect(response.status).toBe(404);
+    expect(onUnexpectedError).not.toHaveBeenCalled();
+  });
+
+  test('answers 404 for a file in a directory it may not read', async () => {
+    const locked = join(staticDir, 'locked');
+    await mkdir(locked);
+    await writeFile(join(locked, 'file.js'), 'locked');
+    await chmod(locked, 0o000);
+    const onUnexpectedError = vi.fn();
+    const port = await serve({ onUnexpectedError });
+
+    const response = await sendRaw(port, 'GET', '/locked/file.js');
+    await chmod(locked, 0o700);
+
+    expect(response.status).toBe(404);
+    expect(onUnexpectedError).not.toHaveBeenCalled();
+  });
 
   test('answers HEAD with the headers only', async () => {
     const port = await serve();

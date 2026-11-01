@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -43,16 +43,19 @@ export type StaticHandler = (
  */
 export function createStaticHandler(root: string): StaticHandler {
   const base = resolve(root);
+  let realBase: Promise<string> | undefined;
   return async (req, res, pathname) => {
     const requested = relativePath(pathname);
     if (requested === undefined) {
       return false;
     }
+    realBase ??= realpath(base);
+    const inside = { base, realBase: await realBase };
     let path = requested;
-    let file = path === '' ? undefined : await fileAt(base, path);
+    let file = path === '' ? undefined : await fileAt(inside, path);
     if (!file && extname(path) === '') {
       path = 'index.html';
-      file = await fileAt(base, path);
+      file = await fileAt(inside, path);
     }
     if (!file) {
       return false;
@@ -86,20 +89,30 @@ function relativePath(pathname: string): string | undefined {
   return segments.join('/');
 }
 
-async function fileAt(base: string, path: string): Promise<StaticFile | undefined> {
+/** Errors that mean "no file to serve" rather than a broken server. */
+const NOT_SERVABLE = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG', 'EINVAL', 'EACCES', 'ELOOP']);
+
+/**
+ * The file at `path`, unless it is missing or leaves the root. The check runs on the real path too,
+ * so a symlink in the build can't point the server at a file elsewhere on disk.
+ */
+async function fileAt(
+  { base, realBase }: { base: string; realBase: string },
+  path: string,
+): Promise<StaticFile | undefined> {
   const full = join(base, path);
   if (!full.startsWith(base + sep)) {
     return undefined;
   }
   try {
-    const stats = await stat(full);
-    return stats.isFile() ? { path: full, size: stats.size } : undefined;
+    const real = await realpath(full);
+    if (!real.startsWith(realBase + sep)) {
+      return undefined;
+    }
+    const stats = await stat(real);
+    return stats.isFile() ? { path: real, size: stats.size } : undefined;
   } catch (error) {
-    if (
-      error instanceof Error &&
-      'code' in error &&
-      ['ENOENT', 'ENOTDIR'].includes(String(error.code))
-    ) {
+    if (error instanceof Error && 'code' in error && NOT_SERVABLE.has(String(error.code))) {
       return undefined;
     }
     throw error;
@@ -124,5 +137,12 @@ async function sendFile(
     res.end();
     return;
   }
-  await pipeline(createReadStream(file.path), res);
+  try {
+    await pipeline(createReadStream(file.path), res);
+  } catch (error) {
+    // The client went away mid-file, which needs no answer and isn't the server's fault.
+    if (!res.destroyed) {
+      throw error;
+    }
+  }
 }
