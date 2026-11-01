@@ -6,6 +6,6 @@
     "noUncheckedIndexedAccess": true,
     "types": ["node"]
   },
-  "include": ["src/desktop/**/*.ts", "electron-builder.config.ts"],
+  "include": ["src/desktop/**/*.ts", "electron-builder.config.ts", "scripts/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

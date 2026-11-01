@@ -36,13 +36,25 @@ format:
 format-check:
     yarn format:check
 
-# Type-check the UI, server and test projects
+# Type-check the UI, server, desktop and test projects
 typecheck:
     yarn typecheck
 
-# Type-check, then build the UI into dist/ and the server into dist-server/
+# Type-check, then build the UI into dist/, the server into dist-server/ and the desktop app into dist-desktop/
 build:
     yarn build
+
+# Build the UI and the desktop app, then open it in Electron
+desktop-dev:
+    yarn desktop:dev
+
+# Build the desktop installers for this machine into release/; `just desktop-package --dir` skips the installers
+desktop-package *args:
+    yarn desktop:package {{ args }}
+
+# Check the packaged desktop app in release/, or the executable given: its UI, both SDKs and their native parts
+desktop-smoke executable="":
+    yarn desktop:smoke {{ if executable == "" { "" } else { quote(executable) } }}
 
 # Run every check CI runs
 check: typecheck lint format-check test build

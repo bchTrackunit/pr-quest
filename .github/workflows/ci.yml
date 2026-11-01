@@ -44,4 +44,4 @@ jobs:
         run: yarn test
 
       - name: Build
-        run: yarn vite build && yarn build:server
+        run: yarn vite build && yarn build:server && yarn build:desktop
