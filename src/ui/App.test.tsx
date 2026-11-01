@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/* eslint-disable no-restricted-globals -- tests reset the jsdom storage the board persists to */
+/* oxlint-disable no-restricted-globals -- tests reset the jsdom storage the board persists to */
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -336,7 +336,9 @@ describe('App', () => {
       type: 'runUpdated',
       run: makeRun({ id: 'run-old', status: 'error', error: { message: 'Agent crashed' } }),
     });
-    expect(within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'));
+    expect(
+      within(screen.getByRole('list', { name: 'Errors' })).getByText('Agent crashed'),
+    ).toBeTruthy();
 
     const notSignedIn = new ApiRequestError(401, 'notSignedIn', 'Sign in with GitHub first.');
     api.signOut.mockResolvedValue({ clientIdConfigured: true, device: { state: 'idle' } });
@@ -365,8 +367,7 @@ describe('App', () => {
       account: { login: 'octocat', tokenSource: 'oauth' },
       device: { state: 'idle' },
     });
-    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () =>
-      undefined;
+    let resolveRuns: (value: { runs: Array<ReturnType<typeof makeRun>> }) => void = () => undefined;
     api.fetchRuns.mockReturnValue(
       new Promise((resolver) => {
         resolveRuns = resolver;

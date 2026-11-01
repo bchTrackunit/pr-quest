@@ -1,12 +1,7 @@
 import { Cursor, type SDKModel } from '@cursor/sdk';
 import { z } from 'zod';
 
-import type {
-  ApiKeyName,
-  ListModelsResponse,
-  ModelOption,
-  ReviewProvider,
-} from '../shared/api.ts';
+import type { ApiKeyName, ListModelsResponse, ModelOption, ReviewProvider } from '../shared/api.ts';
 import { ANTHROPIC_API_URL } from './config.ts';
 import type { FetchLike } from './githubApi.ts';
 
@@ -100,7 +95,10 @@ export class ModelCatalog {
     if (!parsed.success) {
       throw new Error('Anthropic sent an unexpected model list');
     }
-    return parsed.data.data.map(({ id, display_name }) => ({ id, displayName: display_name ?? id }));
+    return parsed.data.data.map(({ id, display_name }) => ({
+      id,
+      displayName: display_name ?? id,
+    }));
   }
 }
 

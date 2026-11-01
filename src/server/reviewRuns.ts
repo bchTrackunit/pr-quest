@@ -167,7 +167,7 @@ export class ReviewRunService {
   /** Resolves once every background run this service is tracking has settled. */
   public async whenIdle(): Promise<void> {
     while (this.tasks.size > 0) {
-      await Promise.all([...this.tasks]);
+      await Promise.all(this.tasks);
     }
   }
 

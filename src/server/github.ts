@@ -606,6 +606,7 @@ async function mapWithConcurrency<TItem, TResult>(
   limit: number,
   fn: (item: TItem) => Promise<TResult>,
 ): Promise<Array<TResult>> {
+  // oxlint-disable-next-line unicorn/no-new-array -- one slot per item; the workers fill them by index
   const results: Array<TResult> = new Array<TResult>(items.length);
   const pending = items.entries();
   let failed = false;

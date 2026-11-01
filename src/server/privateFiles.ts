@@ -35,7 +35,9 @@ export async function writePrivateJson(file: string, value: unknown): Promise<vo
 /** Throws when `parsed` carries a `version` above `supported`: a newer build wrote it. */
 export function refuseNewerVersion(parsed: unknown, supported: number, file: string): void {
   const version =
-    typeof parsed === 'object' && parsed !== null && 'version' in parsed ? parsed.version : undefined;
+    typeof parsed === 'object' && parsed !== null && 'version' in parsed
+      ? parsed.version
+      : undefined;
   if (typeof version === 'number' && version > supported) {
     throw new Error(
       `${file} was written by a newer version of PR Quest (file version ${version}, this build reads version ${supported}). Update PR Quest, or move the file away to start fresh.`,

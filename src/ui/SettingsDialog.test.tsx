@@ -225,9 +225,7 @@ describe('SettingsDialog', () => {
     await user.type(input, 'bad key');
     await user.click(within(row).getByRole('button', { name: 'Save key for Cursor' }));
 
-    expect((await screen.findByRole('alert')).textContent).toBe(
-      "Couldn't save: value: no spaces",
-    );
+    expect((await screen.findByRole('alert')).textContent).toBe("Couldn't save: value: no spaces");
     expect(input.value).toBe('bad key');
   });
 
@@ -524,7 +522,9 @@ describe('SettingsDialog', () => {
     );
 
     const section = screen.getByRole('region', { name: 'GitHub account' });
-    expect(within(section).getByText(/Signed out of @octocat\. PR Quest now acts as @hubot/));
+    expect(
+      within(section).getByText(/Signed out of @octocat\. PR Quest now acts as @hubot/),
+    ).toBeTruthy();
     await user.click(within(section).getByRole('button', { name: 'Dismiss' }));
     expect(github.actions.dismissFallback).toHaveBeenCalledTimes(1);
   });

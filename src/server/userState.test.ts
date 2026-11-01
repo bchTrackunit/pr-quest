@@ -1,4 +1,14 @@
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -109,25 +119,28 @@ describe('migrateLegacyState', () => {
   });
 
   // Root ignores the read-only folder this test uses to stop the migration part-way.
-  test.skipIf(process.getuid?.() === 0)('records the receiving login before copying, so a crash mid-copy hands nothing to another user', async () => {
-    await writeFile(join(dir, 'state.json'), LEGACY_STATE);
-    await mkdir(join(dir, 'users', 'player'), { recursive: true });
-    // A read-only state folder fails the rename of the original right after the copy, like a crash.
-    await chmod(dir, 0o500);
-    const crashed = await migrateLegacyState(dir, 'player', { now: () => NOW }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    await chmod(dir, 0o700);
+  test.skipIf(process.getuid?.() === 0)(
+    'records the receiving login before copying, so a crash mid-copy hands nothing to another user',
+    async () => {
+      await writeFile(join(dir, 'state.json'), LEGACY_STATE);
+      await mkdir(join(dir, 'users', 'player'), { recursive: true });
+      // A read-only state folder fails the rename of the original right after the copy, like a crash.
+      await chmod(dir, 0o500);
+      const crashed = await migrateLegacyState(dir, 'player', { now: () => NOW }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await chmod(dir, 0o700);
 
-    const other = await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
+      const other = await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
 
-    expect(crashed).toBeInstanceOf(Error);
+      expect(crashed).toBeInstanceOf(Error);
 
-    expect(other).toEqual({ migrated: [] });
-    await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
-    expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
-  });
+      expect(other).toEqual({ migrated: [] });
+      await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
+      expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
+    },
+  );
 
   test('finishes a migration that recorded the receiver but stopped before copying', async () => {
     await mkdir(join(dir, 'users'), { recursive: true });
@@ -190,9 +203,9 @@ describe('migrateLegacyState', () => {
     expect(result).toEqual({ migrated: [] });
     await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
     await expect(stat(join(dir, 'state.json'))).rejects.toThrow();
-    expect(
-      await readFile(join(dir, 'state.json.orphaned-20261030T140000Z.bak'), 'utf8'),
-    ).toBe('{"from":"an older build"}');
+    expect(await readFile(join(dir, 'state.json.orphaned-20261030T140000Z.bak'), 'utf8')).toBe(
+      '{"from":"an older build"}',
+    );
     expect(warnings).toEqual([expect.stringContaining('state.json.orphaned-20261030T140000Z.bak')]);
   });
 
@@ -205,7 +218,9 @@ describe('migrateLegacyState', () => {
 
     expect(await readFile(join(dir, 'users', 'player', 'state.json'), 'utf8')).toBe(LEGACY_STATE);
     await expect(stat(join(dir, 'state.json'))).rejects.toThrow();
-    await expect(stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak'))).resolves.toBeDefined();
+    await expect(
+      stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak')),
+    ).resolves.toBeDefined();
   });
 
   test('knows the owner from the backups of a migration that ran before owners were recorded', async () => {
@@ -217,7 +232,9 @@ describe('migrateLegacyState', () => {
     await migrateLegacyState(dir, 'someone-else', { now: () => NOW });
 
     await expect(stat(join(dir, 'users', 'someone-else', 'state.json'))).rejects.toThrow();
-    await expect(stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak'))).resolves.toBeDefined();
+    await expect(
+      stat(join(dir, 'state.json.orphaned-20261030T140000Z.bak')),
+    ).resolves.toBeDefined();
     expect(await readFile(join(dir, 'users', '.legacy-owner'), 'utf8')).toBe('player\n');
   });
 
@@ -306,14 +323,20 @@ describe('migrating a real legacy state folder', () => {
       const original = await readFile(join(FIXTURES, name), 'utf8');
       expect(await readFile(join(userDir, name), 'utf8')).toBe(original);
       expect(
-        await readFile(join(dir, `${name}.migrated-to-brianchristensen-20261030T140000Z.bak`), 'utf8'),
+        await readFile(
+          join(dir, `${name}.migrated-to-brianchristensen-20261030T140000Z.bak`),
+          'utf8',
+        ),
       ).toBe(original);
     }
   });
 });
 
 async function legacyRuns(): Promise<Array<{ id: string }>> {
-  const text = await readFile(join(import.meta.dirname, 'fixtures', 'legacy', 'state.json'), 'utf8');
+  const text = await readFile(
+    join(import.meta.dirname, 'fixtures', 'legacy', 'state.json'),
+    'utf8',
+  );
   const parsed = z
     .object({ runs: z.array(z.object({ run: z.object({ id: z.string() }) })) })
     .parse(JSON.parse(text));

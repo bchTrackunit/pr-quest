@@ -24,7 +24,11 @@ export const PROVIDER_KEYS: Record<ReviewProvider, ApiKeyName> = {
 
 export const KEY_META: Record<ApiKeyName, { label: string; envName: string; purpose: string }> = {
   cursor: { label: 'Cursor', envName: 'CURSOR_API_KEY', purpose: 'Cursor reviews' },
-  anthropic: { label: 'Claude (Anthropic)', envName: 'ANTHROPIC_API_KEY', purpose: 'Claude reviews' },
+  anthropic: {
+    label: 'Claude (Anthropic)',
+    envName: 'ANTHROPIC_API_KEY',
+    purpose: 'Claude reviews',
+  },
   linear: { label: 'Linear', envName: 'LINEAR_API_KEY', purpose: 'Linear review links' },
 };
 

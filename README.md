@@ -181,15 +181,23 @@ reconnecting the live stream never forces a GitHub call; both use the server's c
 
 ## Checks
 
-| Command          | What it does                                                 |
-| ---------------- | ------------------------------------------------------------ |
-| `yarn typecheck` | Type-checks the UI, server and test projects                 |
-| `yarn lint`      | ESLint with typescript-eslint and the React hooks rules      |
-| `yarn test`      | Runs the Vitest suite once (`yarn test:watch` keeps it open) |
-| `yarn build`     | Type-checks, then builds the UI into `dist/`                 |
+| Command             | What it does                                                             |
+| ------------------- | ------------------------------------------------------------------------ |
+| `yarn typecheck`    | Type-checks the UI, server and test projects                             |
+| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
+| `yarn lint:fix`     | Applies oxlint's safe fixes                                              |
+| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
+| `yarn format:check` | Fails if a file isn't formatted                                          |
+| `yarn test`         | Runs the Vitest suite once (`yarn test:watch` keeps it open)             |
+| `yarn build`        | Type-checks, then builds the UI into `dist/`                             |
 
-With [just](https://just.systems) installed, `just check` runs all four, as CI does on every pull
-request and every push to `main`.
+With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
+tests and build, as CI does on every pull request and every push to `main`.
+
+oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
+`oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums) are a
+small oxlint JS plugin in `oxlint-plugins/local.js`. oxfmt reads `.oxfmtrc.json`. For editor
+support, install the recommended [Oxc extension](https://marketplace.visualstudio.com/items?itemName=oxc.oxc-vscode).
 
 ## How it works
 

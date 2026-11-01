@@ -15,13 +15,15 @@ describe('splitDiff', () => {
   });
 
   test('names a deleted file by its old path', () => {
-    const deleted = 'diff --git a/old.ts b/old.ts\ndeleted file mode 100644\n--- a/old.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n';
+    const deleted =
+      'diff --git a/old.ts b/old.ts\ndeleted file mode 100644\n--- a/old.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n';
 
     expect(splitDiff(deleted)[0]?.path).toBe('old.ts');
   });
 
   test('names a renamed file without content changes by its new path', () => {
-    const renamed = 'diff --git a/a.ts b/b.ts\nsimilarity index 100%\nrename from a.ts\nrename to b.ts\n';
+    const renamed =
+      'diff --git a/a.ts b/b.ts\nsimilarity index 100%\nrename from a.ts\nrename to b.ts\n';
 
     expect(splitDiff(renamed)[0]?.path).toBe('b.ts');
   });
@@ -89,13 +91,12 @@ describe('budgetDiff', () => {
     expect(budgeted.text).toBe(fileDiff('src/a.ts'));
   });
 
-  test.each([
-    'src/build/plan.ts',
-    'packages/out/index.ts',
-    'apps/web/dist/main.ts',
-  ])('reviews %s, because only a root dist, build or out folder is generated', (path) => {
-    expect(budgetDiff(fileDiff(path), { maxChars: 10_000 }).omitted).toEqual([]);
-  });
+  test.each(['src/build/plan.ts', 'packages/out/index.ts', 'apps/web/dist/main.ts'])(
+    'reviews %s, because only a root dist, build or out folder is generated',
+    (path) => {
+      expect(budgetDiff(fileDiff(path), { maxChars: 10_000 }).omitted).toEqual([]);
+    },
+  );
 
   test.each(['build/app.js', 'out/index.js', 'web/node_modules/x/index.js', 'lib/vendor/y.go'])(
     'still leaves out %s as generated',
@@ -107,7 +108,8 @@ describe('budgetDiff', () => {
   );
 
   test('leaves out binary files', () => {
-    const binary = 'diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n';
+    const binary =
+      'diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n';
 
     expect(budgetDiff(binary, { maxChars: 10_000 }).omitted).toEqual([
       { file: 'logo.png', reason: 'binary' },
@@ -119,7 +121,9 @@ describe('budgetDiff', () => {
     const small = fileDiff('src/small.ts');
     const first = fileDiff('src/first.ts');
 
-    const budgeted = budgetDiff(first + big + small, { maxChars: first.length + small.length + 10 });
+    const budgeted = budgetDiff(first + big + small, {
+      maxChars: first.length + small.length + 10,
+    });
 
     expect(budgeted.files).toEqual(['src/first.ts', 'src/small.ts']);
     expect(budgeted.omitted).toEqual([{ file: 'src/big.ts', reason: 'tooLarge' }]);

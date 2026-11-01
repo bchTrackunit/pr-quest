@@ -177,10 +177,7 @@ function splitFences(markdown: string): Array<{ text: string; fenced: boolean }>
   for (const line of markdown.split(/(?<=\n)/)) {
     const fence = FENCE_PATTERN.exec(line)?.[1];
     const closes =
-      open !== undefined &&
-      fence !== undefined &&
-      fence.startsWith(open) &&
-      line.trim() === fence;
+      open !== undefined && fence !== undefined && fence.startsWith(open) && line.trim() === fence;
     const fenced = open !== undefined || fence !== undefined;
     const last = segments.at(-1);
     if (last && last.fenced === fenced) {

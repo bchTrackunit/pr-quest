@@ -168,7 +168,11 @@ describe('GitHubApi.request', () => {
   test('reports which token GitHub rejected with a 401', async () => {
     const onUnauthorized = vi.fn();
     const fetchMock = vi.fn<FetchLike>(async () => respond(401, { message: 'Bad credentials' }));
-    const client = new GitHubApi({ token: async () => 'gho_secret', fetch: fetchMock, onUnauthorized });
+    const client = new GitHubApi({
+      token: async () => 'gho_secret',
+      fetch: fetchMock,
+      onUnauthorized,
+    });
 
     await expect(client.request('GET', '/user')).rejects.toMatchObject({ httpStatus: 401 });
     await expect(client.graphql('query { viewer { login } }', {})).rejects.toMatchObject({
@@ -182,7 +186,11 @@ describe('GitHubApi.request', () => {
   test('does not report other failures as a rejected token', async () => {
     const onUnauthorized = vi.fn();
     const fetchMock = vi.fn<FetchLike>(async () => respond(403, { message: 'Forbidden' }));
-    const client = new GitHubApi({ token: async () => 'gho_secret', fetch: fetchMock, onUnauthorized });
+    const client = new GitHubApi({
+      token: async () => 'gho_secret',
+      fetch: fetchMock,
+      onUnauthorized,
+    });
 
     await client.request('GET', '/user').catch(() => undefined);
 

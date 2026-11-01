@@ -245,9 +245,7 @@ describe('GitHubAccountControl', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
     expect(api.cancelDeviceFlow).toHaveBeenCalledTimes(1);
-    expect(
-      await within(dialog).findByRole('button', { name: 'Sign in with GitHub' }),
-    ).toBeTruthy();
+    expect(await within(dialog).findByRole('button', { name: 'Sign in with GitHub' })).toBeTruthy();
     await poll();
     expect(api.fetchDeviceFlow).not.toHaveBeenCalled();
   });
@@ -359,7 +357,9 @@ describe('GitHubAccountControl', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Sign out' }));
 
-    expect(await screen.findByText(/Signed out of @octocat\. PR Quest now acts as @hubot/));
+    expect(
+      await screen.findByText(/Signed out of @octocat\. PR Quest now acts as @hubot/),
+    ).toBeTruthy();
   });
 
   test('says nothing when the gh CLI account is the one that signed out', async () => {

@@ -19,7 +19,8 @@ const LEGACY_FILES = ['quests.json', 'state.json'] as const;
 const OWNER_FILE = '.legacy-owner';
 
 /** The backups of a migration that ran before the owner was recorded name the owner. */
-const BACKUP_PATTERN = /^(?:state|quests)\.json\.migrated-to-([a-z\d][a-z\d_-]{0,38})-\d{8}T\d{6}Z\.bak$/;
+const BACKUP_PATTERN =
+  /^(?:state|quests)\.json\.migrated-to-([a-z\d][a-z\d_-]{0,38})-\d{8}T\d{6}Z\.bak$/;
 
 /** One migration at a time, so two users signing in at once can't both copy the shared state. */
 const migrations = new WriteQueue();
@@ -65,7 +66,8 @@ async function migrate(
   await ensurePrivateDir(userDir);
   const ownerFile = join(usersDir, OWNER_FILE);
   let recorded = (await readIfExists(ownerFile))?.trim().toLowerCase();
-  let owner = recorded && LOGIN_PATTERN.test(recorded) ? recorded : await ownerFromBackups(stateDir);
+  let owner =
+    recorded && LOGIN_PATTERN.test(recorded) ? recorded : await ownerFromBackups(stateDir);
   const hasState = await exists(join(userDir, 'state.json'));
   const stamp = timestamp((options.now ?? (() => new Date()))());
   if (owner === undefined && !hasState && (await anyLegacyFile(stateDir))) {
@@ -81,7 +83,11 @@ async function migrate(
       continue;
     }
     const targetExists = await exists(target);
-    if ((owner === undefined || owner === login) && targetExists && (await sameContent(legacy, target))) {
+    if (
+      (owner === undefined || owner === login) &&
+      targetExists &&
+      (await sameContent(legacy, target))
+    ) {
       await rename(legacy, `${legacy}.migrated-to-${login}-${stamp}.bak`);
       migrated.push(name);
     } else if (owner === login && !targetExists && !hasState) {
@@ -147,10 +153,7 @@ async function setAside(file: string, stamp: string): Promise<string> {
 }
 
 function timestamp(date: Date): string {
-  return date
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d+/, '');
+  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
 }
 
 async function sameContent(a: string, b: string): Promise<boolean> {

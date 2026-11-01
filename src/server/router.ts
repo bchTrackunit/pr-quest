@@ -103,7 +103,11 @@ export function createRouter(
   return (req, res) => {
     handle(handlers, allowedOrigins, req, res).catch((error: unknown) => {
       if (error instanceof ApiError) {
-        sendError(res, error.status, { ...error.details, code: error.code, message: error.message });
+        sendError(res, error.status, {
+          ...error.details,
+          code: error.code,
+          message: error.message,
+        });
         return;
       }
       options.onUnexpectedError?.(error);

@@ -97,7 +97,11 @@ export class DeviceFlow {
       }
       throw error instanceof ApiError
         ? error
-        : new ApiError(502, 'upstreamFailed', `GitHub didn't start the sign-in: ${errorMessage(error)}`);
+        : new ApiError(
+            502,
+            'upstreamFailed',
+            `GitHub didn't start the sign-in: ${errorMessage(error)}`,
+          );
     }
     if (generation !== this.generation) {
       return this.current;

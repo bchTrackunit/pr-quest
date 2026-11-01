@@ -46,8 +46,7 @@ const ExpiryCountdown = ({ expiresAt }: { expiresAt: string }) => {
   const now = useNow(1000);
   return (
     <span className="device-flow__expiry">
-      Code expires in{' '}
-      <time dateTime={expiresAt}>{formatElapsed(Date.parse(expiresAt) - now)}</time>
+      Code expires in <time dateTime={expiresAt}>{formatElapsed(Date.parse(expiresAt) - now)}</time>
     </span>
   );
 };

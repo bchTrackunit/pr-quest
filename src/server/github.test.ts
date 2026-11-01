@@ -248,7 +248,7 @@ describe('GitHubClient.fetchReviewRequests', () => {
 
     const data = await github.client().fetchReviewRequests();
 
-    const { query } = github.calls.find(isBatch)?.body as { query: string };
+    const { query } = (github.calls.find(isBatch)?.body ?? {}) as { query: string };
     expect(query).toContain('viewer { login }');
     expect(query).toContain('isDraft');
     expect(query).toContain('latestReviews(first: 100) { nodes { state author { login } } }');
@@ -553,7 +553,9 @@ describe('GitHubClient.fetchDiff', () => {
       if (call.path.includes('/compare/')) {
         return json({ message: 'Not Found' }, 404);
       }
-      return call.accept === 'application/vnd.github.diff' ? ok(DIFF) : json({ head: { sha: HEAD } });
+      return call.accept === 'application/vnd.github.diff'
+        ? ok(DIFF)
+        : json({ head: { sha: HEAD } });
     });
 
     const diff = await github.client().fetchDiff(ref, { base: 'main', headSha: HEAD });
