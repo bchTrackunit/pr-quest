@@ -481,19 +481,78 @@ consecutive local calendar days with at least one rewarded action.
 Inbox Zero counts only what GitHub's search returns. Hiding a quest you just approved doesn't
 count as an empty queue, and neither does a refresh where most PR details couldn't be read.
 
-| Achievement     | How to unlock                                                   | Bonus XP |
-| --------------- | --------------------------------------------------------------- | -------- |
-| First Blood     | Your first post, request for changes or approval                | 10       |
-| Quick Draw      | Approve within an hour of the review request                    | 25       |
-| Boss Slayer     | Review or approve a Boss-tier PR                                | 50       |
-| Team Player     | 10 review actions on team-requested PRs                         | 40       |
-| Inbox Zero      | GitHub finds no review requests on a day you reviewed something | 30       |
-| On Fire         | A 5-day streak                                                  | 75       |
-| Agent Commander | 10 finished agent reviews                                       | 40       |
+Unlocking an achievement adds bonus XP by rarity, and the bonus can level you up:
+
+| Rarity    | Bonus XP |
+| --------- | -------- |
+| Common    | 25       |
+| Rare      | 50       |
+| Epic      | 100      |
+| Legendary | 200      |
+
+Each achievement pays its bonus once. Achievements unlocked before bonuses existed don't pay
+retroactively. "Review action" below means posting a review, requesting changes or approving;
+starting or finishing an agent counts only where it says so. Times and days use the server's
+local clock.
+
+| Achievement      | How to unlock                                                                 | Rarity    |
+| ---------------- | ----------------------------------------------------------------------------- | --------- |
+| **Milestones**   |                                                                               |           |
+| First Blood      | Your first review action                                                      | Common    |
+| Centurion Bronze | 10 review actions                                                             | Common    |
+| Centurion Silver | 50 review actions                                                             | Rare      |
+| Centurion Gold   | 100 review actions                                                            | Legendary |
+| Team Player      | 10 review actions on team-requested PRs                                       | Rare      |
+| Agent Commander  | 10 finished agent reviews                                                     | Rare      |
+| Gatekeeper       | Request changes on 5 different PRs                                            | Rare      |
+| Giant Killer     | Approve 5 Boss-tier PRs                                                       | Epic      |
+| **Streaks**      |                                                                               |           |
+| On Fire          | A 5-day streak                                                                | Epic      |
+| Unstoppable      | A 7-day streak                                                                | Legendary |
+| Early Bird       | A review action before 08:00                                                  | Common    |
+| Night Owl        | A review action at 22:00 or later                                             | Common    |
+| Weekend Warrior  | A review action on a Saturday or Sunday                                       | Common    |
+| **Feats**        |                                                                               |           |
+| Quick Draw       | Approve within an hour of the review request                                  | Rare      |
+| Boss Slayer      | Post a review on, or approve, a Boss-tier PR                                  | Rare      |
+| Inbox Zero       | GitHub finds no review requests on a day you reviewed something               | Rare      |
+| Clean Sweep      | Act on 5 direct requests in a day, and leave no direct request on the board   | Epic      |
+| Necromancer      | A review action on a PR requested 30 days or more ago                         | Rare      |
+| The Long Read    | A review action on a PR with 2,000 or more changed lines                      | Rare      |
+| Eagle Eye        | Post a review with at least one critical or major finding                     | Common    |
+| Featherweight    | Approve 10 Trivial PRs in a day, each after a posted review or finished agent | Rare      |
+| Second Opinion   | A finished Claude review and a finished Cursor review on the same PR          | Rare      |
+| **Variety**      |                                                                               |           |
+| Explorer         | Review actions in 10 different repos                                          | Rare      |
+| Diplomat         | Review actions on PRs from 10 different people, not counting yourself or bots | Rare      |
+| Bot Wrangler     | Review actions on 10 PRs by Dependabot or Renovate                            | Rare      |
+| **Secret**       |                                                                               |           |
+| Speedrunner      | Approve within 5 minutes of the request, after a posted review or agent run   | Epic      |
+| Archaeologist    | A review action on the quest that has waited longest on your board            | Rare      |
+
+The Achievements dialog shows the secret ones as "???" with a hint until they unlock, and shows
+progress where there is a count, such as Explorer 3/10 or Centurion 12/50 toward Silver. Daily
+counts (Clean Sweep, Featherweight) start again at local midnight.
 
 Achievements are defined in
 [`src/features/game/server/achievements.ts`](src/features/game/server/achievements.ts); the UI
 renders whatever that file lists.
+
+### Progress from before these achievements
+
+State from an older PR Quest keeps its XP, level, counters, streak and unlocked achievements.
+Some progress is rebuilt from what was already stored:
+
+- Centurion, Team Player and Agent Commander use the existing counters.
+- Explorer counts repos from rewarded approvals and posted reviews.
+- Giant Killer counts approved PRs whose stored review run was Boss-tier.
+- Eagle Eye counts posted reviews that had a critical or major finding.
+- Second Opinion uses the finished Claude and Cursor runs still in the run history.
+
+Anything rebuilt this way unlocks, with its bonus, at the next game event, such as the next
+queue check. Diplomat, Bot Wrangler, Gatekeeper, the daily counts and the time-of-day, weekday,
+wait-time and board achievements need details older state never stored, so they count only
+actions from now on.
 
 ## Where state lives
 
@@ -519,7 +578,10 @@ Quest starts without it. An unreadable `settings.json` is replaced with the defa
 reviews, default models) without a copy, and the next settings change overwrites it. An
 unreadable `quests.json` is ignored and replaced on the next successful fetch. A `secrets.json`
 or `settings.json` written by a newer PR Quest stops the server at startup with a message, so
-an older build never drops or overwrites it. Delete a user's folder to reset their progress. Board filters and presets live
+an older build never drops or overwrites it. A `state.json` from a newer PR Quest is left in place,
+and the game reports an error saying so instead of loading it. The first time PR Quest reads a version 1 `state.json`, it copies it
+to `state.json.v1.bak` before anything is written; an existing backup is never overwritten, and
+nothing reads it again. Copy it back over `state.json` to run an older build. Delete a user's folder to reset their progress. Board filters and presets live
 in the browser, as described in [Presets](#presets).
 
 ### Moving the old state into a user's folder
