@@ -665,6 +665,22 @@ anyone.
   the diff, title and branch names under your Anthropic key, and can't act (see
   [Claude reviews](#claude-reviews)). Neither can approve; only the **Approve** dialog can.
 
+## Privacy
+
+PR Quest has no server of its own and collects nothing. It sends your data only to the services
+you use it with, under your own accounts and keys:
+
+- **GitHub** gets the API calls described in [How it works](#how-it-works), made with your token.
+- **Cursor** gets the PR to review when you send a Cursor review agent, under your Cursor API key.
+  The agent reads the repo through your Cursor GitHub integration.
+- **Anthropic** gets the PR's diff, title and branch names when you send a Claude review, under
+  your Anthropic API key.
+- **Linear** gets a request for your pending reviews, under your Linear API key, if you set one.
+
+Nothing goes to the author of PR Quest: there is no telemetry, analytics or crash reporting. Each
+provider's own terms and privacy policy cover what it does with what it receives. Your state,
+settings and saved keys stay in the [state directory](#where-state-lives) on your machine.
+
 ## Known limitations
 
 - **`requestedAt` is the PR's open time.** GitHub search doesn't return when you were asked to
@@ -695,3 +711,7 @@ anyone.
   allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
   elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
+
+## License
+
+PR Quest is released under the [MIT License](LICENSE).
