@@ -44,6 +44,8 @@ export interface DatabaseConfig {
   masterKey: string;
   /** `PR_QUEST_PREVIOUS_MASTER_KEYS`: comma-separated keys being rotated out. */
   previousMasterKeys?: string;
+  /** `PR_QUEST_DATABASE_POOL_MAX`: most connections per server process, 1 to 100; default 10. */
+  poolMax?: number;
 }
 
 interface BaseConfig {
@@ -232,7 +234,13 @@ function databaseConfig(read: (name: string) => string | undefined): DatabaseCon
     );
   }
   const previousMasterKeys = read(PREVIOUS_MASTER_KEYS_VARIABLE);
-  const database = { url, masterKey, ...(previousMasterKeys ? { previousMasterKeys } : {}) };
+  const poolMax = read('PR_QUEST_DATABASE_POOL_MAX');
+  const database: DatabaseConfig = {
+    url,
+    masterKey,
+    ...(previousMasterKeys ? { previousMasterKeys } : {}),
+    ...(poolMax === undefined ? {} : { poolMax: Number(poolMax) }),
+  };
   assertDatabase(database);
   return database;
 }
@@ -241,6 +249,10 @@ function databaseConfig(read: (name: string) => string | undefined): DatabaseCon
 function assertDatabase(database: DatabaseConfig): void {
   if (!/^postgres(?:ql)?:\/\//.test(database.url)) {
     throw new Error('DATABASE_URL must be a postgres:// connection string');
+  }
+  const { poolMax } = database;
+  if (poolMax !== undefined && (!Number.isInteger(poolMax) || poolMax < 1 || poolMax > 100)) {
+    throw new Error('PR_QUEST_DATABASE_POOL_MAX must be an integer between 1 and 100');
   }
   MasterKeyring.fromConfig({ current: database.masterKey, previous: database.previousMasterKeys });
 }

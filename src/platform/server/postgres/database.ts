@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { z } from 'zod';
 
 /** What a statement returned. Rows are `unknown`; parse them with a schema before use. */
@@ -33,33 +33,88 @@ export function sharedDatabase(db: Database): SharedDatabase {
 export interface ConnectOptions {
   /** Most connections the pool opens; defaults to 10. */
   max?: number;
-  /** An idle connection failed, e.g. the server restarted. The pool replaces it. */
+  /** A connection failed, idle or mid-transaction, e.g. the server restarted. It isn't reused. */
   onError?: (message: string) => void;
+}
+
+/** What `poolConfig` sets; the `DATABASE_URL` query string overrides any of it. */
+export interface PoolSettings {
+  connectionString: string;
+  max: number;
+  connectionTimeoutMillis: number;
+  keepAlive: boolean;
+  statement_timeout: number;
+  idle_in_transaction_session_timeout: number;
+  application_name: string;
+}
+
+/** Bounds every wait, so an unreachable or stuck database fails a request instead of hanging it. */
+export function poolConfig(url: string, options: Pick<ConnectOptions, 'max'> = {}): PoolSettings {
+  return {
+    connectionString: url,
+    max: options.max ?? 10,
+    connectionTimeoutMillis: 10_000,
+    keepAlive: true,
+    statement_timeout: 15_000,
+    idle_in_transaction_session_timeout: 30_000,
+    application_name: 'pr-quest',
+  };
 }
 
 /** A pooled connection to `url`, a `postgres://` connection string such as `DATABASE_URL`. */
 export function connectPostgres(url: string, options: ConnectOptions = {}): Database {
-  const pool = new Pool({ connectionString: url, max: options.max ?? 10 });
+  const pool = new Pool(poolConfig(url, options));
   pool.on('error', (error) => {
     options.onError?.(`An idle database connection failed: ${error.message}`);
   });
-  return poolDatabase(pool);
+  return poolDatabase(pool, options.onError);
 }
 
-/** `pool` as a `Database`; closing it ends the pool. */
-export function poolDatabase(pool: Pool): Database {
+interface QueryResultLike {
+  rows: Array<unknown>;
+  rowCount: number | null;
+}
+
+/** The part of a `pg` pool connection a transaction uses. */
+export interface PoolClientLike {
+  query: (text: string, values?: Array<unknown>) => Promise<QueryResultLike>;
+  release: (error?: Error | boolean) => void;
+  on: (event: 'error', listener: (error: Error) => void) => unknown;
+  off: (event: 'error', listener: (error: Error) => void) => unknown;
+}
+
+/** The part of a `pg` pool a `Database` uses. */
+export interface PoolLike {
+  query: (text: string, values?: Array<unknown>) => Promise<QueryResultLike>;
+  connect: () => Promise<PoolClientLike>;
+  end: () => Promise<void>;
+}
+
+/**
+ * `pool` as a `Database`; closing it ends the pool. A connection that fails while a transaction
+ * holds it is reported to `onError`, rather than crashing the process, and the transaction fails.
+ */
+export function poolDatabase(pool: PoolLike, onError?: (message: string) => void): Database {
   return {
     query: (text, params) => run(pool, text, params),
     transaction: async (work) => {
       const client = await pool.connect();
+      const failed = (error: Error) => {
+        onError?.(`A database connection failed: ${error.message}`);
+      };
+      client.on('error', failed);
+      const release = (error?: Error | boolean) => {
+        client.off('error', failed);
+        client.release(error);
+      };
       try {
         await client.query('BEGIN');
         const result = await work({ query: (text, params) => run(client, text, params) });
         await client.query('COMMIT');
-        client.release();
+        release();
         return result;
       } catch (error) {
-        await rollback(client, error);
+        await rollback(client, release, error);
         throw error;
       }
     },
@@ -68,7 +123,7 @@ export function poolDatabase(pool: Pool): Database {
 }
 
 async function run(
-  target: Pool | PoolClient,
+  target: Pick<PoolLike, 'query'>,
   text: string,
   params: ReadonlyArray<unknown> = [],
 ): Promise<SqlResult> {
@@ -77,13 +132,40 @@ async function run(
 }
 
 /** Rolls back and returns the connection; one that can't roll back is closed instead of reused. */
-async function rollback(client: PoolClient, cause: unknown): Promise<void> {
+async function rollback(
+  client: PoolClientLike,
+  release: (error?: Error | boolean) => void,
+  cause: unknown,
+): Promise<void> {
   try {
     await client.query('ROLLBACK');
-    client.release();
+    release();
   } catch {
-    client.release(cause instanceof Error ? cause : true);
+    release(cause instanceof Error ? cause : true);
   }
+}
+
+/** Host names that stay on a private network or this machine, where TLS adds little. */
+const PRIVATE_HOST = /(\.internal|\.flycast|^localhost|^127\.\d+\.\d+\.\d+|^\[::1\])$/;
+
+/**
+ * A warning when `url` reaches a public host without TLS, which would send every user's sealed
+ * keys and the password in the clear. Names the host only, never the URL with its password.
+ */
+export function transportWarning(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const sslmode = parsed.searchParams.get('sslmode');
+  const ssl = parsed.searchParams.get('ssl');
+  const encrypted = (sslmode !== null && sslmode !== 'disable') || ssl === 'true' || ssl === '1';
+  if (encrypted || PRIVATE_HOST.test(parsed.hostname)) {
+    return undefined;
+  }
+  return `DATABASE_URL reaches ${parsed.hostname} without TLS. Add ?sslmode=require (or verify-full) unless that host is on a private network.`;
 }
 
 /** A `bytea` column, which `pg` reads as a `Buffer` and PGlite as a `Uint8Array`. */

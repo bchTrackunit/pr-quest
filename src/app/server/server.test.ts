@@ -252,6 +252,18 @@ describe('startServer', () => {
       await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow(
         /ECONNREFUSED|connect/,
       );
+      expect(logs.join('\n')).not.toMatch(/TLS/);
+    });
+
+    test('warns when the database is on a public host without TLS', async () => {
+      const database = {
+        url: 'postgres://nobody:s3cret@pr-quest-db.invalid:1/pr_quest',
+        masterKey: randomBytes(32).toString('base64'),
+      };
+
+      await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow();
+      expect(logs.join('\n')).toMatch(/pr-quest-db\.invalid without TLS/);
+      expect(logs.join('\n')).not.toContain('s3cret');
     });
   });
 

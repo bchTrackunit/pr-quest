@@ -272,6 +272,18 @@ describe('loadConfig', () => {
         });
       });
 
+      test('reads the pool size', () => {
+        const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: '4' };
+
+        expect(loadConfig({ env, envFilePath }).database?.poolMax).toBe(4);
+      });
+
+      test.each(['0', '101', 'ten'])('refuses the pool size %j', (poolMax) => {
+        const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: poolMax };
+
+        expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_DATABASE_POOL_MAX/);
+      });
+
       test('is optional, for a server given its storage in code', () => {
         expect(loadConfig({ env: hosted, envFilePath }).database).toBeUndefined();
       });

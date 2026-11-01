@@ -12,7 +12,11 @@ import {
   LOOPBACK_HOSTNAMES,
 } from '../../platform/server/config.ts';
 import { MasterKeyring } from '../../platform/server/envelope.ts';
-import { connectPostgres, type Database } from '../../platform/server/postgres/database.ts';
+import {
+  connectPostgres,
+  type Database,
+  transportWarning,
+} from '../../platform/server/postgres/database.ts';
 import { openPostgresStorage } from './postgresStorage.ts';
 import {
   createRouter,
@@ -206,7 +210,11 @@ async function openDatabase(
     current: config.masterKey,
     previous: config.previousMasterKeys,
   });
-  const db = connectPostgres(config.url, { onError: warn });
+  const transport = transportWarning(config.url);
+  if (transport) {
+    warn(transport);
+  }
+  const db = connectPostgres(config.url, { max: config.poolMax, onError: warn });
   try {
     return { db, storage: await openPostgresStorage(db, { keyring, warn }) };
   } catch (error) {
