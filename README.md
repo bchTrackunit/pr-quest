@@ -133,8 +133,10 @@ if you signed in before the approval, **Sign out** to get the organization's PRs
 
 ### The gh fallback
 
-Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth token`). It reads
-the token again at most every 5 minutes, so `gh auth switch` can take that long to show up. When
+Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth token`). It looks
+for `gh` on the `PATH` and, on macOS and Linux, also in `/opt/homebrew/bin` and `/usr/local/bin`,
+because the desktop app started from the Dock or a launcher doesn't get your shell's `PATH`. It
+reads the token again at most every 5 minutes, so `gh auth switch` can take that long to show up. When
 you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
 Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
 account, PR Quest says so after you sign out. The account chip in the page's top-right corner

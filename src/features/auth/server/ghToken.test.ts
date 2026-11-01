@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { readGhToken } from './ghToken.ts';
+import { ghSearchPath, readGhToken } from './ghToken.ts';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 
@@ -51,10 +51,52 @@ describe('readGhToken', () => {
     }
 
     const env = (execFileMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
-    expect(env).toMatchObject({ PATH: process.env.PATH, GH_PROMPT_DISABLED: '1' });
+    expect(env).toMatchObject({
+      PATH: ghSearchPath(process.env.PATH, process.platform),
+      GH_PROMPT_DISABLED: '1',
+    });
     expect(env).not.toHaveProperty('CURSOR_API_KEY');
     expect(env).not.toHaveProperty('LINEAR_API_KEY');
     expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    "also looks for gh where Homebrew installs it, which an app opened from the Dock doesn't have on its PATH",
+    async () => {
+      vi.stubEnv('PATH', '/usr/bin:/bin');
+      respondWith(null, 'gho_x');
+
+      try {
+        await readGhToken();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const env = (execFileMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+      expect(env?.PATH).toBe('/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin');
+    },
+  );
+});
+
+describe('ghSearchPath', () => {
+  test('appends the usual install folders after the inherited PATH', () => {
+    expect(ghSearchPath('/usr/bin:/bin', 'darwin')).toBe(
+      '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
+    );
+  });
+
+  test('keeps the PATH order and adds no folder twice', () => {
+    expect(ghSearchPath('/usr/local/bin:/usr/bin', 'linux')).toBe(
+      '/usr/local/bin:/usr/bin:/opt/homebrew/bin',
+    );
+  });
+
+  test('works without an inherited PATH', () => {
+    expect(ghSearchPath(undefined, 'darwin')).toBe('/opt/homebrew/bin:/usr/local/bin');
+  });
+
+  test('leaves Windows alone', () => {
+    expect(ghSearchPath('C:\\Windows\\System32', 'win32')).toBe('C:\\Windows\\System32');
   });
 
   test.each([
