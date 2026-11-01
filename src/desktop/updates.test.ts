@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { scheduleUpdateChecks, UPDATE_CHECK_INTERVAL_MS, updatesEnabled } from './updates.ts';
+import {
+  prepareUpdater,
+  scheduleUpdateChecks,
+  UPDATE_CHECK_INTERVAL_MS,
+  updatesEnabled,
+  updateSource,
+} from './updates.ts';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -38,6 +44,41 @@ describe('updatesEnabled', () => {
 
   test('not when PR_QUEST_DISABLE_UPDATES is set', () => {
     expect(updatesEnabled({ ...release, env: { PR_QUEST_DISABLE_UPDATES: '1' } })).toBe(false);
+  });
+});
+
+describe('updateSource', () => {
+  test.each(['darwin', 'win32'] as const)(
+    '%s updates with its own installer format',
+    (platform) => {
+      expect(updateSource({ platform, env: {} })).toBe('platform');
+    },
+  );
+
+  test('an AppImage replaces itself, which needs no administrator rights', () => {
+    expect(
+      updateSource({ platform: 'linux', env: { APPIMAGE: '/home/me/PR Quest.AppImage' } }),
+    ).toBe('appimage');
+  });
+
+  test('anything else on Linux, such as a deb install, is updated by downloading the new package', () => {
+    expect(updateSource({ platform: 'linux', env: {} })).toBe('download');
+    expect(updateSource({ platform: 'linux', env: { APPIMAGE: '' } })).toBe('download');
+  });
+});
+
+describe('prepareUpdater', () => {
+  const fresh = () => ({ checkForUpdatesAndNotify: vi.fn(), allowDowngrade: false, channel: null });
+
+  test('never lets a release install an older version', () => {
+    const updater = { ...fresh(), allowDowngrade: true };
+
+    expect(prepareUpdater(updater)).toBe(updater);
+    expect(updater.allowDowngrade).toBe(false);
+  });
+
+  test('refuses an updater set to a channel, which would allow downgrades again', () => {
+    expect(() => prepareUpdater({ ...fresh(), channel: 'beta' })).toThrow(/channel/);
   });
 });
 

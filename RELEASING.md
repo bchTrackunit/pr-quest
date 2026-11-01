@@ -202,8 +202,10 @@ installers. Updates still install. A signed installer can still get a SmartScree
 while, until enough people have installed it for SmartScreen to trust it.
 
 **Linux.** Nothing is signed. The AppImage runs once it's made executable, and the `deb`
-installs with `sudo apt install ./pr-quest-<version>-<arch>.deb`. The AppImage updates itself;
-updating the `deb` this way hasn't been tested.
+installs with `sudo apt install ./pr-quest-<version>-<arch>.deb`. The AppImage updates itself.
+An app installed from the `deb` never does, since electron-updater would install the new package
+as root with only a checksum from the same release to trust; its **Help** menu opens the latest
+release instead, and the user installs the new `deb` the same way.
 
 ## Limits
 

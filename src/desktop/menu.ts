@@ -4,6 +4,8 @@ export interface MenuOptions {
   platform: NodeJS.Platform;
   appName: string;
   openHelp: () => void;
+  /** Opens the release page; given only to an install that doesn't update itself. */
+  openDownloads?: () => void;
   /** Offers Toggle Developer Tools, which only development builds should. */
   devTools: boolean;
 }
@@ -30,7 +32,12 @@ const VIEW_WITHOUT_DEV_TOOLS: MenuItemConstructorOptions = {
 export function menuTemplate(options: MenuOptions): Array<MenuItemConstructorOptions> {
   const help: MenuItemConstructorOptions = {
     role: 'help',
-    submenu: [{ label: `${options.appName} Help`, click: options.openHelp }],
+    submenu: [
+      { label: `${options.appName} Help`, click: options.openHelp },
+      ...(options.openDownloads
+        ? [{ label: 'Download the Latest Version', click: options.openDownloads }]
+        : []),
+    ],
   };
   const standard: Array<MenuItemConstructorOptions> = [
     { role: 'editMenu' },

@@ -53,4 +53,28 @@ describe('menuTemplate', () => {
 
     expect(options.openHelp).toHaveBeenCalled();
   });
+
+  test('Help offers the release page to an install that never updates itself, such as a deb', () => {
+    const openDownloads = vi.fn();
+    const help = menuTemplate({ ...options, platform: 'linux', openDownloads }).find(
+      (item) => item.role === 'help',
+    );
+    const download = Array.isArray(help?.submenu)
+      ? help.submenu.find((item) => item.label === 'Download the Latest Version')
+      : undefined;
+
+    Reflect.apply(download?.click ?? (() => undefined), undefined, []);
+
+    expect(openDownloads).toHaveBeenCalled();
+  });
+
+  test('Help has no download item where the app updates itself', () => {
+    const help = menuTemplate({ ...options, platform: 'linux' }).find(
+      (item) => item.role === 'help',
+    );
+
+    expect(Array.isArray(help?.submenu) ? help.submenu.map((item) => item.label) : []).toEqual([
+      'PR Quest Help',
+    ]);
+  });
 });

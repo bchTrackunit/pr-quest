@@ -20,9 +20,15 @@ import { forbiddenSwitch } from './launchGuard.ts';
 import { menuTemplate } from './menu.ts';
 import { externalUrl, isAllowedPermission, isAppUrl } from './navigation.ts';
 import { type DesktopPreferences, readPreferences, writePreferences } from './preferences.ts';
-import { README_URL, RELEASE_REPO } from './release.ts';
+import { LATEST_RELEASE_URL, README_URL, RELEASE_REPO } from './release.ts';
 import { secretsNotice } from './secretsNotice.ts';
-import { scheduleUpdateChecks, updatesEnabled } from './updates.ts';
+import {
+  prepareUpdater,
+  scheduleUpdateChecks,
+  updatesEnabled,
+  updateSource,
+  type UpdateSource,
+} from './updates.ts';
 
 /** `PR_QUEST_SMOKE_TEST=1` checks a build, prints the results and exits; see smoke.ts. */
 const smokeTest = process.env.PR_QUEST_SMOKE_TEST === '1';
@@ -112,6 +118,14 @@ function run(): void {
   void app
     .whenReady()
     .then(async () => {
+      const updates = updatesEnabled({
+        isPackaged: app.isPackaged,
+        releaseBuild: RELEASE_BUILD,
+        repo: RELEASE_REPO,
+        env: process.env,
+      })
+        ? updateSource({ platform: process.platform, env: process.env })
+        : undefined;
       Menu.setApplicationMenu(
         Menu.buildFromTemplate(
           menuTemplate({
@@ -120,6 +134,13 @@ function run(): void {
             openHelp: () => {
               void shell.openExternal(README_URL);
             },
+            ...(updates === 'download'
+              ? {
+                  openDownloads: () => {
+                    void shell.openExternal(LATEST_RELEASE_URL);
+                  },
+                }
+              : {}),
             devTools: !app.isPackaged,
           }),
         ),
@@ -158,17 +179,12 @@ function run(): void {
         await runSmokeTestAndExit(window, running, log);
         return;
       }
-      if (
-        updatesEnabled({
-          isPackaged: app.isPackaged,
-          releaseBuild: RELEASE_BUILD,
-          repo: RELEASE_REPO,
-          env: process.env,
-        })
-      ) {
-        const { autoUpdater } = electronUpdater;
-        autoUpdater.logger = { info: log.info, warn: log.warn, error: log.warn };
-        stopUpdates = scheduleUpdateChecks(autoUpdater, log);
+      if (updates === 'download') {
+        log.info(`this install doesn't update itself; new versions are at ${LATEST_RELEASE_URL}`);
+      } else if (updates !== undefined) {
+        const updater = prepareUpdater(openUpdater(updates));
+        updater.logger = { info: log.info, warn: log.warn, error: log.warn };
+        stopUpdates = scheduleUpdateChecks(updater, log);
       }
     })
     .catch((error: unknown) => {
@@ -258,6 +274,16 @@ function guardPermissions(appUrl: string): void {
  * The window shows only the app. Links to anywhere else, such as a PR on GitHub, open in the system
  * browser, and the page can't open windows of its own.
  */
+/**
+ * The updater for an install that updates itself. On Linux this is always the AppImage updater:
+ * electron-updater's own pick could be its deb updater, which installs as root.
+ */
+function openUpdater(source: Exclude<UpdateSource, 'download'>): electronUpdater.AppUpdater {
+  return source === 'appimage'
+    ? new electronUpdater.AppImageUpdater()
+    : electronUpdater.autoUpdater;
+}
+
 function openWindow(url: string, log: LogFile): BrowserWindow {
   const { origin } = new URL(url);
   const window = new BrowserWindow({

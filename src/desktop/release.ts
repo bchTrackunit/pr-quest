@@ -50,6 +50,8 @@ export const RELEASE_REPO = releaseRepo(RELEASE_REPO_OVERRIDE);
 
 export const README_URL = `https://github.com/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}#readme`;
 
+export const LATEST_RELEASE_URL = `https://github.com/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/releases/latest`;
+
 /** Whether `repo` names a real repository that releases may be published to and updates read from. */
 export function isPublishable(repo: ReleaseRepo): boolean {
   // GitHub owner names are case-insensitive, so `change-me` is the placeholder too.

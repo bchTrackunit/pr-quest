@@ -338,6 +338,9 @@ hours, downloads it in the background and installs it when you quit. Set
 `PR_QUEST_DISABLE_UPDATES=1` to turn this off. The repository it checks, and that **Help** opens,
 is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts), or the `owner/repo` in
 `PR_QUEST_RELEASE_REPO` when the app was built; macOS installs updates only into a signed app.
+On Linux only the AppImage updates itself. An app installed from the `deb` never does, because
+electron-updater would install the new package as root; **Help** then has **Download the Latest
+Version**, which opens the latest release.
 
 A release build is one built with `PR_QUEST_RELEASE_BUILD=1` in the environment of both
 `yarn build` (which bakes the flag into the desktop bundle) and electron-builder (which then
