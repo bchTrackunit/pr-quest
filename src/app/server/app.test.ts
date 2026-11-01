@@ -193,7 +193,8 @@ afterEach(async () => {
   app = undefined;
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   server = undefined;
-  await rm(dir, { recursive: true, force: true });
+  // A quest cache write already under way when the app closed can still land in a user folder.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe('createApp', () => {

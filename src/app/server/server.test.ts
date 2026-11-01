@@ -35,7 +35,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await running?.close();
   running = undefined;
-  await rm(dir, { recursive: true, force: true });
+  // A quest cache write already under way when the server closed can still land in a user folder.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 const offline: ServerOverrides = {
