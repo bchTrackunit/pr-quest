@@ -78,6 +78,7 @@ describe('settings', () => {
       reviewProvider: 'claude',
       models: {},
       timeZone: 'Europe/Copenhagen',
+      timeZoneChangedAt: expect.any(String),
     });
     expect((await reopened.settings(userScope(BOB))).get()).toEqual({
       reviewProvider: 'cursor',

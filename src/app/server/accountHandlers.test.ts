@@ -196,6 +196,62 @@ describe('settings', () => {
     expect(services.settings.update).toHaveBeenCalledWith({ timeZone: 'Europe/Copenhagen' });
   });
 
+  describe('with a time zone change limit, as in hosted mode', () => {
+    const DAY = 24 * 60 * 60_000;
+    let now: Date;
+
+    beforeEach(async () => {
+      now = new Date('2026-11-02T09:00:00Z');
+      settings = {
+        reviewProvider: 'cursor',
+        models: {},
+        timeZone: 'Asia/Tokyo',
+        timeZoneChangedAt: '2026-11-01T10:00:00.000Z',
+      };
+      services = { ...fakeServices(), timeZoneChanges: { minIntervalMs: DAY, now: () => now } };
+      await listen(services);
+    });
+
+    test('refuses a second change within a day, saying when it may change again', async () => {
+      const response = await send('PUT', '/api/settings', {
+        body: { timeZone: 'Europe/Copenhagen' },
+      });
+
+      expect(response).toMatchObject({
+        status: 429,
+        body: {
+          error: {
+            code: 'rateLimited',
+            message: expect.stringContaining('2026-11-02T10:00:00.000Z'),
+          },
+        },
+      });
+      await expect(
+        send('PUT', '/api/settings', { body: { timeZone: null } }),
+      ).resolves.toMatchObject({ status: 429 });
+      expect(services.settings.update).not.toHaveBeenCalled();
+    });
+
+    test('still saves the same zone and the other settings', async () => {
+      const same = await send('PUT', '/api/settings', {
+        body: { timeZone: 'asia/tokyo', reviewProvider: 'claude' },
+      });
+
+      expect(same.status).toBe(200);
+      expect(services.settings.update).toHaveBeenCalledTimes(1);
+    });
+
+    test('allows the change once a day has passed', async () => {
+      now = new Date('2026-11-02T10:00:00Z');
+
+      const response = await send('PUT', '/api/settings', {
+        body: { timeZone: 'Europe/Copenhagen' },
+      });
+
+      expect(response).toMatchObject({ status: 200, body: { timeZone: 'Europe/Copenhagen' } });
+    });
+  });
+
   test('PUT /api/settings clears the time zone with null', async () => {
     settings = { reviewProvider: 'cursor', models: {}, timeZone: 'Asia/Tokyo' };
 

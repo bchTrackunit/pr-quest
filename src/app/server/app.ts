@@ -80,6 +80,9 @@ function perRequest<TName extends JsonRouteName>(
   };
 }
 
+/** A hosted player may move their streak calendar once a day, so hopping zones can't stretch a day. */
+const TIME_ZONE_CHANGE_INTERVAL_MS = 24 * 60 * 60_000;
+
 /** Sign-in failures as API errors: 401 when nobody is signed in, 502 when GitHub can't say. */
 function signInFailure(error: unknown): never {
   if (error instanceof NotSignedInError) {
@@ -362,7 +365,11 @@ export async function createApp(options: AppOptions): Promise<App> {
     const scoped = await servicesFor(scope);
     let handlers = settingsHandlers.get(scoped);
     if (!handlers) {
-      handlers = createSettingsHandlers(scoped);
+      handlers = createSettingsHandlers(
+        hosted
+          ? { ...scoped, timeZoneChanges: { minIntervalMs: TIME_ZONE_CHANGE_INTERVAL_MS } }
+          : scoped,
+      );
       settingsHandlers.set(scoped, handlers);
     }
     return handlers;

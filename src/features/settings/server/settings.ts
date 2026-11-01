@@ -22,6 +22,8 @@ export interface AppSettings {
   models: Partial<Record<ReviewProvider, string>>;
   /** The player's IANA time zone for streaks and daily achievements; absent means the machine's. */
   timeZone?: string;
+  /** When `timeZone` last changed, as an ISO timestamp, so changes can be limited. */
+  timeZoneChangedAt?: string;
 }
 
 export interface SettingsPatch {
@@ -40,6 +42,7 @@ const SettingsFileSchema = z.object({
   models: z.partialRecord(ProviderSchema, z.string()),
   /** Older builds drop it on their next write, which only resets the zone to the machine's. */
   timeZone: z.string().optional().catch(undefined),
+  timeZoneChangedAt: z.iso.datetime().optional().catch(undefined),
 });
 
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
@@ -61,13 +64,23 @@ export const SETTINGS_DOCUMENT: DocumentCodec<AppSettings> = {
     if (timeZone) {
       settings.timeZone = timeZone;
     }
+    if (parsed.data.timeZoneChangedAt) {
+      settings.timeZoneChangedAt = parsed.data.timeZoneChangedAt;
+    }
     return settings;
   },
   encode: (settings) => ({ version: 1, ...settings }),
 };
 
-/** `current` with `patch` applied; models set to `null` and a `null` zone are cleared. */
-export function applySettingsPatch(current: AppSettings, patch: SettingsPatch): AppSettings {
+/**
+ * `current` with `patch` applied; models set to `null` and a `null` zone are cleared. A zone that
+ * changes is stamped with `now`.
+ */
+export function applySettingsPatch(
+  current: AppSettings,
+  patch: SettingsPatch,
+  now: Date = new Date(),
+): AppSettings {
   const models = { ...current.models };
   for (const [provider, model] of Object.entries(patch.models ?? {})) {
     const name = ProviderSchema.parse(provider);
@@ -81,11 +94,32 @@ export function applySettingsPatch(current: AppSettings, patch: SettingsPatch): 
     reviewProvider: patch.reviewProvider ?? current.reviewProvider,
     models,
   };
-  const timeZone = patch.timeZone === undefined ? current.timeZone : patch.timeZone;
+  const timeZone = patch.timeZone === undefined ? current.timeZone : (patch.timeZone ?? undefined);
   if (timeZone) {
     next.timeZone = timeZone;
   }
+  const changedAt = timeZone === current.timeZone ? current.timeZoneChangedAt : now.toISOString();
+  if (changedAt) {
+    next.timeZoneChangedAt = changedAt;
+  }
   return next;
+}
+
+/**
+ * When `patch` may change `current`'s time zone, if it changes the zone sooner than `minIntervalMs`
+ * after the last change; otherwise `undefined`.
+ */
+export function timeZoneChangeAllowedAt(
+  current: AppSettings,
+  patch: SettingsPatch,
+  limit: { minIntervalMs: number; now: Date },
+): Date | undefined {
+  if (patch.timeZone === undefined || (patch.timeZone ?? undefined) === current.timeZone) {
+    return undefined;
+  }
+  const last = current.timeZoneChangedAt ? Date.parse(current.timeZoneChangedAt) : Number.NaN;
+  const allowedAt = last + limit.minIntervalMs;
+  return allowedAt > limit.now.getTime() ? new Date(allowedAt) : undefined;
 }
 
 /** The review provider, models and time zone. `get` is synchronous, so an implementation loads on open. */

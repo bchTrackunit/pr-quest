@@ -946,21 +946,38 @@ describe('createApp on Postgres storage', () => {
   test("shows the streak by the calendar of the player's time zone", async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     // 07:00 UTC on the 12th is still the 11th in Los Angeles, the day after the last review.
-    vi.setSystemTime(new Date('2026-11-12T07:00:00Z'));
     const storage = await postgres();
-    const seeded = await storage.gameState(accountOf('brianchristensen'));
+    const player = accountOf('brianchristensen');
+    vi.setSystemTime(new Date('2026-11-09T07:00:00Z'));
+    await (await storage.settings(userScope(player))).update({ timeZone: 'UTC' });
+    vi.setSystemTime(new Date('2026-11-12T07:00:00Z'));
+    const seeded = await storage.gameState(player);
     await seeded.update((state) => ({
       ...state,
       game: { ...state.game, streakDays: 3, lastReviewDate: '2026-11-10' },
     }));
     await start({ config: hostedConfig(), identity: headerIdentity, storage });
 
-    await send('PUT', '/api/settings', { timeZone: 'UTC' }, as(GH_TOKEN));
     const inUtc = await send('GET', '/api/player', undefined, as(GH_TOKEN));
     await send('PUT', '/api/settings', { timeZone: 'America/Los_Angeles' }, as(GH_TOKEN));
     const inLosAngeles = await send('GET', '/api/player', undefined, as(GH_TOKEN));
 
     expect(inUtc.body).toMatchObject({ player: { streakDays: 0 } });
     expect(inLosAngeles.body).toMatchObject({ player: { streakDays: 3 } });
+  });
+
+  test('lets a player change their time zone once a day, so streaks follow one calendar', async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+
+    const first = await send('PUT', '/api/settings', { timeZone: 'UTC' }, as(GH_TOKEN));
+    const second = await send(
+      'PUT',
+      '/api/settings',
+      { timeZone: 'Pacific/Kiritimati' },
+      as(GH_TOKEN),
+    );
+
+    expect(first.status).toBe(200);
+    expect(second).toMatchObject({ status: 429, body: { error: { code: 'rateLimited' } } });
   });
 });

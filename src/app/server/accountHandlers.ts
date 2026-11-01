@@ -6,7 +6,12 @@ import {
   type GitHubAccount,
   type SettingsResponse,
 } from '../../shared/api.ts';
-import type { ApiKeys, ModelCatalog, SettingsStore } from '../../features/settings/server/index.ts';
+import {
+  type ApiKeys,
+  type ModelCatalog,
+  type SettingsStore,
+  timeZoneChangeAllowedAt,
+} from '../../features/settings/server/index.ts';
 import type { DeviceFlow } from '../../features/auth/server/index.ts';
 import { ApiError, type RouteHandlers } from '../../platform/server/router.ts';
 import { canonicalTimeZone } from '../../platform/server/timeZone.ts';
@@ -71,6 +76,11 @@ export interface SettingsServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
   settings: Pick<SettingsStore, 'get' | 'update'>;
   models: Pick<ModelCatalog, 'list'>;
+  /**
+   * How often a player may change their time zone, which moves the calendar their streaks and
+   * daily achievements count by. Without it, as in local mode, any time.
+   */
+  timeZoneChanges?: { minIntervalMs: number; now?: () => Date };
 }
 
 /** What the sign-in routes act on. */
@@ -149,7 +159,7 @@ export function createAuthHandlers(services: AuthServices): RouteHandlers {
 
 /** The settings, API key and model routes. */
 export function createSettingsHandlers(services: SettingsServices): RouteHandlers {
-  const { apiKeys, settings, models } = services;
+  const { apiKeys, settings, models, timeZoneChanges } = services;
 
   const settingsResponse = (): SettingsResponse => {
     const current = settings.get();
@@ -166,6 +176,19 @@ export function createSettingsHandlers(services: SettingsServices): RouteHandler
 
     updateSettings: async ({ body }) => {
       const patch = parseOrReject(UpdateSettingsSchema, body, 'Invalid settings');
+      const allowedAt =
+        timeZoneChanges &&
+        timeZoneChangeAllowedAt(settings.get(), patch, {
+          minIntervalMs: timeZoneChanges.minIntervalMs,
+          now: timeZoneChanges.now?.() ?? new Date(),
+        });
+      if (allowedAt) {
+        throw new ApiError(
+          429,
+          'rateLimited',
+          `The time zone can change once a day; try again after ${allowedAt.toISOString()}`,
+        );
+      }
       await settings.update(patch);
       return settingsResponse();
     },

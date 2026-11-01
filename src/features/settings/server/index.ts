@@ -7,4 +7,5 @@ export {
   SETTINGS_DOCUMENT,
   type SettingsPatch,
   type SettingsStore,
+  timeZoneChangeAllowedAt,
 } from './settings.ts';

@@ -56,7 +56,32 @@ describe('FileSettingsStore', () => {
     expect((await FileSettingsStore.open(dir)).get()).toEqual({
       reviewProvider: 'cursor',
       models: {},
+      timeZoneChangedAt: expect.any(String),
     });
+  });
+
+  test('records when the time zone last changed, and only when it changes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-01T10:00:00Z'));
+      const settings = await FileSettingsStore.open(dir);
+      await settings.update({ timeZone: 'Asia/Tokyo' });
+
+      vi.setSystemTime(new Date('2026-11-01T11:00:00Z'));
+      await settings.update({ timeZone: 'Asia/Tokyo' });
+      await settings.update({ reviewProvider: 'claude' });
+      await settings.update({ timeZone: null, models: {} });
+      vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
+      await settings.update({ timeZone: null });
+
+      expect((await FileSettingsStore.open(dir)).get()).toEqual({
+        reviewProvider: 'claude',
+        models: {},
+        timeZoneChangedAt: '2026-11-01T11:00:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('keeps the time zone when a patch leaves it out', async () => {
