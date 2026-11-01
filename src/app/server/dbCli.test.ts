@@ -13,11 +13,13 @@ const CONNECTION_STRING = 'postgres://pr_quest:s3cret-password@db.internal:5432/
 
 let database: TestDatabase;
 let output: Array<string>;
+let errors: Array<string>;
 let connectedTo: Array<string>;
 
 beforeEach(async () => {
   database = await openTestDatabase({ migrated: false });
   output = [];
+  errors = [];
   connectedTo = [];
 });
 
@@ -34,6 +36,7 @@ const run = (args: Array<string>, env: NodeJS.ProcessEnv = { DATABASE_URL: CONNE
       return { ...database.db, close: async () => undefined };
     },
     out: (line) => output.push(line),
+    err: (line) => errors.push(line),
   });
 
 describe('runDbCommand', () => {
@@ -78,22 +81,52 @@ describe('runDbCommand', () => {
 
     expect(await run(['rewrap-keys'], env)).toBe(0);
     expect(output).toEqual(['Rewrapped 1 data key with the current master key']);
+    expect(errors).toEqual([]);
+  });
+
+  test("rewrap-keys fails, on stderr, naming each data key it couldn't rewrap", async () => {
+    await run(['migrate']);
+    const octocat = { id: 583231, login: 'octocat' };
+    await ensureUser(database.db, octocat);
+    const unknownKey = randomBytes(32).toString('base64');
+    const store = await PostgresSecretStore.open(
+      database.db,
+      octocat,
+      MasterKeyring.fromConfig({ current: unknownKey }),
+    );
+    await store.set('cursor', 'key_cursor');
+    output = [];
+    const currentKey = randomBytes(32).toString('base64');
+
+    const code = await run(['rewrap-keys'], {
+      DATABASE_URL: CONNECTION_STRING,
+      PR_QUEST_MASTER_KEY: currentKey,
+    });
+
+    expect(code).toBe(1);
+    expect(output).toEqual(['Rewrapped 0 data keys with the current master key']);
+    expect(errors).toEqual([
+      expect.stringMatching(/^Could not rewrap GitHub id 583231's data key v1: .*isn't configured/),
+    ]);
+    for (const secret of [unknownKey, currentKey, CONNECTION_STRING]) {
+      expect(errors.join('\n')).not.toContain(secret);
+    }
   });
 
   test('rewrap-keys needs the master key', async () => {
     expect(await run(['rewrap-keys'])).toBe(1);
-    expect(output.join('\n')).toMatch(/PR_QUEST_MASTER_KEY is required/);
+    expect(errors.join('\n')).toMatch(/PR_QUEST_MASTER_KEY is required/);
   });
 
   test('needs DATABASE_URL', async () => {
     expect(await run(['migrate'], {})).toBe(1);
-    expect(output.join('\n')).toMatch(/DATABASE_URL is required/);
+    expect(errors.join('\n')).toMatch(/DATABASE_URL is required/);
     expect(connectedTo).toEqual([]);
   });
 
   test.each([[[]], [['drop-everything']]])('prints the usage for %j', async (args) => {
     expect(await run(args)).toBe(1);
-    expect(output.join('\n')).toMatch(/Usage: .*migrate \| status \| rewrap-keys/);
+    expect(errors.join('\n')).toMatch(/Usage: .*migrate \| status \| rewrap-keys/);
   });
 
   test('never prints the connection string, which holds the password', async () => {
@@ -107,10 +140,12 @@ describe('runDbCommand', () => {
         close: async () => undefined,
       }),
       out: (line) => output.push(line),
+      err: (line) => errors.push(line),
     });
 
     expect(failing).toBe(1);
-    expect(output.join('\n')).toMatch(/password authentication failed/);
-    expect(output.join('\n')).not.toContain('s3cret-password');
+    expect(output).toEqual([]);
+    expect(errors.join('\n')).toMatch(/password authentication failed/);
+    expect(errors.join('\n')).not.toContain('s3cret-password');
   });
 });

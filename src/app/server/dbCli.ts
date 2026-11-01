@@ -10,10 +10,16 @@ import { rewrapDataKeys } from '../../platform/server/postgres/secrets.ts';
 const USAGE = 'Usage: db <migrate | status | rewrap-keys>';
 
 export interface DbCliOptions {
-  /** Reads `DATABASE_URL`, and the master keys for `rewrap-keys`. */
+  /**
+   * Reads `DATABASE_URL`, and the master keys for `rewrap-keys`. They come only from the
+   * environment, never from arguments, so they stay out of shell history and process listings.
+   */
   env: NodeJS.ProcessEnv;
   connect?: (url: string) => Database;
+  /** Progress and results, for stdout. */
   out: (line: string) => void;
+  /** Failures, for stderr. Nothing here ever prints the connection string or a key. */
+  err: (line: string) => void;
 }
 
 /**
@@ -21,32 +27,33 @@ export interface DbCliOptions {
  * - `migrate` runs the pending schema migrations; run it before starting a new build.
  * - `status` lists them, failing while any is pending.
  * - `rewrap-keys` rewraps every data key under `PR_QUEST_MASTER_KEY`, after a rotation, so the
- *   keys in `PR_QUEST_PREVIOUS_MASTER_KEYS` can be dropped.
+ *   keys in `PR_QUEST_PREVIOUS_MASTER_KEYS` can be dropped. It fails if any data key couldn't be
+ *   rewrapped, after trying them all.
  */
 export async function runDbCommand(args: Array<string>, options: DbCliOptions): Promise<number> {
-  const { env, out } = options;
+  const { env, err } = options;
   const [command] = args;
   if (args.length !== 1 || !isCommand(command)) {
-    out(USAGE);
+    err(USAGE);
     return 1;
   }
   const url = env.DATABASE_URL?.trim();
   if (!url) {
-    out('DATABASE_URL is required: the postgres:// connection string of the database');
+    err('DATABASE_URL is required: the postgres:// connection string of the database');
     return 1;
   }
   let keyring: MasterKeyring | undefined;
   try {
     keyring = command === 'rewrap-keys' ? keyringFrom(env) : undefined;
   } catch (error) {
-    out(messageOf(error));
+    err(messageOf(error));
     return 1;
   }
   const db = (options.connect ?? connectPostgres)(url);
   try {
-    return await COMMANDS[command](db, out, keyring);
+    return await COMMANDS[command](db, options, keyring);
   } catch (error) {
-    out(`Failed: ${messageOf(error)}`);
+    err(`Failed: ${messageOf(error)}`);
     return 1;
   } finally {
     await db.close();
@@ -55,12 +62,12 @@ export async function runDbCommand(args: Array<string>, options: DbCliOptions): 
 
 type Command = (
   db: Database,
-  out: (line: string) => void,
+  print: Pick<DbCliOptions, 'out' | 'err'>,
   keyring?: MasterKeyring,
 ) => Promise<number>;
 
 const COMMANDS = {
-  migrate: async (db, out) => {
+  migrate: async (db, { out }) => {
     const ran = await migrate(db);
     for (const id of ran) {
       out(`Ran migration ${id}`);
@@ -70,7 +77,7 @@ const COMMANDS = {
     }
     return 0;
   },
-  status: async (db, out) => {
+  status: async (db, { out }) => {
     const { pending, unknown, breaking } = await schemaStatus(db);
     if (unknown.length > 0) {
       out(`Run by a newer build: ${unknown.join(', ')}`);
@@ -86,13 +93,16 @@ const COMMANDS = {
     }
     return pending.length > 0 || unknown.length > 0 ? 1 : 0;
   },
-  'rewrap-keys': async (db, out, keyring) => {
+  'rewrap-keys': async (db, { out, err }, keyring) => {
     if (!keyring) {
       throw new Error('rewrap-keys needs the master keys');
     }
-    const { rewrapped } = await rewrapDataKeys(db, keyring);
+    const { rewrapped, failed } = await rewrapDataKeys(db, keyring);
     out(`Rewrapped ${rewrapped} data key${rewrapped === 1 ? '' : 's'} with the current master key`);
-    return 0;
+    for (const { githubId, version, reason } of failed) {
+      err(`Could not rewrap GitHub id ${githubId}'s data key v${version}: ${reason}`);
+    }
+    return failed.length > 0 ? 1 : 0;
   },
 } satisfies Record<string, Command>;
 

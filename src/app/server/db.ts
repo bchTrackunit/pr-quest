@@ -4,6 +4,7 @@ import { runDbCommand } from './dbCli.ts';
 void runDbCommand(process.argv.slice(2), {
   env: process.env,
   out: (line) => process.stdout.write(`[pr-quest] ${line}\n`),
+  err: (line) => process.stderr.write(`[pr-quest] ${line}\n`),
 }).then((code) => {
   process.exitCode = code;
 });

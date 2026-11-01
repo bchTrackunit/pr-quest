@@ -150,25 +150,58 @@ export class PostgresSecretStore implements SecretStore {
   }
 }
 
+/** A data key `rewrapDataKeys` couldn't rewrap, and why, without any key material. */
+export interface RewrapFailure {
+  githubId: number;
+  version: number;
+  reason: string;
+}
+
+export interface RewrapResult {
+  rewrapped: number;
+  failed: Array<RewrapFailure>;
+}
+
 /**
- * Rewraps every data key that a previous master key wrapped, so that key can be retired. Resolves
- * to how many it rewrapped; running it again rewraps none.
+ * Rewraps every data key that a previous master key wrapped, so that key can be retired. It reads
+ * them `pageSize` at a time in key order and carries on past one it can't unwrap, so the result
+ * lists every failure; running it again rewraps none of those it already did.
  */
 export async function rewrapDataKeys(
   db: Database,
   keyring: MasterKeyring,
-): Promise<{ rewrapped: number }> {
-  const rows = rowsOf(
-    await db.query(`SELECT ${DATA_KEY_COLUMNS} FROM user_data_keys WHERE master_key_id <> $1`, [
-      keyring.currentId,
-    ]),
-    DataKeyRowSchema,
-  );
-  let rewrapped = 0;
-  for (const row of rows) {
-    rewrapped += await rewrap(db, keyring, row, keyring.unwrap(wrappedOf(row), contextOf(row)));
+  options: { pageSize?: number } = {},
+): Promise<RewrapResult> {
+  const pageSize = options.pageSize ?? 100;
+  const result: RewrapResult = { rewrapped: 0, failed: [] };
+  let after = { githubId: 0, version: 0 };
+  for (;;) {
+    const page = rowsOf(
+      await db.query(
+        `SELECT ${DATA_KEY_COLUMNS} FROM user_data_keys
+         WHERE master_key_id <> $1 AND (github_id, version) > ($2, $3)
+         ORDER BY github_id, version LIMIT $4`,
+        [keyring.currentId, after.githubId, after.version, pageSize],
+      ),
+      DataKeyRowSchema,
+    );
+    for (const row of page) {
+      try {
+        const key = keyring.unwrap(wrappedOf(row), contextOf(row));
+        result.rewrapped += await rewrap(db, keyring, row, key);
+      } catch (error) {
+        result.failed.push({
+          githubId: row.github_id,
+          version: row.version,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      after = { githubId: row.github_id, version: row.version };
+    }
+    if (page.length < pageSize) {
+      return result;
+    }
   }
-  return { rewrapped };
 }
 
 /** The user's newest data key, creating version 1 when they have none yet. */

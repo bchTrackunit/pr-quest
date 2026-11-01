@@ -212,11 +212,30 @@ describe('rewrapDataKeys', () => {
     await (await open('bob')).set('cursor', 'bob-key');
     const rotated = MasterKeyring.fromConfig({ current: newKey, previous: oldKey });
 
-    expect(await rewrapDataKeys(db, rotated)).toEqual({ rewrapped: 2 });
-    expect(await rewrapDataKeys(db, rotated)).toEqual({ rewrapped: 0 });
+    expect(await rewrapDataKeys(db, rotated)).toEqual({ rewrapped: 2, failed: [] });
+    expect(await rewrapDataKeys(db, rotated)).toEqual({ rewrapped: 0, failed: [] });
 
     const newOnly = MasterKeyring.fromConfig({ current: newKey });
     expect((await open('alice', newOnly)).get('cursor')).toBe('alice-key');
     expect((await open('bob', newOnly)).get('cursor')).toBe('bob-key');
+  });
+
+  test("carries on past a data key it can't unwrap, page by page, and names it", async () => {
+    await (await open('alice')).set('cursor', 'alice-key');
+    await (await open('bob', MasterKeyring.fromConfig({ current: newKey }))).set('cursor', 'x');
+    await (await open('carol')).set('cursor', 'carol-key');
+    const rotated = MasterKeyring.fromConfig({
+      current: randomBytes(32).toString('base64'),
+      previous: oldKey,
+    });
+
+    const result = await rewrapDataKeys(db, rotated, { pageSize: 1 });
+
+    expect(result).toEqual({
+      rewrapped: 2,
+      failed: [{ githubId: 12, version: 1, reason: expect.stringMatching(/isn't configured/) }],
+    });
+    expect(JSON.stringify(result)).not.toContain(newKey);
+    expect(await rewrapDataKeys(db, rotated, { pageSize: 1 })).toMatchObject({ rewrapped: 0 });
   });
 });
