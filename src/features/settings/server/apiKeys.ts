@@ -13,7 +13,7 @@ export const API_KEY_ENV_NAMES: Record<ApiKeyName, string> = {
 };
 
 export interface ApiKeysOptions {
-  /** Keys from the environment or `.env.local`; they win over saved ones and can't be edited. */
+  /** Keys from the environment or an env file; they win over saved ones and can't be edited. */
   env: Partial<Record<ApiKeyName, string>>;
   secrets: Pick<SecretStore, 'get' | 'set' | 'delete'>;
   onChange?: (name: ApiKeyName) => void;
@@ -81,7 +81,7 @@ export class ApiKeys {
       throw new ApiError(
         409,
         'conflict',
-        `${API_KEY_ENV_NAMES[name]} is set in the environment or .env.local. Change it there and restart PR Quest.`,
+        `${API_KEY_ENV_NAMES[name]} is set in the environment or an env file. Change it there and restart PR Quest.`,
       );
     }
   }
