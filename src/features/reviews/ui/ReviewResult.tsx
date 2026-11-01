@@ -1,14 +1,18 @@
 import { useState } from 'react';
 
 import type {
+  FindingDecision,
   FindingSeverity,
   OmittedFileReason,
   PostReviewEvent,
   Quest,
+  ReviewFinding,
   ReviewRun,
   ReviewVerdict,
 } from '../../../shared/api.ts';
 import { describeError } from '../../../platform/ui/apiClient.ts';
+import { findingDecisionsOf } from '../../../shared/findingDecisions.ts';
+import { FindingDecisionToggle } from './FindingDecisionToggle.tsx';
 import { groupFindings, questLabel } from '../../game/ui/index.ts';
 import { Modal } from '../../../platform/ui/Modal.tsx';
 import { PROVIDER_LABELS } from '../../settings/ui/index.ts';
@@ -17,7 +21,10 @@ export interface ReviewResultProps {
   run: ReviewRun;
   quest?: Quest;
   onClickClose: () => void;
-  onPost: (event: PostReviewEvent) => Promise<void>;
+  /** Saves the decision on the findings, by index into `result.findings`. */
+  onDecide: (findingIndexes: Array<number>, decision: FindingDecision) => Promise<void>;
+  /** `findingIndexes` are the accepted findings the confirmation described. */
+  onPost: (event: PostReviewEvent, findingIndexes: Array<number>) => Promise<void>;
   onDiscard: () => Promise<void>;
   onClickApprove: (questId: string) => void;
 }
@@ -44,6 +51,24 @@ const OMITTED_REASON_LABELS: Record<OmittedFileReason, string> = {
 
 type Pending = 'post' | 'discard' | undefined;
 
+/** Decisions shown while their saves are in flight; the run's own decisions win once all settle. */
+interface UnsavedDecisions {
+  decisions: ReadonlyMap<number, FindingDecision>;
+  saving: number;
+}
+
+const NOTHING_UNSAVED: UnsavedDecisions = { decisions: new Map(), saving: 0 };
+
+type DecisionCounts = Record<FindingDecision, number>;
+
+function countDecisions(decisions: ReadonlyArray<FindingDecision>): DecisionCounts {
+  const counts: DecisionCounts = { accepted: 0, rejected: 0, undecided: 0 };
+  for (const decision of decisions) {
+    counts[decision] += 1;
+  }
+  return counts;
+}
+
 /** "Reviewed by Claude · claude-opus-5"; runs saved before providers existed may lack both. */
 function describeReviewer(run: ReviewRun): string | undefined {
   const provider = Object.hasOwn(PROVIDER_LABELS, run.provider)
@@ -57,21 +82,45 @@ function describeReviewer(run: ReviewRun): string | undefined {
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
 
+function describeLeftOut({ rejected, undecided }: DecisionCounts): string | undefined {
+  const parts = [
+    rejected > 0 ? `${rejected} rejected` : undefined,
+    undecided > 0 ? `${undecided} undecided` : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? `${parts.join(' and ')} won't be posted.` : undefined;
+}
+
 /** Findings without a line can only go in the review body, so they are not inline comments. */
-function describePost(findingCount: number, inlineCount: number): string {
-  const prefix = 'This submits one GitHub review with';
+function describePost(
+  findingCount: number,
+  accepted: ReadonlyArray<ReviewFinding>,
+  counts: DecisionCounts,
+): string {
   if (findingCount === 0) {
-    return `${prefix} the summary and no findings.`;
+    return 'This submits one GitHub review with the summary and no findings.';
   }
-  const findings = plural(findingCount, 'finding');
-  const bodyCount = findingCount - inlineCount;
-  if (bodyCount === 0) {
-    return `${prefix} ${findings} as inline comments.`;
+  const leftOut = describeLeftOut(counts);
+  if (accepted.length === 0) {
+    return [
+      'No findings are accepted, so this posts a GitHub review with only the summary.',
+      leftOut,
+    ].join(' ');
   }
-  if (inlineCount === 0) {
-    return `${prefix} ${findings} in the review body.`;
-  }
-  return `${prefix} ${findings}: ${inlineCount} as inline ${inlineCount === 1 ? 'comment' : 'comments'} and ${bodyCount} in the review body.`;
+  const inlineCount = accepted.filter((finding) => finding.line !== undefined).length;
+  const bodyCount = accepted.length - inlineCount;
+  const which =
+    accepted.length < findingCount
+      ? `${accepted.length} of ${plural(findingCount, 'finding')}`
+      : findingCount === 1
+        ? 'the only finding'
+        : `all ${findingCount} findings`;
+  const where =
+    bodyCount === 0
+      ? `, as ${inlineCount === 1 ? 'an inline comment' : 'inline comments'}`
+      : inlineCount === 0
+        ? ', in the review body'
+        : `: ${inlineCount} as inline ${inlineCount === 1 ? 'comment' : 'comments'} and ${bodyCount} in the review body`;
+  return [`Posting ${which} in one GitHub review${where}.`, leftOut].filter(Boolean).join(' ');
 }
 
 /** The loot screen for a finished run: the agent's summary, verdict and findings, and what to do with them. */
@@ -79,6 +128,7 @@ export const ReviewResult = ({
   run,
   quest = undefined,
   onClickClose,
+  onDecide,
   onPost,
   onDiscard,
   onClickApprove,
@@ -89,12 +139,36 @@ export const ReviewResult = ({
   const [postEvent, setPostEvent] = useState<PostReviewEvent>('comment');
   const [pending, setPending] = useState<Pending>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [unsaved, setUnsaved] = useState<UnsavedDecisions>(NOTHING_UNSAVED);
+  const [isHidingRejected, setIsHidingRejected] = useState(false);
   const summary = quest ?? run.quest;
   const label = questLabel(summary);
-  const groups = result ? groupFindings(result.findings) : [];
-  const findingCount = result?.findings.length ?? 0;
-  const inlineCount = result?.findings.filter((finding) => finding.line !== undefined).length ?? 0;
+  const findings = result?.findings ?? [];
+  const groups = groupFindings(findings);
+  const findingIndex = new Map(findings.map((finding, index) => [finding, index]));
+  const findingCount = findings.length;
   const isAwaitingDecision = run.disposition === 'pending';
+  // Runs posted before decisions existed posted every finding, so they show no decisions at all.
+  const showsDecisions =
+    findingCount > 0 && (isAwaitingDecision || run.findingDecisions !== undefined);
+  const canDecide = isAwaitingDecision && pending === undefined;
+  const decisions = findingDecisionsOf(run).map(
+    (decision, index) => unsaved.decisions.get(index) ?? decision,
+  );
+  const counts = countDecisions(decisions);
+  const acceptedIndexes = decisions.flatMap((decision, index) =>
+    decision === 'accepted' ? [index] : [],
+  );
+  const accepted = acceptedIndexes.flatMap((index) => findings[index] ?? []);
+  const allIndexes = findings.map((_finding, index) => index);
+  const isHidden = (index: number): boolean =>
+    showsDecisions && isHidingRejected && decisions[index] === 'rejected';
+  const visibleGroups = groups
+    .map((group) => ({
+      ...group,
+      findings: group.findings.filter((finding) => !isHidden(findingIndex.get(finding) ?? -1)),
+    }))
+    .filter((group) => group.findings.length > 0);
 
   const runAction = (action: Pending, request: () => Promise<void>): void => {
     setPending(action);
@@ -103,6 +177,24 @@ export const ReviewResult = ({
       setError(describeError(reason));
       setPending(undefined);
     });
+  };
+
+  const decide = (findingIndexes: Array<number>, decision: FindingDecision): void => {
+    setError(undefined);
+    setUnsaved((current) => {
+      const next = new Map(current.decisions);
+      for (const index of findingIndexes) {
+        next.set(index, decision);
+      }
+      return { decisions: next, saving: current.saving + 1 };
+    });
+    void onDecide(findingIndexes, decision)
+      .catch((reason: unknown) => setError(describeError(reason)))
+      .finally(() =>
+        setUnsaved((current) =>
+          current.saving <= 1 ? NOTHING_UNSAVED : { ...current, saving: current.saving - 1 },
+        ),
+      );
   };
 
   const verdict = result ? VERDICT_META[result.verdict] : undefined;
@@ -140,10 +232,68 @@ export const ReviewResult = ({
             <h3 className="pixel" id="result-findings">
               Findings <span className="count">{findingCount}</span>
             </h3>
+            {showsDecisions ? (
+              <div className="decisions">
+                <p className="decisions__summary" role="status">
+                  {`${counts.accepted} accepted · ${counts.rejected} rejected · ${counts.undecided} undecided`}
+                </p>
+                <div className="decisions__actions">
+                  {isAwaitingDecision ? (
+                    <div aria-label="Decide on every finding" className="button-row" role="group">
+                      <button
+                        className="button button--small"
+                        disabled={!canDecide || counts.accepted === findingCount}
+                        onClick={() => decide(allIndexes, 'accepted')}
+                        type="button"
+                      >
+                        <span aria-hidden="true">✓</span> Accept all
+                      </button>
+                      <button
+                        className="button button--small"
+                        disabled={!canDecide || counts.rejected === findingCount}
+                        onClick={() => decide(allIndexes, 'rejected')}
+                        type="button"
+                      >
+                        <span aria-hidden="true">✕</span> Reject all
+                      </button>
+                      <button
+                        className="button button--small"
+                        disabled={!canDecide || counts.undecided === findingCount}
+                        onClick={() => decide(allIndexes, 'undecided')}
+                        type="button"
+                      >
+                        <span aria-hidden="true">↺</span> Reset
+                      </button>
+                    </div>
+                  ) : null}
+                  {counts.rejected > 0 || isHidingRejected ? (
+                    <button
+                      aria-pressed={isHidingRejected}
+                      className="button button--small switch"
+                      onClick={() => setIsHidingRejected(!isHidingRejected)}
+                      type="button"
+                    >
+                      <span aria-hidden="true" className="switch__box">
+                        {isHidingRejected ? '■' : '□'}
+                      </span>
+                      Hide rejected
+                    </button>
+                  ) : null}
+                </div>
+                {isAwaitingDecision ? (
+                  <p className="muted">
+                    Only accepted findings are posted. Rejected and undecided ones stay here.
+                  </p>
+                ) : null}
+                {isHidingRejected && counts.rejected > 0 ? (
+                  <p className="muted">{plural(counts.rejected, 'rejected finding')} hidden.</p>
+                ) : null}
+              </div>
+            ) : null}
             {groups.length === 0 ? (
               <p className="board-state board-state--victory">No findings. A flawless victory.</p>
             ) : (
-              groups.map((group) => (
+              visibleGroups.map((group) => (
                 <section
                   aria-labelledby={`severity-${group.severity}`}
                   className={['severity-group', `severity-group--${group.severity}`].join(' ')}
@@ -155,19 +305,38 @@ export const ReviewResult = ({
                     <span className="count">{group.findings.length}</span>
                   </h4>
                   <ul className="findings">
-                    {group.findings.map((finding, index) => (
-                      <li
-                        className="finding"
-                        key={`${finding.file}:${finding.line ?? ''}:${index}`}
-                      >
-                        <code className="finding__location">
-                          {finding.line === undefined
-                            ? finding.file
-                            : `${finding.file}:${finding.line}`}
-                        </code>
-                        <p className="prewrap">{finding.body}</p>
-                      </li>
-                    ))}
+                    {group.findings.map((finding) => {
+                      const index = findingIndex.get(finding) ?? -1;
+                      const decision = decisions[index] ?? 'undecided';
+                      const location =
+                        finding.line === undefined
+                          ? finding.file
+                          : `${finding.file}:${finding.line}`;
+                      return (
+                        <li
+                          className={[
+                            'finding',
+                            showsDecisions ? `finding--${decision}` : undefined,
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                          key={index}
+                        >
+                          <div className="finding__head">
+                            <code className="finding__location">{location}</code>
+                            {showsDecisions ? (
+                              <FindingDecisionToggle
+                                decision={decision}
+                                isDisabled={!canDecide}
+                                location={location}
+                                onChange={(next) => decide([index], next)}
+                              />
+                            ) : null}
+                          </div>
+                          <p className="prewrap finding__body">{finding.body}</p>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </section>
               ))
@@ -226,8 +395,11 @@ export const ReviewResult = ({
         <fieldset className="confirm-post" disabled={pending !== undefined}>
           <legend className="pixel">Post to {label}?</legend>
           <p>
-            {describePost(findingCount, inlineCount)} If GitHub rejects a line, every finding goes
-            in the body instead. It also shows up in Linear.
+            {describePost(findingCount, accepted, counts)}{' '}
+            {accepted.some((finding) => finding.line !== undefined)
+              ? 'If GitHub rejects a line, every posted finding goes in the body instead. '
+              : null}
+            It also shows up in Linear.
           </p>
           <label className="radio">
             <input
@@ -265,7 +437,7 @@ export const ReviewResult = ({
             </button>
             <button
               className="button button--primary"
-              onClick={() => runAction('post', () => onPost(postEvent))}
+              onClick={() => runAction('post', () => onPost(postEvent, acceptedIndexes))}
               type="button"
             >
               {pending === 'post' ? 'Posting…' : 'Confirm post'}
