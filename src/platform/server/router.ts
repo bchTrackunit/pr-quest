@@ -99,12 +99,22 @@ export function loopbackOrigins(ports: ReadonlyArray<number>): Array<string> {
   return ports.flatMap((port) => [`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 }
 
+export interface TrustedRequestOptions {
+  /** Local mode only: also trust the UI dev server on `config.uiPort`, which proxies `/api` here. */
+  devUiOrigin?: boolean;
+}
+
 /**
  * Who the router trusts for `config` once the server listens on `port`. Local mode trusts only
- * loopback names and the API and UI origins. Hosted mode trusts its public origin and allowed
- * hosts, and answers `/api/health` on any Host so the platform can check it by IP address.
+ * loopback names and its own origin, plus the UI dev server's in development. Hosted mode trusts
+ * its public origin and allowed hosts, and answers `/api/health` on any Host so the platform can
+ * check it by IP address.
  */
-export function trustedRequests(config: AppConfig, port: number): TrustOptions {
+export function trustedRequests(
+  config: AppConfig,
+  port: number,
+  options: TrustedRequestOptions = {},
+): TrustOptions {
   if (config.mode === 'hosted') {
     return {
       allowedHosts: [...config.allowedHosts],
@@ -114,7 +124,7 @@ export function trustedRequests(config: AppConfig, port: number): TrustOptions {
   }
   return {
     allowedHosts: [...config.allowedHosts],
-    allowedOrigins: loopbackOrigins([port, config.uiPort]),
+    allowedOrigins: loopbackOrigins(options.devUiOrigin ? [port, config.uiPort] : [port]),
     hostCheckExempt: [],
   };
 }

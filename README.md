@@ -539,9 +539,11 @@ review is a single request, so a restart during one marks it as failed.
 The API acts as you, so it only accepts requests that come from PR Quest:
 
 - **Host** must be `127.0.0.1` or `localhost`, which stops DNS rebinding.
-- **Origin**, when the browser sends one, must be exactly the UI or API origin:
-  `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_UI_PORT` and
-  `PR_QUEST_PORT`. Pages on other localhost ports, such as another dev server, get `403`.
+- **Origin**, when the browser sends one, must be exactly the server's own origin,
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_PORT`. Under `yarn dev` the
+  UI's origin on `PR_QUEST_UI_PORT` is trusted too, because Vite proxies `/api` from there;
+  `yarn start` serves the UI itself and doesn't trust that port. Pages on other localhost ports,
+  such as another dev server, get `403`.
 - **`Sec-Fetch-Site`**, when the browser sends it, must be `same-origin` or `none` on every
   request, including GETs, so an image or script tag on another page can't trigger a call.
   Browsers send `same-site` for other localhost ports, so this is checked as well as the origin.

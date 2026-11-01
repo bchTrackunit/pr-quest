@@ -80,6 +80,20 @@ describe('startServer', () => {
     expect(response.status).toBe(200);
   });
 
+  test("trusts the UI dev server's origin only when asked", async () => {
+    const putFrom = async (server: RunningServer) =>
+      fetch(`${server.url}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4318' },
+        body: JSON.stringify({ reviewProvider: 'claude' }),
+      });
+
+    expect((await putFrom(await start({ ...LOCAL_CONFIG, uiPort: 4318 }))).status).toBe(403);
+    await running?.close();
+    const dev = await start({ ...LOCAL_CONFIG, uiPort: 4318 }, { devUiOrigin: true });
+    expect((await putFrom(dev)).status).toBe(200);
+  });
+
   test('serves the built UI from the static directory', async () => {
     const staticDir = join(dir, 'dist');
     await mkdir(staticDir);

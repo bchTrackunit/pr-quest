@@ -54,6 +54,11 @@ export interface ServerOverrides extends Pick<
   identity?: IdentityFactory<UserServices>;
   /** Serves the built UI (`dist/`) from this directory, on the API's port. */
   staticDir?: string;
+  /**
+   * Development only: also trusts the Vite dev server's origin on `config.uiPort`, which proxies
+   * `/api` here. Without it, the server trusts only its own origin.
+   */
+  devUiOrigin?: boolean;
   /** Defaults to running `gh auth token`. */
   ghToken?: () => Promise<string | undefined>;
   info?: (message: string) => void;
@@ -121,7 +126,7 @@ export async function startServer(
     throw error;
   }
   routing.router = createRouter(app.handlers, {
-    ...trustedRequests(config, port),
+    ...trustedRequests(config, port, { devUiOrigin: overrides.devUiOrigin }),
     staticDir,
     routes: app.routes,
     onUnexpectedError: (error) => {

@@ -341,12 +341,18 @@ describe('trustedRequests', () => {
   const PUBLIC = { Host: 'pr-quest.example', Origin: 'https://pr-quest.example' };
 
   describe('in local mode', () => {
-    test('trusts loopback hosts and the API and UI origins, as before hosted mode existed', () => {
+    test('trusts loopback hosts and only the origin it serves', () => {
       expect(trustedRequests({ ...LOCAL_CONFIG, uiPort: UI_PORT }, API_PORT)).toEqual({
         allowedHosts: ['127.0.0.1', 'localhost'],
-        allowedOrigins: loopbackOrigins([API_PORT, UI_PORT]),
+        allowedOrigins: loopbackOrigins([API_PORT]),
         hostCheckExempt: [],
       });
+    });
+
+    test('also trusts the UI dev server, which proxies /api, when asked', () => {
+      expect(
+        trustedRequests({ ...LOCAL_CONFIG, uiPort: UI_PORT }, API_PORT, { devUiOrigin: true }),
+      ).toMatchObject({ allowedOrigins: loopbackOrigins([API_PORT, UI_PORT]) });
     });
 
     test('still checks the Host of /api/health', async () => {
