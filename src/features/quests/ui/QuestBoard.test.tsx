@@ -126,10 +126,37 @@ const titles = (): Array<string> =>
 const showing = (): string =>
   screen.getByText(/^Showing/, { selector: '.filters__count' }).textContent;
 
+type User = ReturnType<typeof userEvent.setup>;
+
+/** Opens the Filters panel and returns it. */
+async function openFilters(user: User) {
+  await user.click(screen.getByRole('button', { name: /^Filters/ }));
+  return screen.getByRole('group', { name: 'Filters' });
+}
+
+/** Opens the presets dropdown and returns it. */
+async function openPresets(user: User) {
+  await user.click(screen.getByRole('button', { name: /^Presets/ }));
+  return screen.getByRole('dialog', { name: 'Presets' });
+}
+
+const sortSelect = (): HTMLElement => screen.getByRole('combobox', { name: 'Sort' });
+
 describe('QuestBoard filters and sorting', () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
+  });
+
+  test('keeps search, sort, presets and the Filters toggle on one toolbar, filters collapsed', () => {
+    renderBoard({ quests: BOARD_QUESTS });
+
+    expect(screen.getByRole('searchbox', { name: 'Search quests' })).toBeTruthy();
+    expect(sortSelect()).toHaveProperty('value', 'smart');
+    expect(screen.getByRole('button', { name: 'Presets' })).toBeTruthy();
+    const toggle = screen.getByRole('button', { name: /^Filters/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('group', { name: 'Difficulty' })).toBeNull();
   });
 
   test('searches after a pause in typing, and Escape clears the search', async () => {
@@ -160,9 +187,40 @@ describe('QuestBoard filters and sorting', () => {
     expect(showing()).toBe('Showing 1 of 3 quests');
   });
 
+  test('the Filters toggle opens the panel, counts active filters and closes on Escape', async () => {
+    const user = userEvent.setup();
+    renderBoard({ quests: BOARD_QUESTS });
+    const toggle = screen.getByRole('button', { name: /^Filters/ });
+
+    const panel = await openFilters(user);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-controls')).toBe(panel.id);
+    await user.click(within(panel).getByRole('button', { name: 'Boss' }));
+    await user.click(within(panel).getByRole('button', { name: 'Drafts' }));
+    expect(toggle.textContent).toContain('2');
+    expect(screen.getByRole('button', { name: 'Filters (2 active)' })).toBe(toggle);
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Filters' })).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Remove filter Tier: Boss' })).toBeTruthy();
+  });
+
+  test('search and request kind are not counted on the Filters toggle', async () => {
+    const user = userEvent.setup();
+    renderBoard({ quests: BOARD_QUESTS });
+    await user.click(screen.getByRole('button', { name: /^Team/ }));
+    await user.type(screen.getByRole('searchbox', { name: 'Search quests' }), 'alerts{Enter}');
+
+    expect(screen.getByRole('button', { name: /^Filters/ }).textContent).not.toMatch(/\d/);
+    expect(screen.getByRole('button', { name: 'Remove filter Requests: Team' })).toBeTruthy();
+  });
+
   test('filters by tier with pressed toggles and removable chips', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
+    await openFilters(user);
     const difficulty = screen.getByRole('group', { name: 'Difficulty' });
 
     await user.click(within(difficulty).getByRole('button', { name: 'Trivial' }));
@@ -181,11 +239,13 @@ describe('QuestBoard filters and sorting', () => {
   test('hides drafts and PRs others approved', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
+    await openFilters(user);
+    const hide = screen.getByRole('group', { name: 'Hide' });
 
-    await user.click(screen.getByRole('button', { name: 'Hide drafts' }));
-    await user.click(screen.getByRole('button', { name: 'Hide PRs others approved' }));
+    await user.click(within(hide).getByRole('button', { name: 'Drafts' }));
+    await user.click(within(hide).getByRole('button', { name: 'Approved by others' }));
 
-    expect(screen.getByRole('button', { name: 'Hide drafts' }).getAttribute('aria-pressed')).toBe(
+    expect(within(hide).getByRole('button', { name: 'Drafts' }).getAttribute('aria-pressed')).toBe(
       'true',
     );
     expect(titles()).toEqual(['Tiny typo fix']);
@@ -199,6 +259,7 @@ describe('QuestBoard filters and sorting', () => {
         'run-1': makeRun({ id: 'run-1', questId: 'Trackunit/manager#2', status: 'finished' }),
       },
     });
+    await openFilters(user);
 
     await user.click(
       within(screen.getByRole('group', { name: 'Agent' })).getByRole('button', {
@@ -214,7 +275,8 @@ describe('QuestBoard filters and sorting', () => {
     renderBoard({ quests: BOARD_QUESTS });
 
     await user.click(screen.getByRole('button', { name: /^Team/ }));
-    await user.click(screen.getByRole('button', { name: 'Hide drafts' }));
+    await openFilters(user);
+    await user.click(screen.getByRole('button', { name: 'Drafts' }));
 
     expect(screen.getByText('No quests match')).toBeTruthy();
     expect(screen.queryByText('Inbox Zero!')).toBeNull();
@@ -228,13 +290,15 @@ describe('QuestBoard filters and sorting', () => {
   test('Clear all removes every chip', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
+    await openFilters(user);
     await user.click(screen.getByRole('button', { name: 'Boss' }));
-    await user.click(screen.getByRole('button', { name: 'Hide drafts' }));
+    await user.click(screen.getByRole('button', { name: 'Drafts' }));
 
     await user.click(screen.getByRole('button', { name: 'Clear all' }));
 
     expect(screen.queryByRole('list', { name: 'Active filters' })).toBeNull();
     expect(showing()).toBe('Showing 3 of 3 quests');
+    expect(screen.getByRole('button', { name: /^Filters/ }).textContent).not.toMatch(/\d/);
   });
 
   test('sorts by size in both directions inside the Direct and Team groups', async () => {
@@ -246,17 +310,27 @@ describe('QuestBoard filters and sorting', () => {
         .slice(1)
         .map((heading) => heading.textContent);
 
-    await user.click(screen.getByRole('button', { name: 'Size' }));
+    expect(
+      within(sortSelect())
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Smart', 'Smallest first', 'Largest first']);
+
+    await user.selectOptions(sortSelect(), 'Smallest first');
     expect(direct()).toEqual(['Tiny typo fix', 'Rewrite the map engine']);
 
-    await user.click(screen.getByRole('button', { name: /Largest first/ }));
+    await user.selectOptions(sortSelect(), 'Largest first');
     expect(direct()).toEqual(['Rewrite the map engine', 'Tiny typo fix']);
     expect(screen.getByRole('region', { name: /Team requests/ })).toBeTruthy();
+
+    await user.selectOptions(sortSelect(), 'Smart');
+    expect(sortSelect()).toHaveProperty('value', 'smart');
   });
 
   test('moves between toggles with the arrow keys', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
+    await openFilters(user);
     const difficulty = screen.getByRole('group', { name: 'Difficulty' });
     within(difficulty).getByRole('button', { name: 'Trivial' }).focus();
 
@@ -268,22 +342,46 @@ describe('QuestBoard filters and sorting', () => {
     expect(document.activeElement?.textContent).toBe('Trivial');
   });
 
-  test('applies the built-in Quick wins and Boss rush presets', async () => {
+  test('applies the built-in Quick wins and Boss rush presets from the dropdown', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
+    const presetsButton = screen.getByRole('button', { name: 'Presets' });
+    expect(presetsButton.getAttribute('aria-expanded')).toBe('false');
 
-    await user.click(screen.getByRole('button', { name: 'Quick wins' }));
+    let menu = await openPresets(user);
+    expect(within(menu).queryByRole('button', { name: /Delete preset Quick wins/ })).toBeNull();
+    await user.click(within(menu).getByRole('button', { name: 'Quick wins' }));
+    expect(screen.queryByRole('dialog', { name: 'Presets' })).toBeNull();
+    expect(document.activeElement).toBe(presetsButton);
     expect(titles()).toEqual(['Tiny typo fix']);
-    expect(screen.getByRole('button', { name: 'Quick wins' }).getAttribute('aria-pressed')).toBe(
-      'true',
-    );
-    expect(screen.queryByRole('button', { name: /Delete preset Quick wins/ })).toBeNull();
+    expect(presetsButton.textContent).toContain('Quick wins');
+    expect(screen.getByRole('button', { name: 'Presets: Quick wins' })).toBe(presetsButton);
 
-    await user.click(screen.getByRole('button', { name: 'Boss rush' }));
+    menu = await openPresets(user);
+    expect(
+      within(menu).getByRole('button', { name: 'Quick wins' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    await user.click(within(menu).getByRole('button', { name: 'Boss rush' }));
     expect(titles()).toEqual(['Rewrite the map engine']);
-    expect(screen.getByRole('button', { name: /Largest first/ }).getAttribute('aria-pressed')).toBe(
-      'true',
-    );
+    expect(sortSelect()).toHaveProperty('value', 'size-desc');
+  });
+
+  test('Escape closes the presets dropdown, and closes the save form first', async () => {
+    const user = userEvent.setup();
+    renderBoard({ quests: BOARD_QUESTS });
+    const presetsButton = screen.getByRole('button', { name: 'Presets' });
+
+    await openPresets(user);
+    await user.click(screen.getByRole('button', { name: /Save current/ }));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Preset name' }));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Preset name' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Presets' })).toBeTruthy();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Presets' })).toBeNull();
+    expect(document.activeElement).toBe(presetsButton);
   });
 
   test('saves, applies and deletes a custom preset', async () => {
@@ -291,6 +389,7 @@ describe('QuestBoard filters and sorting', () => {
     renderBoard({ quests: BOARD_QUESTS });
     await user.click(screen.getByRole('button', { name: /^Team/ }));
 
+    await openPresets(user);
     await user.click(screen.getByRole('button', { name: /Save current/ }));
     const name = screen.getByRole('textbox', { name: 'Preset name' });
     expect(document.activeElement).toBe(name);
@@ -300,31 +399,39 @@ describe('QuestBoard filters and sorting', () => {
     await user.clear(name);
     await user.type(name, 'Guild duty{Enter}');
     expect(screen.queryByRole('textbox', { name: 'Preset name' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Save current/ }));
 
     await user.click(screen.getByRole('button', { name: /^All/ }));
+    await openPresets(user);
     await user.click(screen.getByRole('button', { name: 'Guild duty' }));
     expect(titles()).toEqual(['Draft: new alerts page']);
 
+    await openPresets(user);
     await user.click(screen.getByRole('button', { name: 'Delete preset Guild duty' }));
     expect(screen.queryByRole('button', { name: 'Guild duty' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /Save current/ }));
   });
 
   test('remembers the filters, sort and presets across reloads', async () => {
     const user = userEvent.setup();
     renderBoard({ quests: BOARD_QUESTS });
-    await user.click(screen.getByRole('button', { name: 'Size' }));
-    await user.click(screen.getByRole('button', { name: 'Hide drafts' }));
+    await user.selectOptions(sortSelect(), 'Smallest first');
+    await openFilters(user);
+    await user.click(screen.getByRole('button', { name: 'Drafts' }));
+    await openPresets(user);
     await user.click(screen.getByRole('button', { name: /Save current/ }));
     await user.type(screen.getByRole('textbox', { name: 'Preset name' }), 'Mine{Enter}');
 
     cleanup();
     renderBoard({ quests: BOARD_QUESTS });
 
-    expect(screen.getByRole('button', { name: 'Size' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Hide drafts' }).getAttribute('aria-pressed')).toBe(
+    expect(sortSelect()).toHaveProperty('value', 'size-asc');
+    expect(screen.getByRole('button', { name: 'Filters (1 active)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Presets: Mine' })).toBeTruthy();
+    await openFilters(user);
+    expect(screen.getByRole('button', { name: 'Drafts' }).getAttribute('aria-pressed')).toBe(
       'true',
     );
-    expect(screen.getByRole('button', { name: 'Mine' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   test('ignores a corrupt saved view', () => {
