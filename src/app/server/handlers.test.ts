@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Agent, type Run, type SDKAgent } from '@cursor/sdk';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { ReviewRun } from '../../shared/api.ts';
+import type { FindingDecision, ReviewRun } from '../../shared/api.ts';
 import { EventHub } from '../../platform/server/events.ts';
 import { GameService, StateStore } from '../../features/game/server/index.ts';
 import { GitHubApiError, NotSignedInError } from '../../platform/server/githubApi.ts';
@@ -86,6 +86,14 @@ function mockAgentFinishing(text = REVIEW_TEXT): void {
     send: async () => run,
     [Symbol.asyncDispose]: async () => undefined,
   } as unknown as SDKAgent);
+}
+
+function decide(
+  runId: string,
+  findingIndexes: Array<number>,
+  decision: FindingDecision,
+): Promise<TestResponse> {
+  return send('PUT', `/api/runs/${runId}/decisions`, { findingIndexes, decision });
 }
 
 async function finishedRun(): Promise<ReviewRun> {
@@ -529,6 +537,55 @@ describe('runs', () => {
 
     expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(502);
     expect((await send('POST', `/api/runs/${run.id}/post`, {})).status).toBe(200);
+  });
+
+  test('PUT /api/runs/:id/decisions saves the decisions and returns the run', async () => {
+    const run = await finishedRun();
+
+    const response = await decide(run.id, [0, 1], 'accepted');
+    const reset = await decide(run.id, [1], 'undecided');
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: { run: { id: run.id, findingDecisions: ['accepted', 'accepted'] } },
+    });
+    expect(reset.body).toMatchObject({ run: { findingDecisions: ['accepted', 'undecided'] } });
+    expect((await send('GET', `/api/runs/${run.id}`)).body).toMatchObject({
+      run: { findingDecisions: ['accepted', 'undecided'] },
+    });
+  });
+
+  test.each([
+    ['an unknown decision', { findingIndexes: [0], decision: 'maybe' }],
+    ['no findings', { findingIndexes: [], decision: 'accepted' }],
+    ['a negative id', { findingIndexes: [-1], decision: 'accepted' }],
+    ['a fractional id', { findingIndexes: [0.5], decision: 'accepted' }],
+    ['a finding the result does not have', { findingIndexes: [2], decision: 'accepted' }],
+    ['no body', undefined],
+  ])('PUT /api/runs/:id/decisions refuses %s', async (_label, body) => {
+    const run = await finishedRun();
+
+    const response = await send('PUT', `/api/runs/${run.id}/decisions`, body);
+
+    expect(response).toMatchObject({ status: 400, body: { error: { code: 'badRequest' } } });
+    expect(services.runs.get(run.id)?.run.findingDecisions).toBeUndefined();
+  });
+
+  test('PUT /api/runs/:id/decisions 404s for unknown runs and 409s once posted', async () => {
+    const run = await finishedRun();
+    await send('POST', `/api/runs/${run.id}/post`, {});
+
+    expect((await decide('nope', [0], 'accepted')).status).toBe(404);
+    expect((await decide(run.id, [0], 'accepted')).status).toBe(409);
+  });
+
+  test('deciding on findings earns no XP', async () => {
+    const run = await finishedRun();
+
+    await decide(run.id, [0], 'rejected');
+    await decide(run.id, [1], 'accepted');
+
+    expect(services.game.player().xp).toBe(0);
   });
 
   test('discarding marks the run discarded', async () => {

@@ -38,9 +38,16 @@ const ApproveSchema = z.object({
   body: z.string().max(MAX_COMMENT_LENGTH).optional(),
 });
 
+const FindingIndexSchema = z.number().int().nonnegative();
+
 const PostReviewSchema = z.object({
   event: z.enum(['comment', 'requestChanges']).optional(),
-  findingIndexes: z.array(z.number().int().nonnegative()).max(1000).optional(),
+  findingIndexes: z.array(FindingIndexSchema).max(1000).optional(),
+});
+
+const DecideFindingsSchema = z.object({
+  findingIndexes: z.array(FindingIndexSchema).min(1).max(1000),
+  decision: z.enum(['undecided', 'accepted', 'rejected']),
 });
 
 function requireQuestRef(id: string): QuestRef {
@@ -189,6 +196,11 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       } finally {
         release();
       }
+    },
+
+    decideFindings: async ({ params, body }) => {
+      const { findingIndexes, decision } = parseBody(DecideFindingsSchema, body);
+      return { run: await runs.decide(params.id, findingIndexes, decision) };
     },
 
     discardRun: async ({ params }) => ({ run: await runs.discard(params.id) }),

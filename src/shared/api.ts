@@ -483,6 +483,13 @@ export interface ListRunsResponse {
 
 export type PostReviewEvent = 'comment' | 'requestChanges';
 
+export interface DecideFindingsRequest {
+  /** The findings to decide on, as indexes into `result.findings`. */
+  findingIndexes: Array<number>;
+  /** `undecided` resets them. */
+  decision: FindingDecision;
+}
+
 export interface PostReviewRequest {
   /** GitHub review event. Defaults to `comment`. Approving is a separate, explicit action. */
   event?: PostReviewEvent;
@@ -566,6 +573,8 @@ export const API_ROUTES = {
   listRuns: { method: 'GET', path: '/api/runs' },
   getRun: { method: 'GET', path: '/api/runs/:id' },
   postRun: { method: 'POST', path: '/api/runs/:id/post' },
+  /** Accepts, rejects or resets findings of a finished run that is still awaiting a decision. */
+  decideFindings: { method: 'PUT', path: '/api/runs/:id/decisions' },
   discardRun: { method: 'POST', path: '/api/runs/:id/discard' },
   getPlayer: { method: 'GET', path: '/api/player' },
   listAchievements: { method: 'GET', path: '/api/achievements' },
@@ -597,6 +606,7 @@ export interface ApiContract {
   listRuns: { body: undefined; response: ListRunsResponse };
   getRun: { body: undefined; response: RunResponse };
   postRun: { body: PostReviewRequest; response: PostReviewResponse };
+  decideFindings: { body: DecideFindingsRequest; response: RunResponse };
   discardRun: { body: undefined; response: RunResponse };
   getPlayer: { body: undefined; response: PlayerResponse };
   listAchievements: { body: undefined; response: ListAchievementsResponse };

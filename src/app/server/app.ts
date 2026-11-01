@@ -267,6 +267,8 @@ export async function createApp(options: AppOptions): Promise<App> {
       listRuns: async (context) => required((await user()).listRuns, 'listRuns')(context),
       getRun: async (context) => required((await user()).getRun, 'getRun')(context),
       postRun: async (context) => required((await user()).postRun, 'postRun')(context),
+      decideFindings: async (context) =>
+        required((await user()).decideFindings, 'decideFindings')(context),
       discardRun: async (context) => required((await user()).discardRun, 'discardRun')(context),
       getPlayer: async (context) => required((await user()).getPlayer, 'getPlayer')(context),
       listAchievements: async (context) =>
