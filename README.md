@@ -50,8 +50,8 @@ token. It also accepts browser requests only from its own UI and API origins, as
 
 Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
 `4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). `PR_QUEST_MODE`, `PR_QUEST_HOST`,
-`PR_QUEST_PUBLIC_ORIGIN`, `PR_QUEST_ALLOWED_HOSTS`, `DATABASE_URL`, `PR_QUEST_MASTER_KEY` and
-`PR_QUEST_PREVIOUS_MASTER_KEYS` belong to [hosted mode](#hosted-mode), which isn't usable yet.
+`PR_QUEST_PUBLIC_ORIGIN`, `PR_QUEST_ALLOWED_HOSTS`, `DATABASE_URL`, `PR_QUEST_MASTER_KEY`,
+`PR_QUEST_PREVIOUS_MASTER_KEYS` and `PR_QUEST_DATABASE_POOL_MAX` belong to [hosted mode](#hosted-mode), which isn't usable yet.
 
 PR Quest reads settings from three places, and the first one that sets a value wins:
 
@@ -197,7 +197,9 @@ shared the same way.
 Settings can also hold an IANA time zone, such as `Europe/Copenhagen`, for streaks, daily counts
 and the time-of-day achievements (see [XP and achievements](#xp-and-achievements)). The popup
 doesn't show it yet; `PUT /api/settings` with `{"timeZone": "Europe/Copenhagen"}` sets it, and
-`null` clears it. Without one, PR Quest uses the server's time zone.
+`null` clears it. Without one, PR Quest uses the server's time zone. In hosted mode a player can
+change it once every 24 hours; a second change sooner answers `429 rateLimited` with the time it
+may change again, so hopping zones can't stretch a streak day.
 
 ### Review providers and models
 
@@ -259,49 +261,79 @@ storage or the Postgres storage below.
 
 #### Hosted storage
 
-Hosted mode keeps every player's state in Postgres instead of the state directory. It reads two
+Hosted mode keeps every player's state in Postgres instead of the state directory. It reads these
 settings, only in hosted mode; local mode ignores `DATABASE_URL`:
 
-- `DATABASE_URL`: a `postgres://` or `postgresql://` connection string.
+- `DATABASE_URL`: a `postgres://` or `postgresql://` connection string. The server warns at startup
+  when it reaches a host without TLS (no `sslmode`, or `sslmode=disable`), unless the host is
+  private: loopback, `*.internal` or `*.flycast`. Add `?sslmode=require` or `verify-full` otherwise.
 - `PR_QUEST_MASTER_KEY`: 32 random bytes, base64-encoded, from `openssl rand -base64 32`. Keep it
   outside the database, as a deployment secret.
+- `PR_QUEST_PREVIOUS_MASTER_KEYS`: comma-separated older master keys, during a rotation.
+- `PR_QUEST_DATABASE_POOL_MAX`: connections per server instance, 1 to 100 (default 10). A connection
+  waits at most 10 seconds for the pool, a statement runs at most 15 seconds and a transaction may
+  sit idle for at most 30 seconds.
+
+Players are keyed by their GitHub account id, which never changes, not by their login, which can be
+renamed and then registered by someone else. `users` holds each id's current login. When a login
+turns up under a new id, the account that held it keeps its rows under its own id, without a login,
+until it signs in under its new one, and the server warns; the new owner starts empty. Code that
+embeds the server passes `{ id, login }` (a `GitHubUser`) to `userScope`, `AppStorage` and the
+identity context, so it can't key anything by login alone. Local mode keeps its folder per login.
 
 Each player has one row per document (settings, game state, quest cache) in `user_documents`, as
 JSON in the same versioned format as the files. Updates to a document take a row lock and apply
 the change to the latest stored value, so two server instances don't lose each other's writes. A
-document from a newer build stops that player's load with an error instead of being overwritten;
-an unreadable one is copied to `user_documents_quarantine` with a warning, and the player starts
-fresh.
+document from a newer build stops that player's load with an error instead of being overwritten.
+An unreadable one is copied once to `user_documents_quarantine` and replaced by a fresh document,
+with a warning.
 
 The GitHub token and the Cursor, Anthropic and Linear keys are stored per player in
 `user_secrets`, encrypted with AES-256-GCM under that player's data key. The data key is stored
 in `user_data_keys`, itself encrypted under the master key, with the master key's id. Each
-ciphertext is bound to its player and key name, so it can't be copied to another row. Hosted mode
-has no machine-wide keys or settings, so the Postgres storage refuses the machine scope.
+ciphertext is bound to its player's GitHub id and key name, so it can't be copied to another row.
+A single key that doesn't decrypt is logged by login, id and name, counts as unset and is replaced
+when the player saves it again; a data key the master keys can't unwrap still stops the load.
+Hosted mode has no machine-wide keys or settings, so the Postgres storage refuses the machine scope.
 
-To rotate the master key, move the current one into `PR_QUEST_PREVIOUS_MASTER_KEYS`
-(comma-separated), set a new `PR_QUEST_MASTER_KEY` and restart. Data keys are rewrapped under the
-new key as players load; `just db-rewrap-keys` (`node dist-server/db.js rewrap-keys` in a
-deployment) rewraps the rest at once, after which the previous keys can be removed.
+Rotate the master key in two phases, so that no instance meets a data key wrapped by a key it
+doesn't hold during a rolling deploy:
+
+1. Add the new key to `PR_QUEST_PREVIOUS_MASTER_KEYS` on every instance and redeploy.
+2. Make the new key `PR_QUEST_MASTER_KEY` and move the old one into
+   `PR_QUEST_PREVIOUS_MASTER_KEYS`, then redeploy. Data keys are rewrapped as players load.
+3. Run `just db-rewrap-keys` (`node dist-server/db.js rewrap-keys` in a deployment) to rewrap the
+   rest. It carries on past a key it can't rewrap, lists each on stderr and exits 1; fix those and
+   run it again until it exits 0.
+4. Drop the old key from `PR_QUEST_PREVIOUS_MASTER_KEYS` and redeploy.
 
 The schema is created by plain SQL migrations in
-[`src/platform/server/postgres/migrations.ts`](src/platform/server/postgres/migrations.ts). The
-server doesn't run them; it refuses to start until they have run. Run them before starting a new
-build:
+[`src/platform/server/postgres/migrations.ts`](src/platform/server/postgres/migrations.ts), each
+run in one transaction (so no `CREATE INDEX CONCURRENTLY`). The server doesn't run them; it refuses
+to start until they have run.
 
-| Command               | In a deployment                      | What it does                                        |
-| --------------------- | ------------------------------------ | --------------------------------------------------- |
-| `just db-migrate`     | `node dist-server/db.js migrate`     | Runs the pending migrations in one transaction      |
-| `just db-status`      | `node dist-server/db.js status`      | Lists pending migrations; fails while any is        |
-| `just db-rewrap-keys` | `node dist-server/db.js rewrap-keys` | Rewraps every data key under the current master key |
+| Command               | In a deployment                      | What it does                                         |
+| --------------------- | ------------------------------------ | ---------------------------------------------------- |
+| `just db-migrate`     | `node dist-server/db.js migrate`     | Runs the pending migrations, each in one transaction |
+| `just db-status`      | `node dist-server/db.js status`      | Lists pending migrations; fails while any is         |
+| `just db-rewrap-keys` | `node dist-server/db.js rewrap-keys` | Rewraps every data key under the current master key  |
 
-The commands read `DATABASE_URL` and the master keys from the environment only, and never print
-them. Migrations only go forward. A database migrated by a newer build is refused by an older
-one.
+The commands take `DATABASE_URL` and the master keys from the environment only, never from
+arguments, so they stay out of shell history, and never print them. Results go to stdout, failures
+to stderr, and a failure exits 1.
+
+To roll forward, run `db-migrate` with the new build's code, then deploy it. Migrations only go
+forward, and `migrate` refuses a database that a newer build migrated. To roll back, deploy the
+older build: it starts, with a warning, beside migrations it doesn't know, as long as they only
+add things. Write a change that an older build can't run beside, such as dropping or renaming a
+column, as its own later migration with `breaking: true`; once that has run, older builds refuse
+to start, and rolling back past it means restoring a backup.
 
 When `startServer` opens the database from `DATABASE_URL`, the identity resolver gets it as
 `IdentityContext.database`, without `close`, for the sign-in's own tables such as sessions. Those
-tables belong in the same migrations.
+tables belong in the same migrations. `IdentityContext.secretsFor(user)` returns the player's
+secret store, the one their API keys are in, for the sign-in's own secrets such as the sealed
+GitHub token; it is opened once and kept until `releaseUser(user)`.
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
@@ -325,8 +357,9 @@ tests and build, as CI does on every pull request and every push to `main`.
 
 The Postgres storage tests run on [PGlite](https://pglite.dev), Postgres compiled to WebAssembly,
 in-process, so `yarn test` needs no database. `just test-postgres` runs the whole suite against a
-throwaway `postgres:17` container in Docker instead. To use a server of your own, set
-`PR_QUEST_TEST_DATABASE_URL`; each test file works in its own schema and drops it afterwards.
+throwaway `postgres:17` container in Docker instead, as CI's `test-postgres` job does with a
+service container. To use a server of your own, set `PR_QUEST_TEST_DATABASE_URL`; each test file
+works in its own schema and drops it afterwards.
 
 oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
 `oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums and the
