@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import { PlayerHud, type PlayerHudProps } from './PlayerHud.tsx';
 import { makeAchievements, makePlayer } from '../../../platform/ui/test-utils/fixtures.ts';
@@ -10,12 +10,6 @@ function renderHud(overrides: Partial<PlayerHudProps> = {}) {
   const props: PlayerHudProps = {
     player: makePlayer(),
     achievements: makeAchievements(),
-    connection: 'open',
-    notificationAccess: 'default',
-    notificationsEnabled: false,
-    soundEnabled: true,
-    onClickNotifications: vi.fn(),
-    onClickSound: vi.fn(),
     ...overrides,
   };
   render(<PlayerHud {...props} />);
@@ -32,10 +26,26 @@ describe('PlayerHud', () => {
     expect(bar.getAttribute('aria-valuenow')).toBe('150');
     expect(bar.getAttribute('aria-valuemax')).toBe('400');
     expect(screen.getByText(/2-day streak/)).toBeTruthy();
+    const recent = screen.getByRole('list', { name: 'Recent achievements' });
+    expect(within(recent).getByRole('img', { name: 'First Blood' })).toBeTruthy();
+  });
+
+  test('a recent badge shows its name in a tooltip on hover', async () => {
+    const user = userEvent.setup();
+    renderHud();
+
+    await user.hover(screen.getByRole('img', { name: 'First Blood' }));
+    expect(screen.getByRole('tooltip').textContent).toBe('First Blood');
+  });
+
+  test('holds only game info: the one control is the achievements button', () => {
+    renderHud();
+    const hud = screen.getByRole('region', { name: 'Player' });
     expect(
-      within(screen.getByRole('list', { name: 'Recent achievements' })).getByText('First Blood'),
-    ).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('Live');
+      within(hud)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['🏅 Achievements 1/3']);
   });
 
   test('handles a missing player gracefully', () => {
@@ -59,38 +69,5 @@ describe('PlayerHud', () => {
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  test('shows the account slot and a settings gear only when it can open settings', async () => {
-    const user = userEvent.setup();
-    const onClickSettings = vi.fn();
-    renderHud({ account: <span>@octocat</span>, onClickSettings });
-    expect(screen.getByText('@octocat')).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(onClickSettings).toHaveBeenCalledTimes(1);
-    cleanup();
-
-    renderHud();
-    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
-  });
-
-  test('asks for notifications from a button, and disables it when blocked', async () => {
-    const user = userEvent.setup();
-    const props = renderHud();
-    await user.click(screen.getByRole('button', { name: /Enable notifications/ }));
-    expect(props.onClickNotifications).toHaveBeenCalled();
-    cleanup();
-
-    renderHud({ notificationAccess: 'denied' });
-    expect(
-      screen.getByRole('button', { name: /Notifications blocked/ }).hasAttribute('disabled'),
-    ).toBe(true);
-    cleanup();
-
-    renderHud({ notificationAccess: 'granted', notificationsEnabled: true });
-    expect(
-      screen.getByRole('button', { name: /Notifications on/ }).getAttribute('aria-pressed'),
-    ).toBe('true');
   });
 });

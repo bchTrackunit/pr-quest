@@ -1,5 +1,7 @@
 import { useEffect, useEffectEvent, useId, useRef, type ReactNode } from 'react';
 
+import { Tooltip } from './Tooltip.tsx';
+
 export interface ModalProps {
   title: ReactNode;
   children: ReactNode;
@@ -12,11 +14,16 @@ export interface ModalProps {
   returnFocusTo?: () => HTMLElement | null | undefined;
 }
 
-const FOCUSABLE =
+export const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Open panels, newest last; only the top one handles keys and focus. */
 const openPanels: Array<HTMLElement> = [];
+
+/** True while any modal is open; popovers leave Escape to it. */
+export function isModalOpen(): boolean {
+  return openPanels.length > 0;
+}
 
 /**
  * True while nothing in the top dialog has taken focus since it opened: focus is still on the
@@ -138,15 +145,20 @@ export const Modal = ({
           <h2 className="modal__title pixel" id={titleId}>
             {title}
           </h2>
-          <button
-            aria-label="Close"
-            className="icon-button"
-            disabled={isBusy}
-            onClick={onClickClose}
-            type="button"
-          >
-            ✕
-          </button>
+          <Tooltip align="end" content="Close (Esc)">
+            {(describedBy) => (
+              <button
+                aria-describedby={describedBy}
+                aria-label="Close"
+                className="icon-button"
+                disabled={isBusy}
+                onClick={onClickClose}
+                type="button"
+              >
+                ✕
+              </button>
+            )}
+          </Tooltip>
         </header>
         <div className="modal__body">{children}</div>
       </div>

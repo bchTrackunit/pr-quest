@@ -25,6 +25,21 @@ const Vanishing = ({ onClickClose }: { onClickClose: () => void }) => {
 describe('Modal', () => {
   afterEach(cleanup);
 
+  test('the ✕ button is labelled Close and has a tooltip', async () => {
+    const user = userEvent.setup();
+    render(
+      <Modal onClickClose={vi.fn()} title="Example">
+        <p>Body</p>
+      </Modal>,
+    );
+    const close = screen.getByRole('button', { name: 'Close' });
+    const tooltip = screen.getByRole('tooltip', { hidden: true });
+    expect(close.getAttribute('aria-describedby')).toBe(tooltip.id);
+
+    await user.hover(close);
+    expect(screen.getByRole('tooltip').textContent).toBe('Close (Esc)');
+  });
+
   test('Shift+Tab from the panel itself wraps to the last control', async () => {
     const user = userEvent.setup();
     render(

@@ -10,6 +10,8 @@ import { GitHubAccountControl, useGitHubAccount } from '../../features/auth/ui/i
 import { QuestBoard } from '../../features/quests/ui/index.ts';
 import { SettingsDialog } from '../../features/settings/ui/index.ts';
 import { useStoreState } from '../../platform/ui/store.ts';
+import { HeaderControls } from './HeaderControls.tsx';
+import { PreferencesMenu } from './PreferencesMenu.tsx';
 import { useGameController } from './useGameController.ts';
 
 const selectState = (state: GameState): GameState => state;
@@ -27,24 +29,35 @@ export const App = () => {
         Skip to quests
       </a>
       <header className="app__header">
-        <h1 className="app__title pixel">
-          <span aria-hidden="true">⚔️</span> PR Quest
-        </h1>
-        <PlayerHud
-          account={<GitHubAccountControl actions={github.actions} state={github.state} />}
-          achievements={state.achievements}
-          achievementsError={state.achievementsError}
-          connection={state.connection}
-          notificationAccess={state.notificationAccess}
-          notificationsEnabled={state.notificationsEnabled}
-          onClickNotifications={actions.toggleNotifications}
-          onClickSettings={() => actions.openSettings()}
-          onClickSound={actions.toggleSound}
-          player={state.player}
-          playerError={state.playerError}
-          soundEnabled={state.soundEnabled}
-        />
-        <XpPopups onDone={actions.dismissXpPopup} popups={state.xpPopups} />
+        <div className="app__topbar">
+          <h1 className="app__title pixel">
+            <span aria-hidden="true">⚔️</span> PR Quest
+          </h1>
+          <HeaderControls
+            account={
+              <GitHubAccountControl actions={github.actions} state={github.state}>
+                <PreferencesMenu
+                  notificationAccess={state.notificationAccess}
+                  notificationsEnabled={state.notificationsEnabled}
+                  onClickNotifications={actions.toggleNotifications}
+                  onClickSettings={() => actions.openSettings()}
+                  onClickSound={actions.toggleSound}
+                  soundEnabled={state.soundEnabled}
+                />
+              </GitHubAccountControl>
+            }
+            connection={state.connection}
+          />
+        </div>
+        <div className="app__hud">
+          <PlayerHud
+            achievements={state.achievements}
+            achievementsError={state.achievementsError}
+            player={state.player}
+            playerError={state.playerError}
+          />
+          <XpPopups onDone={actions.dismissXpPopup} popups={state.xpPopups} />
+        </div>
       </header>
 
       <main className="app__main" id="quest-board" tabIndex={-1}>

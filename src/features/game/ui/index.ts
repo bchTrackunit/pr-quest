@@ -1,3 +1,4 @@
+export { ConnectionIndicator } from './ConnectionIndicator.tsx';
 export {
   activeRateLimit,
   applyQuestList,

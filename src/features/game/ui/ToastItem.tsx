@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { Tooltip } from '../../../platform/ui/Tooltip.tsx';
 import type { Toast } from './gameState.ts';
 
 export interface ToastItemProps {
@@ -65,14 +66,19 @@ export const ToastItem = ({ toast, onDismiss, onClickOpenResult }: ToastItemProp
           </a>
         ) : null}
       </div>
-      <button
-        aria-label="Dismiss notification"
-        className="icon-button"
-        onClick={dismiss}
-        type="button"
-      >
-        ✕
-      </button>
+      <Tooltip align="end" content="Dismiss" side="top">
+        {(describedBy) => (
+          <button
+            aria-describedby={describedBy}
+            aria-label="Dismiss notification"
+            className="icon-button"
+            onClick={dismiss}
+            type="button"
+          >
+            ✕
+          </button>
+        )}
+      </Tooltip>
     </li>
   );
 };
