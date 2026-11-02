@@ -19,12 +19,13 @@ import {
   type StoredRun,
 } from '../game/index.ts';
 import { buildReviewPrompt, parseReviewResult } from '@pr-quest/contract/reviewResult';
+import { cursorReviewBlocker } from '@pr-quest/contract/cursorReview';
 import {
-  cursorReviewBlocker,
-  discussionForCursor,
+  discussionSize,
   pushCandidates,
-} from '@pr-quest/contract/cursorReview';
-import { discussionSize, type PullRequestDiscussion } from '@pr-quest/contract/discussion';
+  type PullRequestDiscussion,
+  trustedDiscussion,
+} from '@pr-quest/contract/discussion';
 import { findingDecisionsOf } from '@pr-quest/contract/findingDecisions';
 import type { GitHubClient } from '../quests/index.ts';
 import { ApiError } from '../../platform/router.ts';
@@ -45,7 +46,7 @@ export interface ReviewRunServiceOptions {
   /** The selected provider and models; Cursor with its default model when omitted. */
   settings?: () => AppSettings;
   claude?: ClaudeRunner;
-  /** The player's GitHub client; without it the Cursor agent isn't told what's already been said. */
+  /** The player's GitHub client; without it reviewers aren't told what's already been said. */
   github?: Pick<GitHubClient, 'fetchDiscussion' | 'pushersAmong'>;
   log: (message: string) => void;
   now?: () => Date;
@@ -393,7 +394,7 @@ export class ReviewRunService {
   }
 
   /**
-   * The comments the agent may read, so it doesn't repeat them. Without them the review still
+   * The comments the reviewer may read, so it doesn't repeat them. Without them the review still
    * runs, since repeating a comment is better than no review. The PR's author pushed its branch,
    * so only the other commenters are checked.
    */
@@ -414,14 +415,14 @@ export class ReviewRunService {
       if (author) {
         pushers.add(author);
       }
-      const { discussion, leftOut } = discussionForCursor(all, pushers);
+      const { discussion, leftOut } = trustedDiscussion(all, pushers);
       this.log(
-        `review ${id}: showing the agent ${discussionSize(discussion)} existing comments on ${quest.id}; left out ${leftOut} by authors who can't push to the repo or untrusted bots`,
+        `review ${id}: showing the reviewer ${discussionSize(discussion)} existing comments on ${quest.id}; left out ${leftOut} by authors who can't push to the repo or untrusted bots`,
       );
       return discussion;
     } catch (error) {
       this.log(
-        `review ${id}: could not read the existing comments on ${quest.id}, so the agent may repeat them: ${errorMessage(error)}`,
+        `review ${id}: could not read the existing comments on ${quest.id}, so the reviewer may repeat them: ${errorMessage(error)}`,
       );
       return undefined;
     }
@@ -436,7 +437,9 @@ export class ReviewRunService {
   ): Promise<void> {
     const { id } = stored.run;
     try {
+      const discussion = await this.discussionFor(id, stored.quest);
       const result = await claude.review(stored.quest, headSha, model, {
+        ...(discussion ? { discussion } : {}),
         onRequest: async () => {
           await this.patch(id, { status: 'running' });
         },

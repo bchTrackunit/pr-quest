@@ -1,9 +1,4 @@
 import type { Quest } from './api.ts';
-import {
-  type DiscussionComment,
-  discussionSize,
-  type PullRequestDiscussion,
-} from './discussion.ts';
 import { isPromptSafeBranch } from './reviewResult.ts';
 
 /**
@@ -54,71 +49,4 @@ export function cursorReviewBlocker(quest: CursorReviewTarget): string | undefin
     return `${quest.id} has a branch name the Cursor agent can't use safely in a command. Review it with Claude instead.`;
   }
   return undefined;
-}
-
-/**
- * Review bots whose comments the Cursor agent reads, by GraphQL login: Bugbot, Copilot and
- * CodeRabbit. They write about PR content the agent reads anyway. Other apps, `github-actions`
- * among them, may post text that anyone wrote.
- */
-const TRUSTED_REVIEW_BOTS: ReadonlySet<string> = new Set([
-  'cursor',
-  'copilot-pull-request-reviewer',
-  'coderabbitai',
-]);
-
-export interface CursorDiscussion {
-  discussion: PullRequestDiscussion;
-  /** Comments whose authors the agent may not read. */
-  leftOut: number;
-}
-
-/**
- * Logins worth checking for write access: only the repo's org members and collaborators can have
- * it, though none of those roles implies it.
- */
-export function pushCandidates(discussion: PullRequestDiscussion): Array<string> {
-  const comments = [
-    ...discussion.reviews,
-    ...discussion.threads.flatMap((thread) => thread.comments),
-    ...discussion.conversation,
-  ];
-  const logins = comments.flatMap((comment) =>
-    !comment.isBot &&
-    comment.authorAssociation !== undefined &&
-    TRUSTED_AUTHOR_ASSOCIATIONS.has(comment.authorAssociation)
-      ? [comment.author.toLowerCase()]
-      : [],
-  );
-  return [...new Set(logins)];
-}
-
-/**
- * The comments the Cursor agent may read so it doesn't repeat them: those by `pushers`, the
- * lower-cased logins that can push to the repo, and by trusted review bots. Anyone else could
- * steer the agent through a comment, so theirs are left out, and so is a bot's reply that follows
- * one in a thread, since it may quote it.
- */
-export function discussionForCursor(
-  discussion: PullRequestDiscussion,
-  pushers: ReadonlySet<string>,
-): CursorDiscussion {
-  const readable = (comment: DiscussionComment): boolean =>
-    comment.isBot
-      ? TRUSTED_REVIEW_BOTS.has(comment.author.toLowerCase())
-      : pushers.has(comment.author.toLowerCase());
-  const threads = discussion.threads.flatMap((thread) => {
-    const firstUnreadable = thread.comments.findIndex((comment) => !readable(comment));
-    const comments = thread.comments.filter(
-      (comment, index) =>
-        readable(comment) && !(comment.isBot && firstUnreadable >= 0 && index > firstUnreadable),
-    );
-    return comments.length > 0 ? [{ ...thread, comments }] : [];
-  });
-  const kept: PullRequestDiscussion = {
-    reviews: discussion.reviews.filter(readable),
-    threads,
-    conversation: discussion.conversation.filter(readable),
-  };
-  return { discussion: kept, leftOut: discussionSize(discussion) - discussionSize(kept) };
 }
