@@ -84,7 +84,7 @@ PR_QUEST_GITHUB_CLIENT_ID=Ov23li...
 
 A client ID isn't secret: it only names the app, and every sign-in still needs your approval on
 github.com. A team could later commit theirs as the default in `DEFAULT_GITHUB_CLIENT_ID` in
-[`src/platform/server/config.ts`](src/platform/server/config.ts), so nobody has to set it.
+[`apps/server/src/platform/config.ts`](apps/server/src/platform/config.ts), so nobody has to set it.
 
 Without a client ID, the sign-in button and the settings popup explain this setup and link here.
 
@@ -606,7 +606,7 @@ progress where there is a count, such as Explorer 3/10 or Centurion 12/50 toward
 counts (Clean Sweep, Featherweight) start again at local midnight.
 
 Achievements are defined in
-[`src/features/game/server/achievements.ts`](src/features/game/server/achievements.ts); the UI
+[`apps/server/src/features/game/achievements.ts`](apps/server/src/features/game/achievements.ts); the UI
 renders whatever that file lists.
 
 ### Progress from before these achievements
