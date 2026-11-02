@@ -271,10 +271,6 @@ function guardPermissions(appUrl: string): void {
 }
 
 /**
- * The window shows only the app. Links to anywhere else, such as a PR on GitHub, open in the system
- * browser, and the page can't open windows of its own.
- */
-/**
  * The updater for an install that updates itself. On Linux this is always the AppImage updater:
  * electron-updater's own pick could be its deb updater, which installs as root.
  */
@@ -284,6 +280,10 @@ function openUpdater(source: Exclude<UpdateSource, 'download'>): electronUpdater
     : electronUpdater.autoUpdater;
 }
 
+/**
+ * The window shows only the app. Links to anywhere else, such as a PR on GitHub, open in the system
+ * browser, and the page can't open windows of its own.
+ */
 function openWindow(url: string, log: LogFile): BrowserWindow {
   const { origin } = new URL(url);
   const window = new BrowserWindow({
