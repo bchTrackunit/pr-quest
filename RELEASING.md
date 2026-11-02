@@ -89,8 +89,9 @@ installed it won't update to a different build with the same version.
 ## Secrets and settings
 
 Add these as secrets of the `release` environment (**Settings**, **Environments**, `release`,
-**Environment secrets**), never as repository secrets: every workflow run on any branch can read
-a repository secret. Set up the environment first, as described under
+**Environment secrets**), never as repository or organization secrets: every workflow run on any
+branch can read those. The version check job stops a release if any of these names is a
+repository or organization secret it can see. Set up the environment first, as described under
 [Protect the signing secrets](#protect-the-signing-secrets).
 Leave out all of a platform's secrets and its installers are built unsigned, with a warning on the
 run. If only some of them are set, whichever ones are missing, the build stops instead of shipping
@@ -158,17 +159,28 @@ run their own workflow when the tag is pushed. Three settings keep that from rea
 secrets:
 
 1. **The `release` environment.** Under **Settings**, **Environments**, create `release`:
-   - **Required reviewers**: the maintainers who may approve a release. If you are the only one,
-     leave **Prevent self-review** off, or nobody can approve.
+   - **Required reviewers**: the maintainers who may approve a release. With two or more, turn on
+     **Prevent self-review**, so whoever pushed the tag can't approve their own run. If you are
+     the only one, you have to leave it off, or nobody can approve; then a stolen token of yours
+     with permission to push tags and approve deployments could tag a commit and approve the run
+     itself, so keep such tokens short-lived and narrowly scoped.
    - **Deployment branches and tags**: **Selected branches and tags**, with one rule of the
      **Tag** type for `v*`. A run for a branch can't use the environment, even with approval.
-   - **Environment secrets**: the signing secrets in the table above, and none of them as
-     repository secrets. Delete any repository secret with those names.
+   - **Environment secrets**: the signing secrets in the table above. Delete any repository
+     secret with those names, and make sure no organization secret with those names is shared
+     with this repository.
 2. **A tag ruleset.** Under **Settings**, **Rules**, **Rulesets**, add a **tag ruleset** named
-   `release tags`, **Active**, targeting tags that match `v*`, with **Restrict creations**,
-   **Restrict updates** and **Restrict deletions**. Under **Bypass list**, add only the
-   **Repository admin** role, or the **Maintain** role too if maintainers release. Only they can
-   then push, move or delete a `v*` tag.
+   `release tags`, **Active**, targeting tags that match `v*`, with these rules:
+   - **Restrict creations** and **Restrict deletions**.
+   - **Restrict updates**, which is required, not optional: publishing a draft release attaches
+     it to wherever its tag points at that moment, so a tag moved after the build would publish
+     the signed installers under another commit's source.
+
+   Under **Bypass list**, add only the **Repository admin** role, or the **Maintain** role too if
+   maintainers release. A repository owned by a personal account offers only the **Repository
+   admin** role there, which is its owner. Only those who can bypass can then push, move or delete
+   a `v*` tag.
+
 3. **The `REQUIRE_SIGNING` variable**, once a signed version is out; see above.
 
 The reviewer is the last check: a run waiting for approval runs whatever workflow file the tag's
