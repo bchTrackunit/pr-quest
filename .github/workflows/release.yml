@@ -37,6 +37,40 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # This job names no environment, so it sees only repository and organization secrets, which
+      # every workflow run can read. The signing secrets belong in the release environment alone.
+      # Each variable is only whether that secret is set, never its value.
+      - name: Keep the signing secrets out of repository and organization secrets
+        env:
+          REPO_SECRET_SET_MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK != '' }}
+          REPO_SECRET_SET_MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD != '' }}
+          REPO_SECRET_SET_APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+          REPO_SECRET_SET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          REPO_SECRET_SET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          REPO_SECRET_SET_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          REPO_SECRET_SET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+          REPO_SECRET_SET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          REPO_SECRET_SET_AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT != '' }}
+          REPO_SECRET_SET_AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+          REPO_SECRET_SET_AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE != '' }}
+          REPO_SECRET_SET_AZURE_SIGNING_PUBLISHER: ${{ secrets.AZURE_SIGNING_PUBLISHER != '' }}
+          REPO_SECRET_SET_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          REPO_SECRET_SET_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          REPO_SECRET_SET_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
+          REPO_SECRET_SET_WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK != '' }}
+          REPO_SECRET_SET_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' }}
+        run: |
+          exposed=""
+          for flag in $(compgen -v REPO_SECRET_SET_); do
+            if [[ "${!flag}" == true ]]; then
+              exposed="${exposed:+$exposed, }${flag#REPO_SECRET_SET_}"
+            fi
+          done
+          if [[ -n "$exposed" ]]; then
+            echo "::error title=Exposed signing secrets::$exposed are repository or organization secrets, which every workflow run can read. Make them secrets of the release environment and delete the repository and organization ones; see RELEASING.md."
+            exit 1
+          fi
+
       - name: Match the tag to package.json
         id: version
         env:
