@@ -7,8 +7,11 @@
     "lib": ["ES2025"],
     "types": ["node"],
     "strict": true,
+    "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },

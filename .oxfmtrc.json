@@ -3,5 +3,9 @@
   "printWidth": 100,
   "singleQuote": true,
   "sortPackageJson": false,
-  "ignorePatterns": [".yarn/**", "src/app/server/fixtures/**", "src/platform/server/fixtures/**"]
+  "ignorePatterns": [
+    ".yarn/**",
+    "apps/server/src/app/fixtures/**",
+    "apps/server/src/platform/fixtures/**"
+  ]
 }

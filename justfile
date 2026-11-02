@@ -36,11 +36,11 @@ format:
 format-check:
     yarn format:check
 
-# Type-check the UI, server and test projects
+# Type-check each package and its tests
 typecheck:
     yarn typecheck
 
-# Type-check, then build the UI into dist/
+# Type-check, then build the UI into apps/web/dist/
 build:
     yarn build
 

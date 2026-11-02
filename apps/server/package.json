@@ -1,0 +1,26 @@
+{
+  "name": "@pr-quest/server",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "PR Quest's local API: GitHub and Linear polling, game state and review runs",
+  "exports": {},
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.2.0",
+    "@cursor/sdk": "1.0.40",
+    "@pr-quest/contract": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "4.23.13",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
