@@ -9,7 +9,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const IDLE_MS = 25_000;
@@ -33,7 +33,8 @@ const kind = process.argv[2];
 if (kind !== 'electron' && kind !== 'tauri') {
   throw new Error('Usage: node scripts/tauri-measure.ts electron|tauri [executable]');
 }
-const executable = process.argv[3] ?? DEFAULTS[kind];
+// AppleScript finds an app by its absolute path; anything else it takes for a name.
+const executable = resolve(process.argv[3] ?? DEFAULTS[kind]);
 if (!existsSync(executable)) {
   throw new Error(`No packaged app at ${executable}`);
 }
@@ -127,6 +128,8 @@ function launch(): Running {
   if (child.pid === undefined) {
     throw new Error(`Couldn't start ${executable}`);
   }
+  // This script decides when the app stops; an app left running mustn't keep it waiting.
+  child.unref();
   return { pid: child.pid, stateDir, webKitBefore };
 }
 
@@ -152,12 +155,25 @@ async function measure(): Promise<void> {
   process.stdout.write(
     `${total.toFixed(1).padStart(8)} MiB  total for ${kind} after ${IDLE_MS / 1000} s idle\n`,
   );
-  process.kill(running.pid, 'SIGTERM');
-  await exitsWithin(
-    procs.map((proc) => proc.pid).filter((pid) => pid !== running.pid),
-    EXIT_WAIT_MS,
-  );
+  await stop(running, procs);
+}
+
+/** Quits the app as the Dock's Quit does, and kills whatever is left after `EXIT_WAIT_MS`. */
+async function stop(running: Running, procs: ReadonlyArray<Proc>): Promise<void> {
+  quit();
+  const pids = procs.map((proc) => proc.pid);
+  if (!(await exitsWithin(pids, EXIT_WAIT_MS))) {
+    process.stdout.write(`(still running after quitting: ${pids.filter(alive).join(', ')})\n`);
+    for (const pid of pids.filter(alive)) {
+      process.kill(pid, 'SIGKILL');
+    }
+  }
   rmSync(running.stateDir, { recursive: true, force: true });
+}
+
+function quit(): void {
+  const appBundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, '');
+  execFileSync('osascript', ['-e', `tell application "${appBundle}" to quit`]);
 }
 
 async function lifecycle(): Promise<void> {
@@ -190,12 +206,9 @@ async function lifecycle(): Promise<void> {
     rmSync(running.stateDir, { recursive: true, force: true });
   };
 
-  const appBundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, '');
   await scenario(
     'quit',
-    () => {
-      execFileSync('osascript', ['-e', `tell application "${appBundle}" to quit`]);
-    },
+    quit,
     (running, sidecar) => [running.pid, sidecar.pid],
     'quitting the app stopped the shell and the sidecar',
   );
