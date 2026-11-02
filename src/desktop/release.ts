@@ -25,8 +25,11 @@ const GITHUB_NAME = /^[A-Za-z0-9._-]+$/;
 
 /** Whether `repo` names a real repository that releases may be published to and updates read from. */
 export function isPublishable(repo: ReleaseRepo): boolean {
+  // GitHub owner names are case-insensitive, so `change-me` is the placeholder too.
   return (
-    repo.owner !== PLACEHOLDER_OWNER && GITHUB_NAME.test(repo.owner) && GITHUB_NAME.test(repo.repo)
+    repo.owner.toLowerCase() !== PLACEHOLDER_OWNER.toLowerCase() &&
+    GITHUB_NAME.test(repo.owner) &&
+    GITHUB_NAME.test(repo.repo)
   );
 }
 

@@ -12,6 +12,7 @@ describe('isPublishable', () => {
 
   test.each([
     ['the placeholder owner', placeholder],
+    ['the placeholder owner in lower case', { owner: 'change-me', repo: 'pr-quest' }],
     ['an empty owner', { owner: '', repo: 'pr-quest' }],
     ['an owner with a slash', { owner: 'octo/cat', repo: 'pr-quest' }],
     ['an empty repository', { owner: 'octocat', repo: '' }],
