@@ -1,0 +1,43 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "PR Quest",
+  "version": "0.0.0",
+  "identifier": "com.prquest.desktop",
+  "build": {
+    "frontendDist": "./splash"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/node"],
+    "resources": {
+      "../build-tauri/sidecar/": "sidecar/"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true,
+      "entitlements": "./entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDNkFDNThCNDIyNzQyN0QKUldSOVFpZENpOFZxektLT0Yzb0U3QnBLc2FwU2NzUUdjdzRnR1A1K3BMYnQ3S21XL1Fua0hNRmkK",
+      "endpoints": ["https://github.com/OWNER/pr-quest/releases/latest/download/latest.json"]
+    }
+  }
+}

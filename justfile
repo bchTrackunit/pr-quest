@@ -56,5 +56,17 @@ desktop-package *args:
 desktop-smoke executable="":
     yarn desktop:smoke {{ if executable == "" { "" } else { quote(executable) } }}
 
+# Spike: build the Tauri app and dmg for this Mac into src-tauri/target/release/bundle/ (needs Rust)
+tauri-package *args:
+    yarn tauri:package {{ args }}
+
+# Spike: check the packaged Tauri app, or the executable given, as desktop-smoke does the Electron one
+tauri-smoke executable="src-tauri/target/release/bundle/macos/PR Quest.app/Contents/MacOS/pr-quest":
+    yarn desktop:smoke {{ quote(executable) }}
+
+# Spike: idle memory of the packaged electron or tauri app; for tauri also what quitting and crashes stop
+tauri-measure kind="tauri" executable="":
+    node scripts/tauri-measure.ts {{ kind }} {{ if executable == "" { "" } else { quote(executable) } }}
+
 # Run every check CI runs
 check: typecheck lint format-check test build

@@ -30,7 +30,8 @@
     "build:desktop": "node scripts/build-desktop.ts",
     "desktop:dev": "vite build && yarn build:desktop && electron .",
     "desktop:package": "yarn build && electron-builder --config electron-builder.config.ts --publish never",
-    "desktop:smoke": "node scripts/desktop-smoke.ts"
+    "desktop:smoke": "node scripts/desktop-smoke.ts",
+    "tauri:package": "yarn build && node scripts/build-tauri-sidecar.ts && tauri build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.2.0",
@@ -40,6 +41,7 @@
   },
   "devDependencies": {
     "@fontsource/press-start-2p": "5.3.0",
+    "@tauri-apps/cli": "2.12.4",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.8",

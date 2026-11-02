@@ -16,6 +16,10 @@ dist-server/
 dist-desktop/
 release/
 coverage/
+build-tauri/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/
 
 # local secrets
 .env.local
