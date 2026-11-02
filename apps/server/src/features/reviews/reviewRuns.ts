@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 
 import type {
@@ -19,8 +19,14 @@ import {
   type StoredRun,
 } from '../game/index.ts';
 import { buildReviewPrompt, parseReviewResult } from '@pr-quest/contract/reviewResult';
-import { cursorReviewBlocker } from '@pr-quest/contract/cursorReview';
+import {
+  cursorReviewBlocker,
+  discussionForCursor,
+  pushCandidates,
+} from '@pr-quest/contract/cursorReview';
+import { discussionSize, type PullRequestDiscussion } from '@pr-quest/contract/discussion';
 import { findingDecisionsOf } from '@pr-quest/contract/findingDecisions';
+import type { GitHubClient } from '../quests/index.ts';
 import { ApiError } from '../../platform/router.ts';
 import type { AppSettings } from '../settings/index.ts';
 
@@ -39,9 +45,12 @@ export interface ReviewRunServiceOptions {
   /** The selected provider and models; Cursor with its default model when omitted. */
   settings?: () => AppSettings;
   claude?: ClaudeRunner;
+  /** The player's GitHub client; without it the Cursor agent isn't told what's already been said. */
+  github?: Pick<GitHubClient, 'fetchDiscussion' | 'pushersAmong'>;
   log: (message: string) => void;
   now?: () => Date;
   newId?: () => string;
+  newNonce?: () => string;
 }
 
 export interface StartReviewOptions {
@@ -64,9 +73,11 @@ export class ReviewRunService {
   private readonly cursorApiKey: () => string | undefined;
   private readonly settings: () => AppSettings;
   private readonly claude?: ClaudeRunner;
+  private readonly github?: Pick<GitHubClient, 'fetchDiscussion' | 'pushersAmong'>;
   private readonly log: (message: string) => void;
   private readonly now: () => Date;
   private readonly newId: () => string;
+  private readonly newNonce: () => string;
   private readonly tasks = new Set<Promise<void>>();
   private readonly posting = new Set<string>();
 
@@ -77,9 +88,11 @@ export class ReviewRunService {
     this.cursorApiKey = options.cursorApiKey;
     this.settings = options.settings ?? (() => DEFAULT_SETTINGS);
     this.claude = options.claude;
+    this.github = options.github;
     this.log = options.log;
     this.now = options.now ?? (() => new Date());
     this.newId = options.newId ?? (() => `review-${randomUUID()}`);
+    this.newNonce = options.newNonce ?? (() => randomBytes(12).toString('hex'));
   }
 
   /** Newest first. */
@@ -334,7 +347,12 @@ export class ReviewRunService {
     let agent: SDKAgent | undefined;
     let started = false;
     try {
-      const prompt = buildReviewPrompt(quest, headSha);
+      const discussion = await this.discussionFor(id, quest);
+      const prompt = buildReviewPrompt(
+        quest,
+        headSha,
+        discussion ? { existing: { discussion, nonce: this.newNonce() } } : {},
+      );
       agent = await Agent.create({
         apiKey,
         name: `PR Quest review: ${quest.id}`,
@@ -371,6 +389,41 @@ export class ReviewRunService {
       await agent?.[Symbol.asyncDispose]().catch((error: unknown) => {
         this.log(`review ${id}: failed to dispose agent: ${errorMessage(error)}`);
       });
+    }
+  }
+
+  /**
+   * The comments the agent may read, so it doesn't repeat them. Without them the review still
+   * runs, since repeating a comment is better than no review. The PR's author pushed its branch,
+   * so only the other commenters are checked.
+   */
+  private async discussionFor(
+    id: string,
+    quest: QuestSnapshot,
+  ): Promise<PullRequestDiscussion | undefined> {
+    const { github } = this;
+    if (!github) {
+      return undefined;
+    }
+    try {
+      const ref = { repo: quest.repo, number: quest.number };
+      const all = await github.fetchDiscussion(ref);
+      const author = quest.author?.githubLogin?.toLowerCase();
+      const others = pushCandidates(all).filter((login) => login !== author);
+      const pushers = await github.pushersAmong(ref, others);
+      if (author) {
+        pushers.add(author);
+      }
+      const { discussion, leftOut } = discussionForCursor(all, pushers);
+      this.log(
+        `review ${id}: showing the agent ${discussionSize(discussion)} existing comments on ${quest.id}; left out ${leftOut} by authors who can't push to the repo or untrusted bots`,
+      );
+      return discussion;
+    } catch (error) {
+      this.log(
+        `review ${id}: could not read the existing comments on ${quest.id}, so the agent may repeat them: ${errorMessage(error)}`,
+      );
+      return undefined;
     }
   }
 
