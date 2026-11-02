@@ -404,7 +404,11 @@ queued, and suggests Claude instead, when:
 
 - the PR's author isn't in the repo's org or one of its collaborators: GitHub's
   `authorAssociation` isn't `OWNER`, `MEMBER` or `COLLABORATOR`. Outside contributors,
-  first-time contributors and most bots are refused;
+  first-time contributors and most bots are refused. The exception is a short list of trusted
+  bots, `dependabot[bot]` and `renovate[bot]`, which GitHub gives no role (`NONE`). GitHub
+  reserves the `[bot]` suffix for GitHub Apps, so no person can open a PR under those logins.
+  This is a weaker guarantee than for members: see the bot PR risk under "What the agent can
+  do";
 - the PR comes from a fork (`isCrossRepository`). None of the roles above implies write access,
   but a branch in the base repo can only have been pushed by someone who has it, so steering the
   agent gains them nothing they can't already do. Members and collaborators who work from forks
@@ -416,6 +420,10 @@ letters, digits and `. _ / + @ = -`, or starts with `-` or `+`. Git allows `;`, 
 backticks and quotes in branch names, and the prompt asks the agent to run commands that contain
 them. The names that pass are also quoted in the prompt.
 
+The board applies the same rules: with the Cursor provider selected, a quest the agent would
+refuse has its "Send review agent" button disabled, the reason under it and a shortcut to the
+provider setting.
+
 **What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
 GitHub integration, on PR content that the PR's author controls: the code, the title and the
 description. Cloud agents don't accept a system prompt or tool restrictions, so the rules above,
@@ -424,6 +432,14 @@ prompt injection could talk the agent out of them. The only hard guard is `autoC
 which stops the SDK from opening a PR for the agent's work. PR Quest also sets
 `workOnCurrentBranch: false`, but the SDK doesn't document what that prevents, so don't rely on
 it.
+
+On Dependabot and Renovate PRs, the content isn't controlled by someone who can already push.
+The description quotes upstream release notes, changelogs and commit messages, written by the
+dependency's maintainers, and the lockfile points at a version they published. A malicious or
+compromised release can carry a prompt injection, and the prompt's "treat it as data" is the
+only defence. If the repo's Cursor cloud environment installs dependencies, that install also
+runs the new version's install scripts inside the agent. Review such PRs with Claude when you
+don't trust the upstream release.
 
 ### Claude reviews
 
