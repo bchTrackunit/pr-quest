@@ -390,7 +390,8 @@ shows how many quests match and one chip per active filter.
 - **Hide** (in the Filters panel) has two on/off switches: **Drafts** and **Approved by others**.
 - **Sort**: _Smart_ (the default) puts direct requests first, then PRs that need attention, then
   the longest-waiting. _Smallest first_ and _Largest first_ order by additions plus deletions,
-  using changed files as the tie-breaker.
+  using changed files as the tie-breaker. _Newest first_ and _Oldest first_ order by when the PR
+  was opened.
 
 Active filters show as chips you can remove one at a time, or all at once with **Clear all**.
 The count says how many quests are shown out of the total. If the filters hide every quest, the

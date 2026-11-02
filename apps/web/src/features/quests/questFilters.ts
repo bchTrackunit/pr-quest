@@ -26,9 +26,12 @@ export const KIND_LABELS: Record<KindFilter, string> = {
   team: 'Team',
 };
 
-export type SortMode = 'smart' | 'size';
+export type SortMode = 'smart' | 'size' | 'created';
 
-/** For `size`: `asc` is smallest first (quick wins), `desc` largest first (boss rush). */
+/**
+ * For `size`: `asc` is smallest first (quick wins), `desc` largest first (boss rush). For
+ * `created`: `asc` is the oldest PR first, `desc` the newest.
+ */
 export type SortDirection = 'asc' | 'desc';
 
 export interface QuestFilters {
@@ -197,7 +200,8 @@ export function questSize(quest: Quest): number {
 
 /**
  * `smart`: direct first, then needs attention, then the longest-waiting. `size`: by lines changed,
- * then files changed, in the chosen direction; equal sizes keep the smart order.
+ * then files changed. `created`: by when the PR was opened. The last two use the chosen direction,
+ * and ties keep the smart order.
  */
 export function sortBoardQuests(quests: ReadonlyArray<Quest>, sort: QuestSort): Array<Quest> {
   const smart = sortQuests(quests);
@@ -205,6 +209,11 @@ export function sortBoardQuests(quests: ReadonlyArray<Quest>, sort: QuestSort): 
     return smart;
   }
   const sign = sort.direction === 'asc' ? 1 : -1;
+  if (sort.mode === 'created') {
+    return smart.sort(
+      (left, right) => sign * (Date.parse(left.openedAt) - Date.parse(right.openedAt)),
+    );
+  }
   return smart.sort(
     (left, right) =>
       sign * (questSize(left) - questSize(right)) ||
