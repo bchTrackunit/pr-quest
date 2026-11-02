@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-interface Check {
+export interface Check {
   name: string;
   run: () => Promise<string>;
 }
@@ -24,27 +24,8 @@ export async function runSmokeTest(
   url: string,
   cspViolations: ReadonlyArray<string>,
 ): Promise<boolean> {
-  const checks: Array<Check> = [
-    {
-      name: 'health',
-      run: async () => {
-        const res = await fetch(new URL('/api/health', url));
-        if (!res.ok) {
-          throw new Error(`status ${res.status}`);
-        }
-        return `status ${res.status}`;
-      },
-    },
-    {
-      name: 'request-secret',
-      run: async () => {
-        const res = await fetch(new URL('/api/player', url));
-        if (res.status !== 403) {
-          throw new Error(`a request without the secret got ${res.status}`);
-        }
-        return 'a request without the secret is refused';
-      },
-    },
+  return runChecks([
+    ...serverChecks(url),
     {
       name: 'ui',
       run: async () => {
@@ -75,6 +56,39 @@ export async function runSmokeTest(
         return `nothing blocked; ${fonts} font(s) loaded`;
       },
     },
+    ...sdkChecks(),
+  ]);
+}
+
+/** The server answers its health check, and nothing else without the request secret. */
+export function serverChecks(url: string): Array<Check> {
+  return [
+    {
+      name: 'health',
+      run: async () => {
+        const res = await fetch(new URL('/api/health', url));
+        if (!res.ok) {
+          throw new Error(`status ${res.status}`);
+        }
+        return `status ${res.status}`;
+      },
+    },
+    {
+      name: 'request-secret',
+      run: async () => {
+        const res = await fetch(new URL('/api/player', url));
+        if (res.status !== 403) {
+          throw new Error(`a request without the secret got ${res.status}`);
+        }
+        return 'a request without the secret is refused';
+      },
+    },
+  ];
+}
+
+/** Both SDKs load with their native parts and reach their provider. */
+export function sdkChecks(): Array<Check> {
+  return [
     {
       name: 'cursor-sdk',
       run: async () => {
@@ -129,14 +143,20 @@ export async function runSmokeTest(
       },
     },
   ];
+}
 
+/** Runs each check in turn, printing one line for each, and resolves whether all of them passed. */
+export async function runChecks(
+  checks: ReadonlyArray<Check>,
+  print: (line: string) => void = (line) => process.stdout.write(`${line}\n`),
+): Promise<boolean> {
   let ok = true;
   for (const check of checks) {
     try {
-      process.stdout.write(`[smoke] ok   ${check.name}: ${await withDeadline(check.run())}\n`);
+      print(`[smoke] ok   ${check.name}: ${await withDeadline(check.run())}`);
     } catch (error) {
       ok = false;
-      process.stdout.write(`[smoke] FAIL ${check.name}: ${describe(error)}\n`);
+      print(`[smoke] FAIL ${check.name}: ${describe(error)}`);
     }
   }
   return ok;
