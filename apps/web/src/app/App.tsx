@@ -85,12 +85,12 @@ export const App = () => {
           key={openRun.id}
           onClickApprove={actions.requestApprove}
           onClickClose={actions.closeResult}
-          onDecide={(findingIndexes, decision) =>
-            actions.decideFindings(openRun.id, findingIndexes, decision)
-          }
           onDiscard={() => actions.discardFindings(openRun.id)}
           onPost={(event, findingIndexes) =>
             actions.postFindings(openRun.id, event, findingIndexes)
+          }
+          onSelect={(findingIndexes, selected) =>
+            actions.selectFindings(openRun.id, findingIndexes, selected)
           }
           quest={findQuest(state, openRun.questId)}
           run={openRun}

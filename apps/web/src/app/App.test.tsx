@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { FindingDecision, ReviewRun, ServerEvent } from '@pr-quest/contract/api';
+import type { ReviewRun, ServerEvent } from '@pr-quest/contract/api';
 import { ApiRequestError } from '../platform/apiClient.ts';
 import * as apiClient from '../platform/apiClient.ts';
 import { App } from './App.tsx';
@@ -28,7 +28,7 @@ vi.mock('../platform/apiClient.ts', async (importOriginal) => {
     startReview: vi.fn(),
     approveQuest: vi.fn(),
     postRun: vi.fn(),
-    saveFindingDecisions: vi.fn(),
+    saveFindingSelection: vi.fn(),
     discardRun: vi.fn(),
     fetchAuthStatus: vi.fn(),
     signOut: vi.fn(),
@@ -298,11 +298,11 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: 'Loot from Trackunit/manager#101' })).toBeTruthy();
   });
 
-  describe('finding decisions', () => {
+  describe('finding selection', () => {
     const finished = makeRun({ status: 'finished', result: makeResult() });
-    const withDecisions = (findingDecisions: Array<FindingDecision>): ReviewRun => ({
+    const withSelection = (selectedFindings: Array<number>): ReviewRun => ({
       ...finished,
-      findingDecisions,
+      selectedFindings,
     });
 
     async function openLoot() {
@@ -315,77 +315,66 @@ describe('App', () => {
       };
     }
 
-    const toggle = (dialog: HTMLElement, location: string, name: 'Accept' | 'Reject') =>
-      within(within(dialog).getByRole('group', { name: `Decision on ${location}` })).getByRole(
-        'button',
-        { name },
-      );
+    const toggle = (dialog: HTMLElement, location: string) =>
+      within(dialog).getByRole('button', { name: `Select ${location}` });
 
-    test('are saved on the server and still there after a reload', async () => {
+    test('is saved on the server and still there after a reload', async () => {
       api.fetchRuns.mockResolvedValue({ runs: [finished] });
-      api.saveFindingDecisions.mockResolvedValue({
-        run: withDecisions(['undecided', 'accepted', 'undecided']),
-      });
+      api.saveFindingSelection.mockResolvedValue({ run: withSelection([1]) });
       const { user, dialog } = await openLoot();
 
-      await user.click(toggle(dialog, 'src/query.ts:40', 'Accept'));
+      await user.click(toggle(dialog, 'src/query.ts:40'));
 
-      expect(api.saveFindingDecisions).toHaveBeenCalledWith('run-1', {
+      expect(api.saveFindingSelection).toHaveBeenCalledWith('run-1', {
         findingIndexes: [1],
-        decision: 'accepted',
+        selected: true,
       });
-      expect(toggle(dialog, 'src/query.ts:40', 'Accept').ariaPressed).toBe('true');
+      expect(toggle(dialog, 'src/query.ts:40').ariaPressed).toBe('true');
 
       cleanup();
       MockEventSource.reset();
-      api.fetchRuns.mockResolvedValue({
-        runs: [withDecisions(['undecided', 'accepted', 'undecided'])],
-      });
+      api.fetchRuns.mockResolvedValue({ runs: [withSelection([1])] });
       const reloaded = await openLoot();
 
-      expect(toggle(reloaded.dialog, 'src/query.ts:40', 'Accept').ariaPressed).toBe('true');
-      expect(within(reloaded.dialog).getByRole('status').textContent).toBe(
-        '1 accepted · 0 rejected · 2 undecided',
-      );
+      expect(toggle(reloaded.dialog, 'src/query.ts:40').ariaPressed).toBe('true');
+      expect(within(reloaded.dialog).getByRole('status').textContent).toBe('1 of 3 selected');
     });
 
-    test('follow decisions made elsewhere, pushed over the event stream', async () => {
+    test('follows selections made elsewhere, pushed over the event stream', async () => {
       api.fetchRuns.mockResolvedValue({ runs: [finished] });
       const { dialog } = await openLoot();
 
-      emit({ type: 'runUpdated', run: withDecisions(['rejected', 'rejected', 'rejected']) });
+      emit({ type: 'runUpdated', run: withSelection([0, 1, 2]) });
 
-      expect(within(dialog).getByRole('status').textContent).toBe(
-        '0 accepted · 3 rejected · 0 undecided',
-      );
+      expect(within(dialog).getByRole('status').textContent).toBe('3 of 3 selected');
     });
 
-    test('posting sends the accepted findings once their decisions are saved', async () => {
+    test('posting sends the selected findings once the selection is saved', async () => {
       api.fetchRuns.mockResolvedValue({ runs: [finished] });
       let save = (): void => undefined;
-      api.saveFindingDecisions.mockImplementation(
+      api.saveFindingSelection.mockImplementation(
         () =>
           new Promise((resolve) => {
-            save = () => resolve({ run: withDecisions(['accepted', 'accepted', 'accepted']) });
+            save = () => resolve({ run: withSelection([0, 1, 2]) });
           }),
       );
       api.postRun.mockResolvedValue({
-        run: { ...withDecisions(['accepted', 'accepted', 'accepted']), disposition: 'posted' },
+        run: { ...withSelection([0, 1, 2]), disposition: 'posted' },
         reviewUrl: 'https://github.com/Trackunit/manager/pull/101#pullrequestreview-1',
         outcome: { xpGained: 30, gains: [], player: makePlayer(), unlocked: [] },
       });
       const { user, dialog } = await openLoot();
 
-      await user.click(within(dialog).getByRole('button', { name: 'Accept all' }));
+      await user.click(within(dialog).getByRole('button', { name: 'Select all' }));
       await user.click(within(dialog).getByRole('button', { name: 'Post to PR' }));
       expect(within(dialog).getByRole('group', { name: /^Post to/ }).textContent).toContain(
         'Posting all 3 findings',
       );
       await user.click(within(dialog).getByRole('button', { name: 'Confirm post' }));
 
-      expect(api.saveFindingDecisions).toHaveBeenCalledWith('run-1', {
+      expect(api.saveFindingSelection).toHaveBeenCalledWith('run-1', {
         findingIndexes: [0, 1, 2],
-        decision: 'accepted',
+        selected: true,
       });
       expect(api.postRun).not.toHaveBeenCalled();
       save();
