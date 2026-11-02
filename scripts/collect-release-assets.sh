@@ -3,7 +3,8 @@
 # assets. Each macOS job writes a latest-mac.yml (or beta-mac.yml, and so on) that names only its
 # own zip and dmg, while electron-updater reads a single one per release and picks the arm64 or x64
 # file from its list, so those are merged. Any other name that two jobs produced is an error,
-# because one upload would replace the other. Needs yq (https://github.com/mikefarah/yq) v4.
+# because one upload would replace the other. Then every update file is checked against the
+# installers it lists. Needs yq (https://github.com/mikefarah/yq) v4 and openssl.
 # Usage: scripts/collect-release-assets.sh <downloaded artifacts> <output folder>
 set -euo pipefail
 
@@ -50,4 +51,28 @@ for name in $(find "$in" -mindepth 2 -maxdepth 2 -name '*-mac.yml' -exec basenam
     fail "The $name files name the same installer more than once."
   fi
   echo "Merged $name from ${#sources[@]} build jobs: $(yq -o=json -I=0 '[.files[].url]' "$out/$name")"
+done
+
+# Every update file must describe the installers being released byte for byte. electron-updater
+# refuses a download whose size or sha512 differs, so a mismatch would show up only as failed
+# updates on users' machines. A top-level path, for old electron-updater versions, has no size.
+for file in "$out"/*.yml; do
+  name="$(basename "$file")"
+  if [[ "$(yq '.files | length' "$file")" == 0 ]]; then
+    fail "$name lists no installers."
+  fi
+  while IFS=$'\t' read -r url sha512 size; do
+    installer="$out/$url"
+    if [[ ! -f "$installer" ]]; then
+      fail "$name lists $url, which no build job produced."
+    fi
+    actual_size="$(wc -c <"$installer" | tr -d ' ')"
+    if [[ "$size" != - && "$actual_size" != "$size" ]]; then
+      fail "$name gives $url a size of $size bytes, but it has $actual_size."
+    fi
+    if [[ "$(openssl dgst -sha512 -binary "$installer" | base64 | tr -d '\n')" != "$sha512" ]]; then
+      fail "$name gives $url another sha512 than the file has."
+    fi
+  done < <(yq -r '(.files[] | [.url, .sha512, .size] | @tsv), (select(has("path")) | [.path, .sha512, "-"] | @tsv)' "$file")
+  echo "Checked $name against the installers it lists."
 done

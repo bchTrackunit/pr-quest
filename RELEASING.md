@@ -26,7 +26,8 @@ Pushing a tag that starts with `v` runs these jobs:
    files, such as `beta-mac.yml`, which releases don't publish. On a signed Windows build they must
    also name the publisher, so the app checks who signed an update before installing it.
 4. **Publish the draft release.** Once every build has passed, one job gathers their files,
-   merges the two macOS update files, and creates the draft release with all of them. Because only
+   merges the two macOS update files, checks that every update file gives the size and sha512 of
+   the installers it lists, and creates the draft release with all of them. Because only
    this job creates the release, parallel builds can't create duplicate releases. Re-running it
    uploads to the same draft again, replacing its files.
 
