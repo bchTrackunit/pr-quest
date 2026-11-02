@@ -8,6 +8,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 const script = resolve(import.meta.dirname, '../../scripts/collect-release-assets.sh');
 const hasYq = spawnSync('yq', ['--version']).status === 0;
+// The release's publish job needs yq, so CI must run these; only a local run may skip them.
+const inCi = process.env.CI !== undefined && process.env.CI !== '' && process.env.CI !== 'false';
+
+test.runIf(inCi && process.platform !== 'win32')('CI has yq, which these tests need', () => {
+  expect(hasYq, 'install yq (https://github.com/mikefarah/yq) v4 on this runner').toBe(true);
+});
 
 let dir: string;
 
@@ -70,114 +76,117 @@ function yqWhoseListing(behaviour: string): NodeJS.ProcessEnv {
   return { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
 }
 
-describe.skipIf(process.platform === 'win32' || !hasYq)('collect-release-assets.sh', () => {
-  test('merges the macOS update files and keeps the rest', () => {
-    job('desktop-mac-arm64', 'latest-mac.yml', 'pr-quest-1.0.0-mac-arm64.zip', 'arm64 zip');
-    job('desktop-mac-x64', 'latest-mac.yml', 'pr-quest-1.0.0-mac-x64.zip', 'x64 zip');
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-    );
+describe.skipIf(process.platform === 'win32' || (!hasYq && !inCi))(
+  'collect-release-assets.sh',
+  () => {
+    test('merges the macOS update files and keeps the rest', () => {
+      job('desktop-mac-arm64', 'latest-mac.yml', 'pr-quest-1.0.0-mac-arm64.zip', 'arm64 zip');
+      job('desktop-mac-x64', 'latest-mac.yml', 'pr-quest-1.0.0-mac-x64.zip', 'x64 zip');
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+      );
 
-    const result = collect();
+      const result = collect();
 
-    expect(result.status).toBe(0);
-    const merged = readFileSync(join(dir, 'assets', 'latest-mac.yml'), 'utf8');
-    expect(merged).toContain('pr-quest-1.0.0-mac-arm64.zip');
-    expect(merged).toContain('pr-quest-1.0.0-mac-x64.zip');
-    expect(readFileSync(join(dir, 'assets', 'latest-linux.yml'), 'utf8')).toContain('AppImage');
-  });
+      expect(result.status).toBe(0);
+      const merged = readFileSync(join(dir, 'assets', 'latest-mac.yml'), 'utf8');
+      expect(merged).toContain('pr-quest-1.0.0-mac-arm64.zip');
+      expect(merged).toContain('pr-quest-1.0.0-mac-x64.zip');
+      expect(readFileSync(join(dir, 'assets', 'latest-linux.yml'), 'utf8')).toContain('AppImage');
+    });
 
-  test.each([
-    ['gives a file another size', { size: 3 }, 'size of 3 bytes'],
-    ['gives a file another sha512', { sha512: sha512('something else') }, 'sha512'],
-  ])('stops when an update file %s than the installer has', (_case, entry, message) => {
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-      entry,
-    );
+    test.each([
+      ['gives a file another size', { size: 3 }, 'size of 3 bytes'],
+      ['gives a file another sha512', { sha512: sha512('something else') }, 'sha512'],
+    ])('stops when an update file %s than the installer has', (_case, entry, message) => {
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+        entry,
+      );
 
-    const result = collect();
+      const result = collect();
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(message);
-  });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(message);
+    });
 
-  test("stops when an update file can't be read", () => {
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-    );
-    writeFileSync(
-      join(dir, 'artifacts', 'desktop-linux-x64', 'latest-linux.yml'),
-      'files: [oops\n',
-    );
+    test("stops when an update file can't be read", () => {
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+      );
+      writeFileSync(
+        join(dir, 'artifacts', 'desktop-linux-x64', 'latest-linux.yml'),
+        'files: [oops\n',
+      );
 
-    const result = collect();
+      const result = collect();
 
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).not.toContain('Checked latest-linux.yml');
-  });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('Checked latest-linux.yml');
+    });
 
-  test.each([
-    ['fails', 'echo broken >&2; exit 1'],
-    ['prints nothing', 'exit 0'],
-  ])('stops when listing the installers %s, instead of checking none', (_case, behaviour) => {
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-      {
-        sha512: 'WRONG',
-      },
-    );
+    test.each([
+      ['fails', 'echo broken >&2; exit 1'],
+      ['prints nothing', 'exit 0'],
+    ])('stops when listing the installers %s, instead of checking none', (_case, behaviour) => {
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+        {
+          sha512: 'WRONG',
+        },
+      );
 
-    const result = collect(yqWhoseListing(behaviour));
+      const result = collect(yqWhoseListing(behaviour));
 
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).not.toContain('Checked latest-linux.yml');
-  });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain('Checked latest-linux.yml');
+    });
 
-  test('stops when an update file names an installer no job produced', () => {
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-    );
-    rmSync(join(dir, 'artifacts', 'desktop-linux-x64', 'pr-quest-1.0.0-linux-x86_64.AppImage'));
+    test('stops when an update file names an installer no job produced', () => {
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+      );
+      rmSync(join(dir, 'artifacts', 'desktop-linux-x64', 'pr-quest-1.0.0-linux-x86_64.AppImage'));
 
-    const result = collect();
+      const result = collect();
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain('no build job produced');
-  });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('no build job produced');
+    });
 
-  test('stops when two jobs produce the same file', () => {
-    job(
-      'desktop-linux-x64',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-    );
-    job(
-      'desktop-linux-x64-again',
-      'latest-linux.yml',
-      'pr-quest-1.0.0-linux-x86_64.AppImage',
-      'appimage',
-    );
+    test('stops when two jobs produce the same file', () => {
+      job(
+        'desktop-linux-x64',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+      );
+      job(
+        'desktop-linux-x64-again',
+        'latest-linux.yml',
+        'pr-quest-1.0.0-linux-x86_64.AppImage',
+        'appimage',
+      );
 
-    const result = collect();
+      const result = collect();
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain('More than one build job');
-  });
-});
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('More than one build job');
+    });
+  },
+);

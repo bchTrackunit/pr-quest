@@ -93,8 +93,12 @@ jobs:
       - name: Format check
         run: yarn format:check
 
+      # The release asset tests need yq v4, which GitHub's Ubuntu images include, as does the
+      # publish job.
       - name: Test
-        run: yarn test
+        run: |
+          yq --version
+          yarn test
 
   build:
     name: Build ${{ matrix.name }}

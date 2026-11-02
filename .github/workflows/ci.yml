@@ -40,8 +40,11 @@ jobs:
       - name: Format check
         run: yarn format:check
 
+      # The release asset tests need yq v4, which GitHub's Ubuntu images include.
       - name: Test
-        run: yarn test
+        run: |
+          yq --version
+          yarn test
 
       - name: Build
         run: yarn vite build && yarn build:server && yarn build:desktop
