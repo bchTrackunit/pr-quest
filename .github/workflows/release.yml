@@ -127,6 +127,7 @@ jobs:
         id: mac
         if: github.event_name == 'push' && runner.os == 'macOS'
         env:
+          REQUIRE_SIGNING: ${{ vars.REQUIRE_SIGNING }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -141,6 +142,7 @@ jobs:
         id: win
         if: github.event_name == 'push' && runner.os == 'Windows'
         env:
+          REQUIRE_SIGNING: ${{ vars.REQUIRE_SIGNING }}
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}

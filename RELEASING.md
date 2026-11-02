@@ -78,9 +78,16 @@ installed it won't update to a different build with the same version.
 ## Secrets and settings
 
 Add these under **Settings**, **Secrets and variables**, **Actions**, as repository secrets.
-Leave out a platform's secrets and its installers are built unsigned, with a warning on the run.
-If only part of a platform's settings is set, the build stops instead of shipping something
-half-signed.
+Leave out all of a platform's secrets and its installers are built unsigned, with a warning on the
+run. If only some of them are set, whichever ones are missing, the build stops instead of shipping
+something half-signed, and so it does when both ways to notarize, or both ways to sign for
+Windows, are set.
+
+Once you have released a signed version, set the repository **variable** `REQUIRE_SIGNING` to
+`true`. A tag build then stops when macOS or Windows would be unsigned, for example because a
+secret was deleted or expired. Users of a signed version couldn't update to it: macOS installs an
+update only when it's signed by the same developer, and a signed Windows app refuses an update
+that its publisher didn't sign. Dry runs are always unsigned and ignore it.
 
 | Secret                        | Platform | What it is                                                                            |
 | ----------------------------- | -------- | ------------------------------------------------------------------------------------- |
@@ -102,8 +109,10 @@ half-signed.
 | `WIN_CSC_LINK`                | Windows  | Instead of Trusted Signing: a code signing certificate as a `.pfx`, base64-encoded    |
 | `WIN_CSC_KEY_PASSWORD`        | Windows  | The password of that `.pfx`                                                           |
 
-Notarization needs either the three `APPLE_API_*` secrets (recommended) or the three Apple
-Account ones. Windows needs either the seven Trusted Signing secrets or the `.pfx`, not both.
+macOS needs both certificate secrets and either the three `APPLE_API_*` secrets (recommended) or
+the three Apple Account ones, not both. Windows needs either the seven Trusted Signing secrets or
+both `.pfx` ones, not both. The API key reaches the build as a file in the runner's temporary
+folder, which the packaging script deletes when it ends.
 
 Publishing uses the workflow's own `GITHUB_TOKEN`, so it needs no token of yours.
 
