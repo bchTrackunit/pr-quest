@@ -1,4 +1,10 @@
-export { GitHubClient, type GitHubViewer, type ReviewRequestData } from './github.ts';
+export {
+  GitHubClient,
+  type GitHubViewer,
+  type ReviewRequestData,
+  ReviewNotPostedError,
+  UnanchoredFindingsError,
+} from './github.ts';
 export { LinearReviewClient } from './linear.ts';
 export { QuestCache } from './questCache.ts';
 export { parseQuestId, type QuestRef } from './quests.ts';

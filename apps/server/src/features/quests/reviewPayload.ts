@@ -23,19 +23,35 @@ export interface ReviewDraft {
   commitId?: string;
 }
 
+/** One of the `comments` of `POST /repos/{owner}/{repo}/pulls/{number}/reviews`. */
 export interface GitHubReviewComment {
   path: string;
   line: number;
   side: 'RIGHT';
+  start_line?: number;
+  start_side?: 'RIGHT';
   body: string;
 }
 
-/** Body of `POST /repos/{owner}/{repo}/pulls/{number}/reviews`. */
-export interface GitHubReviewPayload {
+/** A comment on a whole file, which only GraphQL can add to a review. */
+export interface GitHubFileComment {
+  path: string;
+  body: string;
+}
+
+export interface RenderedFinding {
+  /** Set when the finding has a line; GitHub still refuses lines outside the diff. */
+  onLines?: GitHubReviewComment;
+  /** The same finding on its file, for when it has no line GitHub accepts. */
+  onFile: GitHubFileComment;
+}
+
+/** A review whose body never lists findings: each one is a comment on its lines or its file. */
+export interface RenderedReview {
   event: 'COMMENT' | 'REQUEST_CHANGES';
   body: string;
-  comments: Array<GitHubReviewComment>;
-  commit_id?: string;
+  findings: Array<RenderedFinding>;
+  commitId?: string;
 }
 
 const SEVERITY_LABELS: Record<FindingSeverity, string> = {
@@ -67,60 +83,84 @@ const MAX_OMITTED_LISTED = 50;
 const MAX_OMITTED_NAME_LENGTH = 200;
 
 /**
- * Renders a GitHub review. With `inline`, findings that carry a valid line become inline comments
- * and the rest go in the body; without it, everything goes in the body so GitHub cannot reject it
- * for lines outside the diff.
+ * Renders a GitHub review. The body holds the summary, verdict and omitted files; findings are
+ * only ever comments, with a suggested change when the reviewer wrote replacement code.
  */
-export function renderReview(
-  draft: ReviewDraft,
-  options: { inline: boolean },
-): GitHubReviewPayload {
-  const findings = draft.findings.map((finding) => ({
-    ...finding,
-    file: normalizePath(finding.file),
-    body: neutraliseMentions(finding.body),
-  }));
-  const inline = options.inline ? findings.filter(hasValidLine) : [];
-  const general = findings.filter((finding) => !inline.includes(finding));
-
-  const payload: GitHubReviewPayload = {
+export function renderReview(draft: ReviewDraft): RenderedReview {
+  const review: RenderedReview = {
     event: draft.event === 'requestChanges' ? 'REQUEST_CHANGES' : 'COMMENT',
-    body: renderBody(draft, general, { withLines: !options.inline }),
-    comments: inline.map((finding) => ({
-      path: finding.file,
-      line: finding.line ?? 0,
-      side: 'RIGHT',
-      body: `**[${SEVERITY_LABELS[finding.severity]}]** ${finding.body}`,
-    })),
+    body: renderBody(draft),
+    findings: draft.findings.map(renderFinding),
   };
-  if (options.inline && draft.commitId) {
-    payload.commit_id = draft.commitId;
+  if (draft.commitId) {
+    review.commitId = draft.commitId;
   }
-  return payload;
+  return review;
 }
 
-function renderBody(
-  draft: ReviewDraft,
-  general: Array<ReviewFinding>,
-  options: { withLines: boolean },
-): string {
+function renderFinding(finding: ReviewFinding): RenderedFinding {
+  const path = normalizePath(finding.file);
+  const label = `**[${SEVERITY_LABELS[finding.severity]}]**`;
+  const body = neutraliseMentions(finding.body.trim());
+  const { suggestion } = finding;
+  const line = validLine(finding.line);
+  if (line === undefined) {
+    return {
+      onFile: {
+        path,
+        body: joinSections(
+          `${label} ${body}`,
+          suggestion === undefined ? undefined : `Suggested code:\n\n${codeBlock(suggestion)}`,
+        ),
+      },
+    };
+  }
+  const start = validLine(finding.startLine);
+  const startLine = start !== undefined && start < line ? start : undefined;
+  const lines = startLine === undefined ? `line ${line}` : `lines ${startLine}-${line}`;
+  const onLines: GitHubReviewComment = {
+    path,
+    line,
+    side: 'RIGHT',
+    body: joinSections(
+      `${label} ${body}`,
+      suggestion === undefined ? undefined : codeBlock(suggestion, 'suggestion'),
+    ),
+  };
+  if (startLine !== undefined) {
+    onLines.start_line = startLine;
+    onLines.start_side = 'RIGHT';
+  }
+  return {
+    onLines,
+    onFile: {
+      path,
+      body: joinSections(
+        `${label} On ${lines}: ${body}`,
+        suggestion === undefined
+          ? undefined
+          : `Suggested code for ${lines}:\n\n${codeBlock(suggestion)}`,
+      ),
+    },
+  };
+}
+
+function joinSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section) => section !== undefined).join('\n\n');
+}
+
+/** A fence longer than any backtick run in `code`, so the code can't close it early. */
+function codeBlock(code: string, info = ''): string {
+  const longestRun = Math.max(0, ...[...code.matchAll(/`+/g)].map(([run]) => run.length));
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${fence}${info}\n${code}\n${fence}`;
+}
+
+function renderBody(draft: ReviewDraft): string {
   const sections = [
     neutraliseMentions(draft.summary.trim()),
     `Agent verdict: ${VERDICT_LABELS[draft.verdict]} (advisory)`,
   ];
-  if (general.length > 0) {
-    sections.push(
-      general
-        .map((finding) => {
-          const location =
-            options.withLines && hasValidLine(finding)
-              ? `${finding.file}:${finding.line}`
-              : finding.file;
-          return `**[${SEVERITY_LABELS[finding.severity]}]** ${codeSpan(location)}\n${finding.body.trim()}`;
-        })
-        .join('\n\n'),
-    );
-  }
   if (draft.omitted && draft.omitted.length > 0) {
     sections.push(renderOmitted(draft.omitted));
   }
@@ -233,8 +273,8 @@ function neutraliseProse(text: string): string {
   });
 }
 
-function hasValidLine(finding: ReviewFinding): boolean {
-  return finding.line !== undefined && Number.isInteger(finding.line) && finding.line >= 1;
+function validLine(line: number | undefined): number | undefined {
+  return line !== undefined && Number.isInteger(line) && line >= 1 ? line : undefined;
 }
 
 function normalizePath(file: string): string {

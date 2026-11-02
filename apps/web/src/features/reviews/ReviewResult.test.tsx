@@ -131,14 +131,41 @@ describe('ReviewResult', () => {
     expect(handlers.onPost).toHaveBeenCalledWith('comment', []);
   });
 
-  test('the post confirmation counts only findings with a line as inline comments', async () => {
+  test('the post confirmation puts findings without a line on their file, never in the body', async () => {
     const user = userEvent.setup();
     renderResult(selectedRun([0, 1, 2]));
 
     await user.click(screen.getByRole('button', { name: 'Post to PR' }));
 
+    const text = screen.getByRole('group', { name: /^Post to/ }).textContent;
+    expect(text).toContain(
+      'Posting all 3 findings in one GitHub review: 2 as inline comments and 1 as a comment on its file.',
+    );
+    expect(text).toContain('If GitHub rejects a line, that finding goes on its file instead.');
+    expect(text).not.toContain('review body');
+  });
+
+  test('shows a suggested change and counts it in the post confirmation', async () => {
+    const user = userEvent.setup();
+    const result = makeResult({
+      findings: [
+        {
+          file: 'src/query.ts',
+          line: 42,
+          startLine: 40,
+          severity: 'critical',
+          body: 'This query is unbounded.',
+          suggestion: 'query.limit(100);',
+        },
+      ],
+    });
+    renderResult(makeRun({ status: 'finished', result, selectedFindings: [0] }));
+
+    expect(screen.getByText('src/query.ts:40-42')).toBeTruthy();
+    expect(screen.getByText('query.limit(100);')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Post to PR' }));
     expect(screen.getByRole('group', { name: /^Post to/ }).textContent).toContain(
-      'Posting all 3 findings in one GitHub review: 2 as inline comments and 1 in the review body.',
+      'Posting the only finding in one GitHub review, as an inline comment. One comes with a suggested change.',
     );
   });
 

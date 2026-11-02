@@ -1755,6 +1755,22 @@ code {
   justify-content: space-between;
 }
 
+.finding__suggestion {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.finding__suggestion pre {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  overflow-x: auto;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono-font);
+}
+
 .finding--selected {
   border-color: var(--xp);
   box-shadow: inset 4px 0 0 var(--xp);

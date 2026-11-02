@@ -24,14 +24,43 @@ const toLine = (value: unknown): number | undefined => {
   return typeof line === 'number' && Number.isInteger(line) && line >= 1 ? line : undefined;
 };
 
+/**
+ * Code keeps its indentation; only line endings and trailing newlines change, so stored runs read
+ * back the same. A suggestion that is blank, too long or not a string is dropped, since an empty
+ * one would delete the lines.
+ */
+const toSuggestion = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const code = value.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+  return code.trim() === '' || code.length > MAX_TEXT_LENGTH ? undefined : code;
+};
+
 const FindingSchema = z
   .object({
     file: z.string().trim().min(1).max(1000),
     line: z.unknown().transform(toLine).optional(),
+    startLine: z.unknown().transform(toLine).optional(),
     severity: z.preprocess(lowerCase, z.enum(['critical', 'major', 'minor', 'nit'])),
     body: z.string().trim().min(1).max(MAX_TEXT_LENGTH),
+    suggestion: z.unknown().transform(toSuggestion).optional(),
   })
-  .transform(({ line, ...rest }): ReviewFinding => (line === undefined ? rest : { ...rest, line }));
+  .transform(({ line, startLine, suggestion, ...rest }): ReviewFinding => {
+    const finding: ReviewFinding = rest;
+    if (line !== undefined) {
+      finding.line = line;
+      if (startLine !== undefined && startLine < line) {
+        finding.startLine = startLine;
+      }
+    }
+    // Code written for a range that ends before it starts would replace the wrong lines.
+    const inverted = line !== undefined && startLine !== undefined && startLine > line;
+    if (suggestion !== undefined && !inverted) {
+      finding.suggestion = suggestion;
+    }
+    return finding;
+  });
 
 export const ReviewResultSchema = z.object({
   summary: z.string().trim().min(1).max(MAX_TEXT_LENGTH),
@@ -158,7 +187,8 @@ export const REVIEW_GUIDELINES: ReadonlyArray<string> = [
   'error handling gaps, performance problems, missing or weak tests, and maintainability issues.',
   'Severity: critical = must fix before merge (bug, security, data loss); major = should fix;',
   'minor = worth improving; nit = style or taste. Skip praise and do not repeat linter output.',
-  'Use the line number in the new version of the file; omit `line` for file-level findings.',
+  'Every finding is posted as an inline comment, so give it the `line` in the new version of the file that it is about, on a line the diff adds or shows as context. Omit `line` only when a finding is about the whole file.',
+  'When the fix replaces specific lines, add a `suggestion`: the exact new code for lines `startLine` through `line`, indented as in the file and without a code fence, so the author can apply it in one click. Set `startLine` only when the change spans several lines, and omit `suggestion` when the fix is not a direct replacement of those lines.',
 ];
 
 /**
@@ -226,7 +256,7 @@ export function buildReviewPrompt(
     '  "reviewedSha": "the full output of `git rev-parse HEAD` for the commit you reviewed",',
     '  "summary": "2-4 sentences on what the PR does and its overall quality",',
     '  "verdict": "approve" | "comment" | "requestChanges",',
-    '  "findings": [{ "file": "path/from/repo/root.ts", "line": 42, "severity": "critical" | "major" | "minor" | "nit", "body": "Markdown explaining the problem and a fix" }]',
+    '  "findings": [{ "file": "path/from/repo/root.ts", "line": 42, "severity": "critical" | "major" | "minor" | "nit", "body": "Markdown explaining the problem and a fix", "suggestion": "the new code for line 42, when the fix replaces it" }]',
     '}',
     '```',
   ].join('\n');

@@ -71,7 +71,10 @@ function describeReviewer(run: ReviewRun): string | undefined {
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
 
-/** Findings without a line can only go in the review body, so they are not inline comments. */
+const onFiles = (count: number): string =>
+  count === 1 ? 'a comment on its file' : 'comments on their files';
+
+/** Findings without a line become comments on their file; none ever go in the review body. */
 function describePost(findingCount: number, selected: ReadonlyArray<ReviewFinding>): string {
   if (findingCount === 0) {
     return 'This submits one GitHub review with the summary and no findings.';
@@ -80,7 +83,10 @@ function describePost(findingCount: number, selected: ReadonlyArray<ReviewFindin
     return 'No findings are selected, so this posts a GitHub review with only the summary.';
   }
   const inlineCount = selected.filter((finding) => finding.line !== undefined).length;
-  const bodyCount = selected.length - inlineCount;
+  const fileCount = selected.length - inlineCount;
+  const suggestionCount = selected.filter(
+    (finding) => finding.line !== undefined && finding.suggestion !== undefined,
+  ).length;
   const leftOut = findingCount - selected.length;
   const which =
     selected.length < findingCount
@@ -89,13 +95,18 @@ function describePost(findingCount: number, selected: ReadonlyArray<ReviewFindin
         ? 'the only finding'
         : `all ${findingCount} findings`;
   const where =
-    bodyCount === 0
+    fileCount === 0
       ? `, as ${inlineCount === 1 ? 'an inline comment' : 'inline comments'}`
       : inlineCount === 0
-        ? ', in the review body'
-        : `: ${inlineCount} as inline ${inlineCount === 1 ? 'comment' : 'comments'} and ${bodyCount} in the review body`;
+        ? `, as ${onFiles(fileCount)}`
+        : `: ${inlineCount} as inline ${inlineCount === 1 ? 'comment' : 'comments'} and ${fileCount} as ${onFiles(fileCount)}`;
   return [
     `Posting ${which} in one GitHub review${where}.`,
+    suggestionCount === 0
+      ? undefined
+      : suggestionCount === 1
+        ? 'One comes with a suggested change.'
+        : `${suggestionCount} come with suggested changes.`,
     leftOut > 0 ? `The other ${leftOut} won't be posted.` : undefined,
   ]
     .filter(Boolean)
@@ -250,7 +261,9 @@ export const ReviewResult = ({
                       const location =
                         finding.line === undefined
                           ? finding.file
-                          : `${finding.file}:${finding.line}`;
+                          : finding.startLine === undefined
+                            ? `${finding.file}:${finding.line}`
+                            : `${finding.file}:${finding.startLine}-${finding.line}`;
                       return (
                         <li
                           className={[
@@ -273,6 +286,14 @@ export const ReviewResult = ({
                             ) : null}
                           </div>
                           <p className="prewrap finding__body">{finding.body}</p>
+                          {finding.suggestion === undefined ? null : (
+                            <figure className="finding__suggestion">
+                              <figcaption className="muted">Suggested change</figcaption>
+                              <pre>
+                                <code>{finding.suggestion}</code>
+                              </pre>
+                            </figure>
+                          )}
                         </li>
                       );
                     })}
@@ -336,7 +357,7 @@ export const ReviewResult = ({
           <p>
             {describePost(findingCount, selected)}{' '}
             {selected.some((finding) => finding.line !== undefined)
-              ? 'If GitHub rejects a line, every posted finding goes in the body instead. '
+              ? 'If GitHub rejects a line, that finding goes on its file instead. '
               : null}
             It also shows up in Linear.
           </p>
