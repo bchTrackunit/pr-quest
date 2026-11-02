@@ -32,4 +32,19 @@ describe('secretsNotice', () => {
     expect(notice?.detail).toMatch(/replaces/);
     expect(actions(notice)).toEqual(['retry', 'continue']);
   });
+
+  test('says a damaged file is damaged, not that the keychain failed', () => {
+    const notice = secretsNotice('corrupt', undefined);
+
+    expect(notice?.message).toMatch(/damaged/);
+    expect(notice?.message).not.toMatch(/keychain/);
+    expect(actions(notice)).toEqual(['retry', 'continue']);
+  });
+
+  test("offers to try again when the keys from secrets.json didn't check out in the keychain", () => {
+    const notice = secretsNotice('importFailed', undefined);
+
+    expect(notice?.detail).toMatch(/unchanged/);
+    expect(actions(notice)).toEqual(['retry', 'continue']);
+  });
 });

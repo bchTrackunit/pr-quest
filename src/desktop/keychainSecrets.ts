@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -61,13 +61,24 @@ export interface DesktopSecretsOptions {
  * Where saved keys go:
  * - `keychain`: encrypted in `secrets.encrypted.json`.
  * - `plaintext`: no keychain, so plain `secrets.json`, as the player agreed.
- * - `memory`: no keychain, so they last only until the app quits.
+ * - `memory`: no keychain, so new keys last only until the app quits. Keys in `secrets.json` are
+ *   read, and deleting one removes it from there too, so signing out lasts.
  * - `locked`: encrypted keys exist but the keychain is gone, so the app starts without them, keeps
  *   new ones in memory and leaves both files alone.
  * - `undecryptable`: the keychain couldn't read the encrypted file. The app starts without saved
  *   keys and leaves the file alone until a key is saved, which replaces it.
+ * - `corrupt`: the encrypted file isn't valid, and is handled as `undecryptable` is.
+ * - `importFailed`: the encrypted copy of `secrets.json` didn't check out, so the app starts
+ *   without saved keys, keeps new ones in memory and leaves both files alone.
  */
-export type SecretsStorage = 'keychain' | 'plaintext' | 'memory' | 'locked' | 'undecryptable';
+export type SecretsStorage =
+  | 'keychain'
+  | 'plaintext'
+  | 'memory'
+  | 'locked'
+  | 'undecryptable'
+  | 'corrupt'
+  | 'importFailed';
 
 export interface DesktopSecrets {
   store: SecretStore;
@@ -96,29 +107,45 @@ export async function openDesktopSecrets(
 
   const plainFile = join(stateDir, PLAIN_SECRETS_FILE);
   let secrets: Secrets = {};
+  let encryptedSavedAt: number | undefined;
   if (encryptedText !== undefined) {
     const decrypted = decrypt(encryptedFile, encryptedText, options.encryptor);
-    if (decrypted === undefined) {
-      // Someone denied keychain access, or the file came from another computer or user. It may
-      // decrypt again once the keychain allows it, so nothing touches it until a key is saved.
+    if (decrypted !== 'corrupt' && decrypted !== 'undecryptable') {
+      secrets = decrypted;
+    } else {
+      // Someone denied keychain access, the file came from another computer or user, or it was
+      // damaged. It may read again once that's fixed, so nothing touches it until a key is saved.
       options.warn(
-        `The OS keychain couldn't decrypt your saved keys in ${encryptedFile}, so PR Quest starts without them. Saving a key replaces that file.`,
+        decrypted === 'corrupt'
+          ? `Your saved keys in ${encryptedFile} are damaged, so PR Quest starts without them. Saving a key replaces that file.`
+          : `The OS keychain couldn't decrypt your saved keys in ${encryptedFile}, so PR Quest starts without them. Saving a key replaces that file.`,
       );
       return {
         store: new KeychainSecretStore(encryptedFile, options.encryptor, {}),
-        storage: 'undecryptable',
+        storage: decrypted,
       };
     }
-    secrets = decrypted;
+    encryptedSavedAt = (await stat(encryptedFile)).mtimeMs;
     await removeLegacyBackup(stateDir, options.info);
   }
 
   const store = new KeychainSecretStore(encryptedFile, options.encryptor, secrets);
   if ((await readIfExists(plainFile)) !== undefined) {
-    await store.importPlain(stateDir, encryptedText === undefined, options);
+    try {
+      await store.importPlain(stateDir, encryptedSavedAt, options);
+    } catch (error) {
+      if (!(error instanceof ImportCheckFailed)) {
+        throw error;
+      }
+      options.warn(`${error.message}. PR Quest starts without saved keys.`);
+      return { store: new MemorySecretStore({}), storage: 'importFailed' };
+    }
   }
   return { store, storage: 'keychain' };
 }
+
+/** The keychain's copy of the keys in `secrets.json` didn't read back the same. */
+class ImportCheckFailed extends Error {}
 
 async function openWithoutKeychain(
   stateDir: string,
@@ -139,7 +166,7 @@ async function openWithoutKeychain(
     return { store: plain, storage: 'plaintext' };
   }
   options.warn("The OS keychain isn't available, so keys you save last only until PR Quest quits");
-  return { store: new MemorySecretStore(valuesOf(plain)), storage: 'memory' };
+  return { store: new MemorySecretStore(valuesOf(plain), plain), storage: 'memory' };
 }
 
 class KeychainSecretStore implements SecretStore {
@@ -174,37 +201,61 @@ class KeychainSecretStore implements SecretStore {
   }
 
   /**
-   * Moves the keys in `secrets.json` in, over any it has: the first run's keys, or newer ones the
-   * CLI saved since. The plain file is deleted only once the encrypted copy reads back the same.
+   * Moves the keys in `secrets.json` in: all of them on the first run (`encryptedSavedAt` is
+   * undefined); later, such as after the CLI saved some, they replace the encrypted ones only if
+   * the plain file is newer, and otherwise only fill in missing ones. The plain file is deleted
+   * only once the encrypted copy reads back the same.
    */
   public async importPlain(
     stateDir: string,
-    firstMove: boolean,
+    encryptedSavedAt: number | undefined,
     log: Pick<DesktopSecretsOptions, 'info' | 'warn'>,
   ): Promise<void> {
     const plainFile = join(stateDir, PLAIN_SECRETS_FILE);
+    const plainIsNewer =
+      encryptedSavedAt === undefined || (await stat(plainFile)).mtimeMs > encryptedSavedAt;
     // An unreadable secrets.json is moved aside here, so it never reaches the keychain.
     const plain = valuesOf(await FileSecretStore.open(stateDir, { onWarning: log.warn }));
-    const next = { ...this.secrets, ...plain };
+    const conflicting = SECRET_NAMES.filter(
+      (name) =>
+        plain[name] !== undefined &&
+        this.secrets[name] !== undefined &&
+        plain[name] !== this.secrets[name],
+    );
+    const next = plainIsNewer ? { ...this.secrets, ...plain } : { ...plain, ...this.secrets };
     await this.writes.run(async () => {
       const payload = this.encrypt(next);
       const unchanged = `so ${plainFile} is unchanged`;
       const readBack = decrypt(this.file, JSON.stringify(payload), this.encryptor);
-      if (readBack === undefined || !sameSecrets(readBack, next)) {
-        throw new Error(`The OS keychain didn't decrypt the keys it encrypted, ${unchanged}`);
+      if (typeof readBack === 'string' || !sameSecrets(readBack, next)) {
+        throw new ImportCheckFailed(
+          `The OS keychain didn't decrypt the keys it encrypted, ${unchanged}`,
+        );
       }
       await writePrivateJson(this.file, payload);
       const written = safeJson((await readIfExists(this.file)) ?? '');
       if (JSON.stringify(written) !== JSON.stringify(payload)) {
-        throw new Error(`${this.file} doesn't hold the keys PR Quest just wrote, ${unchanged}`);
+        throw new ImportCheckFailed(
+          `${this.file} doesn't hold the keys PR Quest just wrote, ${unchanged}`,
+        );
       }
       this.secrets = next;
     });
     await rm(plainFile, { force: true });
+    if (encryptedSavedAt === undefined) {
+      log.info(
+        `Moved your saved keys into the OS keychain and deleted the unencrypted ${plainFile}`,
+      );
+      return;
+    }
+    const conflicts =
+      conflicting.length === 0
+        ? ''
+        : plainIsNewer
+          ? `; being newer, it replaced ${conflicting.join(', ')}`
+          : `; being older, it kept the encrypted ${conflicting.join(', ')}`;
     log.info(
-      firstMove
-        ? `Moved your saved keys into the OS keychain and deleted the unencrypted ${plainFile}`
-        : `Imported the keys in ${plainFile}, such as ones the CLI saved, into the OS keychain and deleted it`,
+      `Imported the keys in ${plainFile}, such as ones the CLI saved, into the OS keychain and deleted it${conflicts}`,
     );
   }
 
@@ -229,12 +280,17 @@ class KeychainSecretStore implements SecretStore {
   }
 }
 
-/** Keys that last until the app quits. */
+/**
+ * Keys that last until the app quits. A key deleted here is deleted from `plain` too, the
+ * `secrets.json` they were read from, or it would be back on the next start.
+ */
 class MemorySecretStore implements SecretStore {
   private secrets: Secrets;
+  private readonly plain: SecretStore | undefined;
 
-  public constructor(secrets: Secrets) {
+  public constructor(secrets: Secrets, plain?: SecretStore) {
     this.secrets = secrets;
+    this.plain = plain;
   }
 
   public get(name: SecretName): string | undefined {
@@ -246,21 +302,27 @@ class MemorySecretStore implements SecretStore {
     return Promise.resolve();
   }
 
-  public delete(name: SecretName): Promise<void> {
+  public async delete(name: SecretName): Promise<void> {
     const next = { ...this.secrets };
     delete next[name];
     this.secrets = next;
-    return Promise.resolve();
+    if (this.plain?.get(name) !== undefined) {
+      await this.plain.delete(name);
+    }
   }
 }
 
-/** The decrypted secrets, or `undefined` when the file is unreadable or won't decrypt. */
-function decrypt(file: string, text: string, encryptor: Encryptor): Secrets | undefined {
+/** The decrypted secrets, or why there are none. */
+function decrypt(
+  file: string,
+  text: string,
+  encryptor: Encryptor,
+): Secrets | 'corrupt' | 'undecryptable' {
   const json = safeJson(text);
   refuseNewerVersion(json, 1, file);
   const parsed = EncryptedFileSchema.safeParse(json);
   if (!parsed.success) {
-    return undefined;
+    return 'corrupt';
   }
   const secrets: Secrets = {};
   try {
@@ -271,7 +333,7 @@ function decrypt(file: string, text: string, encryptor: Encryptor): Secrets | un
       }
     }
   } catch {
-    return undefined;
+    return 'undecryptable';
   }
   return secrets;
 }
