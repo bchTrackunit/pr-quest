@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { DeviceFlowStatus, ListModelsResponse } from '@pr-quest/contract/api';
 import { createAccountHandlers, type AccountServices } from './accountHandlers.ts';
-import {
-  ApiKeys,
-  type AppSettings,
-  type SettingsPatch,
-} from '../features/settings/index.ts';
+import { ApiKeys, type AppSettings, type SettingsPatch } from '../features/settings/index.ts';
 import { createRouter, loopbackOrigins } from '../platform/router.ts';
 import type { SecretName } from '../platform/secrets.ts';
 

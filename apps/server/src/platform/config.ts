@@ -4,10 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 
-/** The server acts as the player, so it only ever listens on loopback. */
-export const SERVER_HOST = '127.0.0.1';
-export const DEFAULT_SERVER_PORT = 4317;
-export const DEFAULT_UI_PORT = 4318;
+import { readPorts, SERVER_HOST } from '@pr-quest/contract/ports';
 
 /**
  * Every Anthropic call (reviews and the model list) goes here. `ANTHROPIC_BASE_URL` is ignored, so
@@ -15,7 +12,9 @@ export const DEFAULT_UI_PORT = 4318;
  */
 export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
 
-export const DEFAULT_ENV_FILE_PATH = fileURLToPath(new URL('../../../.env.local', import.meta.url));
+export const DEFAULT_ENV_FILE_PATH = fileURLToPath(
+  new URL('../../../../.env.local', import.meta.url),
+);
 
 /**
  * The client ID of a GitHub OAuth App with Device Flow enabled, used when PR_QUEST_GITHUB_CLIENT_ID
@@ -59,23 +58,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     anthropicApiKey: read('ANTHROPIC_API_KEY'),
     githubClientId: read('PR_QUEST_GITHUB_CLIENT_ID') ?? nonEmpty(DEFAULT_GITHUB_CLIENT_ID),
     host: SERVER_HOST,
-    port: parsePort(read('PR_QUEST_PORT'), DEFAULT_SERVER_PORT, 'PR_QUEST_PORT'),
-    uiPort: parsePort(read('PR_QUEST_UI_PORT'), DEFAULT_UI_PORT, 'PR_QUEST_UI_PORT'),
+    ...readPorts(read),
     stateDir: read('PR_QUEST_STATE_DIR') ?? join(homedir(), '.pr-quest'),
   };
 }
 
 function nonEmpty(value: string): string | undefined {
   return value || undefined;
-}
-
-function parsePort(value: string | undefined, fallback: number, name: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${name} must be an integer between 1 and 65535, got "${value}"`);
-  }
-  return port;
 }

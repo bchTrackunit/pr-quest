@@ -2,11 +2,7 @@ import type { SDKModel } from '@cursor/sdk';
 
 import { createAccountHandlers } from './accountHandlers.ts';
 import { ApiKeys, ModelCatalog, SettingsStore } from '../features/settings/index.ts';
-import {
-  ClaudeReviewer,
-  type CreateMessage,
-  ReviewRunService,
-} from '../features/reviews/index.ts';
+import { ClaudeReviewer, type CreateMessage, ReviewRunService } from '../features/reviews/index.ts';
 import type { AppConfig } from '../platform/config.ts';
 import { DeviceFlow, GitHubTokenProvider } from '../features/auth/index.ts';
 import { EventHub } from '../platform/events.ts';

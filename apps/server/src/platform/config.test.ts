@@ -1,14 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import {
-  DEFAULT_GITHUB_CLIENT_ID,
-  DEFAULT_SERVER_PORT,
-  loadConfig,
-  SERVER_HOST,
-} from './config.ts';
+import { DEFAULT_SERVER_PORT, SERVER_HOST } from '@pr-quest/contract/ports';
+
+import { DEFAULT_ENV_FILE_PATH, DEFAULT_GITHUB_CLIENT_ID, loadConfig } from './config.ts';
 
 describe('loadConfig', () => {
   let dir: string;
@@ -82,5 +79,12 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ env: { PR_QUEST_PORT: 'abc' }, envFilePath })).toThrow(
       /PR_QUEST_PORT/,
     );
+  });
+
+  test('reads .env.local from the repo root, next to the workspaces file', () => {
+    const repoRoot = dirname(DEFAULT_ENV_FILE_PATH);
+
+    expect(basename(DEFAULT_ENV_FILE_PATH)).toBe('.env.local');
+    expect(existsSync(join(repoRoot, 'apps', 'server', 'package.json'))).toBe(true);
   });
 });

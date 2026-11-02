@@ -12,11 +12,7 @@ import {
   DEFAULT_CLAUDE_MODEL,
 } from './claudeReview.ts';
 import { ANTHROPIC_API_URL } from '../../platform/config.ts';
-import {
-  GitHubApiError,
-  GitHubNetworkError,
-  NotSignedInError,
-} from '../../platform/githubApi.ts';
+import { GitHubApiError, GitHubNetworkError, NotSignedInError } from '../../platform/githubApi.ts';
 import type { QuestSnapshot } from '../game/index.ts';
 import { SOURCE_DIFF, toolMessage } from './test-utils/claude.ts';
 

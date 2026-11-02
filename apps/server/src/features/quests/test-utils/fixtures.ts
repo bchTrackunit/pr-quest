@@ -7,12 +7,9 @@ import {
   type ReviewRequestData,
 } from '../github.ts';
 
-/** A recorded GitHub response from `src/platform/server/fixtures/github`. */
+/** A recorded GitHub response from `apps/server/src/platform/fixtures/github`. */
 export const fixture = (name: string): string =>
-  readFileSync(
-    new URL(`../../../platform/fixtures/github/${name}`, import.meta.url),
-    'utf8',
-  );
+  readFileSync(new URL(`../../../platform/fixtures/github/${name}`, import.meta.url), 'utf8');
 
 function batchDetails(): Array<PullRequestDetails> {
   return parsePullRequestBatch(fixture('graphql-batch.json'), 2).entries.map((entry) => {

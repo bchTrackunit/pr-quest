@@ -1,11 +1,5 @@
 import { ApproveDialog, ReviewResult } from '../features/reviews/index.ts';
-import {
-  findQuest,
-  type GameState,
-  PlayerHud,
-  Toasts,
-  XpPopups,
-} from '../features/game/index.ts';
+import { findQuest, type GameState, PlayerHud, Toasts, XpPopups } from '../features/game/index.ts';
 import { GitHubAccountControl, useGitHubAccount } from '../features/auth/index.ts';
 import { QuestBoard } from '../features/quests/index.ts';
 import { SettingsDialog } from '../features/settings/index.ts';

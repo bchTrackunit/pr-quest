@@ -1,13 +1,19 @@
 import react from '@vitejs/plugin-react';
 import type { PluginOptions as ReactCompilerOptions } from 'babel-plugin-react-compiler';
+import { existsSync, readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 import { defineConfig, type Logger, type Plugin } from 'vite';
 
-import { loadConfig } from './src/platform/server/config.ts';
+import { readPorts, SERVER_HOST } from '@pr-quest/contract/ports';
 
-const config = loadConfig();
 const root = fileURLToPath(new URL('.', import.meta.url));
+
+/** The same `.env.local` the server reads, so both agree on the ports; the environment wins. */
+const envFilePath = fileURLToPath(new URL('../../.env.local', import.meta.url));
+const fileEnv = existsSync(envFilePath) ? parseEnv(readFileSync(envFilePath, 'utf8')) : {};
+const ports = readPorts((name) => process.env[name] ?? fileEnv[name]);
 
 /**
  * React Compiler options, plus a build-only plugin that reports how many components and hooks it
@@ -57,12 +63,12 @@ export default defineConfig({
     compiler.report,
   ],
   server: {
-    host: config.host,
-    port: config.uiPort,
+    host: SERVER_HOST,
+    port: ports.uiPort,
     strictPort: true,
     proxy: {
       '/api': {
-        target: `http://${config.host}:${config.port}`,
+        target: `http://${SERVER_HOST}:${ports.port}`,
       },
     },
   },
