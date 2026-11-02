@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -49,11 +49,25 @@ releaseDate: '2026-11-01T00:00:00.000Z'
   );
 }
 
-function collect() {
+function collect(env: NodeJS.ProcessEnv = process.env) {
   const result = spawnSync('bash', [script, join(dir, 'artifacts'), join(dir, 'assets')], {
     encoding: 'utf8',
+    env,
   });
   return { status: result.status, stdout: result.stdout };
+}
+
+/** A yq that runs the real one, except that the query listing installers does `behaviour`. */
+function yqWhoseListing(behaviour: string): NodeJS.ProcessEnv {
+  const realYq = spawnSync('sh', ['-c', 'command -v yq'], { encoding: 'utf8' }).stdout.trim();
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, 'yq'),
+    `#!/bin/sh\ncase "$*" in *@tsv*) ${behaviour} ;; esac\nexec '${realYq}' "$@"\n`,
+  );
+  chmodSync(join(bin, 'yq'), 0o755);
+  return { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
 }
 
 describe.skipIf(process.platform === 'win32' || !hasYq)('collect-release-assets.sh', () => {
@@ -92,6 +106,44 @@ describe.skipIf(process.platform === 'win32' || !hasYq)('collect-release-assets.
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(message);
+  });
+
+  test("stops when an update file can't be read", () => {
+    job(
+      'desktop-linux-x64',
+      'latest-linux.yml',
+      'pr-quest-1.0.0-linux-x86_64.AppImage',
+      'appimage',
+    );
+    writeFileSync(
+      join(dir, 'artifacts', 'desktop-linux-x64', 'latest-linux.yml'),
+      'files: [oops\n',
+    );
+
+    const result = collect();
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain('Checked latest-linux.yml');
+  });
+
+  test.each([
+    ['fails', 'echo broken >&2; exit 1'],
+    ['prints nothing', 'exit 0'],
+  ])('stops when listing the installers %s, instead of checking none', (_case, behaviour) => {
+    job(
+      'desktop-linux-x64',
+      'latest-linux.yml',
+      'pr-quest-1.0.0-linux-x86_64.AppImage',
+      'appimage',
+      {
+        sha512: 'WRONG',
+      },
+    );
+
+    const result = collect(yqWhoseListing(behaviour));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain('Checked latest-linux.yml');
   });
 
   test('stops when an update file names an installer no job produced', () => {

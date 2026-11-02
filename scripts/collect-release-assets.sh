@@ -56,23 +56,39 @@ done
 # Every update file must describe the installers being released byte for byte. electron-updater
 # refuses a download whose size or sha512 differs, so a mismatch would show up only as failed
 # updates on users' machines. A top-level path, for old electron-updater versions, has no size.
+# set -e misses a failure inside [[ ]] or a process substitution, so every yq and openssl result
+# is captured by an assignment of its own, and the installers checked are counted.
 for file in "$out"/*.yml; do
   name="$(basename "$file")"
-  if [[ "$(yq '.files | length' "$file")" == 0 ]]; then
+  listed="$(yq '.files | length' "$file")" || fail "Can't read $name."
+  rows="$(yq -r '(.files[] | [.url, .sha512, .size] | @tsv), (select(has("path")) | [.path, .sha512, "-"] | @tsv)' "$file")" ||
+    fail "Can't list the installers in $name."
+  if [[ ! "$listed" =~ ^[1-9][0-9]*$ ]]; then
     fail "$name lists no installers."
   fi
+  checked=0
   while IFS=$'\t' read -r url sha512 size; do
+    if [[ -z "$url" || "$url" == null || -z "$sha512" || "$sha512" == null ]]; then
+      fail "$name has an entry without a url or a sha512."
+    fi
     installer="$out/$url"
     if [[ ! -f "$installer" ]]; then
       fail "$name lists $url, which no build job produced."
     fi
-    actual_size="$(wc -c <"$installer" | tr -d ' ')"
-    if [[ "$size" != - && "$actual_size" != "$size" ]]; then
-      fail "$name gives $url a size of $size bytes, but it has $actual_size."
-    fi
-    if [[ "$(openssl dgst -sha512 -binary "$installer" | base64 | tr -d '\n')" != "$sha512" ]]; then
+    actual_sha512="$(openssl dgst -sha512 -binary "$installer" | base64 | tr -d '\n')"
+    if [[ "$actual_sha512" != "$sha512" ]]; then
       fail "$name gives $url another sha512 than the file has."
     fi
-  done < <(yq -r '(.files[] | [.url, .sha512, .size] | @tsv), (select(has("path")) | [.path, .sha512, "-"] | @tsv)' "$file")
-  echo "Checked $name against the installers it lists."
+    if [[ "$size" != - ]]; then
+      actual_size="$(wc -c <"$installer" | tr -d ' ')"
+      if [[ "$actual_size" != "$size" ]]; then
+        fail "$name gives $url a size of $size bytes, but it has $actual_size."
+      fi
+      checked=$((checked + 1))
+    fi
+  done <<<"$rows"
+  if [[ "$checked" != "$listed" ]]; then
+    fail "$name lists $listed installers, but only $checked could be checked."
+  fi
+  echo "Checked $name against the $listed installers it lists."
 done
