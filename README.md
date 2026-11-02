@@ -314,19 +314,24 @@ a new one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and
 **Saved keys.** The app keeps the GitHub token and the API keys from Settings in
 `secrets.encrypted.json`, encrypted with a key held by the OS keychain (the macOS Keychain, the
 Windows user's DPAPI, or the Secret Service or KWallet on Linux). Whenever it finds a
-`secrets.json`, it imports it, with its keys winning over the encrypted ones, so keys saved
-later by `yarn start` aren't lost. It decrypts the result to check it before deleting
-`secrets.json`; no plain copy is kept. From then on, `yarn start` no longer sees those keys, so
-set them in `.env` or the environment for it.
+`secrets.json`, it imports it. If that file is newer than the encrypted one, as when `yarn start`
+saved a key since, its keys replace the encrypted ones; otherwise only keys the encrypted file
+lacks are taken. The log names any key that was replaced or kept, never its value. The app
+decrypts the result to check it before deleting `secrets.json`; no plain copy is kept. If the
+check fails, both files stay as they are and the app offers to try again or to continue without
+saved keys. From then on, `yarn start` no longer sees those keys, so set them in `.env` or the
+environment for it.
 
 Without a usable keychain, such as on Linux without a keyring or with only Chromium's
-`basic_text` store, the app reads `secrets.json` but keeps any change in memory until it quits,
-and says so once in a dialog. Choosing **Save Them Unencrypted** there writes `secrets.json` from
+`basic_text` store, the app reads `secrets.json` but keeps new keys in memory until it quits,
+and says so once in a dialog. Deleting a key, as **Sign out** does, removes it from
+`secrets.json` too, so it doesn't come back on the next start. Choosing **Save Them Unencrypted** there writes `secrets.json` from
 then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the
 keychain isn't available, the app starts without saved keys and never writes `secrets.json`,
 so the encrypted file stays the only copy. If the keychain can't decrypt the file, for example
-after the keychain entry was deleted, the app offers to try again or to continue without saved
-keys; the file is left in place until you save a key, which replaces it.
+after the keychain entry was deleted, or the file is damaged, the app says which and offers to
+try again or to continue without saved keys; the file is left in place until you save a key,
+which replaces it.
 
 **Updates.** A release build checks GitHub Releases for a newer version at start and every 6
 hours, downloads it in the background and installs it when you quit. Set
