@@ -16,7 +16,7 @@ const TRUSTED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
  * GitHub reserves the `[bot]` suffix for apps, so no person can sign up under one of these logins.
  * Only REST logins keep that suffix; GraphQL's `author.login` drops it (`dependabot`), so never
  * compare these against GraphQL logins. Their PR content comes from upstream
- * maintainers who can't push, which the README's review agent section spells out.
+ * maintainers who can't push, which docs/how-it-works.md spells out under "What it can do".
  */
 const TRUSTED_BOT_LOGINS: ReadonlySet<string> = new Set(['dependabot[bot]', 'renovate[bot]']);
 

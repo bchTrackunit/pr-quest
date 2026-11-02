@@ -12,10 +12,10 @@
 | `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open) |
 | `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/`                    |
 
-Each package also has its own `dev`, `test` and `typecheck` scripts, for example
-`yarn workspace @pr-quest/server test`. With [just](https://just.systems) installed, `just check`
-runs the type check, lint, format check, tests and build, as CI does on every pull request and
-every push to `main`.
+Each package also has its own `test` and `typecheck` scripts, and the two apps a `dev` script,
+for example `yarn workspace @pr-quest/server test`. With [just](https://just.systems) installed,
+`just check` runs the type check, lint, format check, tests and build, as CI does on every pull
+request and every push to `main`.
 
 ## Tooling notes
 
