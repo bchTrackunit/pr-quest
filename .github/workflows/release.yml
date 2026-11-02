@@ -181,8 +181,9 @@ jobs:
             "$($file.Name): signed by $($signature.SignerCertificate.Subject)"
           }
 
-      # No channel on any platform, and a signed Windows build must name its publisher so the
-      # updater checks who signed an update. The NSIS installer packs win-unpacked as it is.
+      # The repository this build should update from and no channel on any platform, and a signed
+      # Windows build must name its publisher so the updater checks who signed an update. The NSIS
+      # installer packs win-unpacked as it is.
       - name: Check the update settings
         shell: bash
         env:
@@ -194,8 +195,8 @@ jobs:
             echo "::error title=Update settings::the build has no app-update.yml"
             exit 1
           fi
-          flags=()
-          if [ "$WINDOWS_SIGNED" = true ]; then flags=(--signed); fi
+          flags=(--repo "$PR_QUEST_RELEASE_REPO")
+          if [ "$WINDOWS_SIGNED" = true ]; then flags+=(--signed); fi
           for file in "${files[@]}"; do
             node scripts/check-update-config.ts "$file" "${flags[@]}"
           done

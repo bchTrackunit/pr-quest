@@ -7,12 +7,20 @@
  *   releases publish only the `latest` ones.
  * - A signed Windows build must name its publisher, or the updater installs an update without
  *   checking who signed it.
+ * - With `repo`, as `owner/repo`, it must name that repository, which the app installs updates from.
  */
-export function updateConfigProblems(text: string, options: { signed: boolean }): Array<string> {
+export function updateConfigProblems(
+  text: string,
+  options: { signed: boolean; repo?: string },
+): Array<string> {
   const values = topLevelValues(text);
   const problems: Array<string> = [];
   if (!values.has('provider')) {
     problems.push('it names no provider, so no updater can use it');
+  }
+  const named = `${values.get('owner')?.[0] ?? ''}/${values.get('repo')?.[0] ?? ''}`;
+  if (options.repo !== undefined && named !== options.repo) {
+    problems.push(`it updates from ${named}, not ${options.repo}`);
   }
   if (values.has('channel')) {
     problems.push(

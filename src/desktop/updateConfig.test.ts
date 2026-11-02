@@ -41,6 +41,19 @@ describe('updateConfigProblems', () => {
     ]);
   });
 
+  test('accepts the repository the build was meant to update from', () => {
+    expect(updateConfigProblems(base, { signed: false, repo: 'octocat/pr-quest' })).toEqual([]);
+  });
+
+  test.each(['someone/pr-quest', 'octocat/other'])(
+    'refuses another repository than %s, which the app would install updates from',
+    (repo) => {
+      expect(updateConfigProblems(base, { signed: false, repo })).toEqual([
+        expect.stringContaining('octocat/pr-quest'),
+      ]);
+    },
+  );
+
   test('refuses a file without a provider, which no updater can use', () => {
     expect(updateConfigProblems('owner: octocat\n', { signed: false })).toEqual([
       expect.stringContaining('provider'),
