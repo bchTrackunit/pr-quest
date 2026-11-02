@@ -170,6 +170,35 @@ describe('sortBoardQuests', () => {
     expect(ids(sortBoardQuests(twins, { mode: 'size', direction: 'desc' }))).toEqual([2, 1]);
   });
 
+  describe('by creation time', () => {
+    const opened = [
+      makeQuest({ number: 1, openedAt: '2026-10-02T00:00:00Z' }),
+      makeQuest({ number: 2, openedAt: '2026-10-03T00:00:00Z', requestKind: 'team' }),
+      makeQuest({ number: 3, openedAt: '2026-10-01T00:00:00Z' }),
+    ];
+
+    test('descending puts the newest PR first', () => {
+      expect(ids(sortBoardQuests(opened, { mode: 'created', direction: 'desc' }))).toEqual([
+        2, 1, 3,
+      ]);
+    });
+
+    test('ascending puts the oldest PR first', () => {
+      expect(ids(sortBoardQuests(opened, { mode: 'created', direction: 'asc' }))).toEqual([
+        3, 1, 2,
+      ]);
+    });
+
+    test('equal times keep the smart order', () => {
+      const twins = [
+        makeQuest({ number: 1, openedAt: '2026-10-01T00:00:00Z', requestKind: 'team' }),
+        makeQuest({ number: 2, openedAt: '2026-10-01T00:00:00Z' }),
+      ];
+
+      expect(ids(sortBoardQuests(twins, { mode: 'created', direction: 'desc' }))).toEqual([2, 1]);
+    });
+  });
+
   test('does not mutate its input', () => {
     const input = [...quests];
     sortBoardQuests(input, { mode: 'size', direction: 'desc' });
