@@ -47,6 +47,9 @@ jobs:
               echo "::error title=Version mismatch::The tag is $GITHUB_REF_NAME, but package.json has version $version. Tag the commit that sets the version, as v$version."
               exit 1
             fi
+            # Catches a mistake, not an attacker: a tag build runs the tagged commit's own copy of
+            # this workflow. The tag ruleset and the release environment are what keep the
+            # signing secrets safe; see RELEASING.md.
             if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
               echo "::error title=Not on $DEFAULT_BRANCH::$GITHUB_REF_NAME points at a commit that isn't on $DEFAULT_BRANCH. Release from $DEFAULT_BRANCH."
               exit 1
@@ -90,6 +93,10 @@ jobs:
     name: Build ${{ matrix.name }}
     needs: [verify, check]
     runs-on: ${{ matrix.runner }}
+    # The signing secrets are secrets of the release environment, so only a job that names it can
+    # read them, and only once its protection rules pass: a v* tag and a reviewer's approval. Only
+    # tag builds that sign name it; dry runs and Linux builds run without it.
+    environment: ${{ github.event_name == 'push' && matrix.signs && 'release' || '' }}
     # Notarization alone can take a while.
     timeout-minutes: 60
     permissions:
@@ -100,9 +107,9 @@ jobs:
       # build runs on a runner of its own processor.
       matrix:
         include:
-          - { id: mac-arm64, name: macOS arm64, runner: macos-15 }
-          - { id: mac-x64, name: macOS x64, runner: macos-15-intel }
-          - { id: win-x64, name: Windows x64, runner: windows-2025 }
+          - { id: mac-arm64, name: macOS arm64, runner: macos-15, signs: true }
+          - { id: mac-x64, name: macOS x64, runner: macos-15-intel, signs: true }
+          - { id: win-x64, name: Windows x64, runner: windows-2025, signs: true }
           - { id: linux-x64, name: Linux x64, runner: ubuntu-24.04 }
           - { id: linux-arm64, name: Linux arm64, runner: ubuntu-24.04-arm }
     env:
@@ -118,7 +125,7 @@ jobs:
 
       - uses: ./.github/actions/setup-yarn
 
-      # Signing secrets reach only the packaging step of a tag build on their own platform.
+      # Within the job, the signing secrets reach only the packaging step of its own platform.
       - name: Package
         if: github.event_name != 'push' || runner.os == 'Linux'
         run: bash scripts/package-release.sh

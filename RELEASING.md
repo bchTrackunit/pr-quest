@@ -16,6 +16,8 @@ Pushing a tag that starts with `v` runs these jobs:
 3. **Build**, once per platform, each on a runner with that processor: macOS on Apple Silicon
    (`macos-15`) and Intel (`macos-15-intel`), Windows x64, and Linux x64 and arm64. A build needs
    its own processor because `yarn install` fetches only that processor's Cursor SDK binaries.
+   The macOS and Windows jobs use the `release` environment, so they wait until a reviewer
+   approves it; see [Protect the signing secrets](#protect-the-signing-secrets).
    Each job packages the app, signs it when the signing secrets are set, and smoke-tests it with
    `yarn desktop:smoke`: the unpacked app on every platform, the app inside the mounted `dmg` on
    macOS, and the AppImage on Linux. Signed builds also get their signature checked, and macOS
@@ -31,10 +33,13 @@ Running the workflow by hand from the **Actions** tab (**Release**, then **Run w
 dry run. It builds and smoke-tests unsigned installers on every platform, keeps them as workflow
 artifacts for 7 days, and publishes nothing.
 
-Only the publish job can write to the repository. The other jobs can only read it, and the
-signing secrets reach only the packaging step of a tag build on their own platform. The workflow
-never runs for pull requests, so code from a fork never sees the secrets. In a fork without
-secrets, a tag build still works, but its installers are unsigned.
+As written, the workflow lets only the publish job write to the repository, and passes the
+signing secrets only to the packaging step of a macOS or Windows tag build. That alone protects
+nothing from someone who can push: a tag build runs the workflow file of the tagged commit, which
+anyone with write access can change. The secrets are kept safe by repository settings instead,
+described under [Protect the signing secrets](#protect-the-signing-secrets). The workflow never
+runs for pull requests, so code from a fork never sees the secrets. In a fork without secrets, a
+tag build still works, but its installers are unsigned.
 
 ### The macOS update file
 
@@ -59,17 +64,20 @@ also double the download for everyone.
    git push origin v0.2.0
    ```
 
-3. Wait for the **Release** workflow to finish. If a build fails because of the runner, re-run
+3. When the **Release** run asks for a review of the `release` environment, check that it runs
+   for your tag and the commit you merged, then approve it. The macOS and Windows builds wait
+   until then.
+4. Wait for the **Release** workflow to finish. If a build fails because of the runner, re-run
    the failed jobs. If it needs a code change, delete the draft release and the tag, then release
    a new patch version. Don't move a tag that has been pushed.
-4. Review the draft release under **Releases**:
+5. Review the draft release under **Releases**:
    - It has a `dmg` and a `zip` for `mac-arm64` and for `mac-x64`, a `win-x64.exe`, an AppImage
      and a `deb` for each Linux processor, a `.blockmap` next to each installer that has one, and
      `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and `latest-linux-arm64.yml`.
    - `latest-mac.yml` lists both macOS zips.
    - Install it on each operating system you can, sign in, and run a review.
    - Edit the generated notes.
-5. Publish the release. Installed apps find it the next time they check: when they start, and
+6. Publish the release. Installed apps find it the next time they check: when they start, and
    every 6 hours after that.
 
 Never reuse a version that has been published, even if you delete the release. An app that
@@ -77,7 +85,10 @@ installed it won't update to a different build with the same version.
 
 ## Secrets and settings
 
-Add these under **Settings**, **Secrets and variables**, **Actions**, as repository secrets.
+Add these as secrets of the `release` environment (**Settings**, **Environments**, `release`,
+**Environment secrets**), never as repository secrets: every workflow run on any branch can read
+a repository secret. Set up the environment first, as described under
+[Protect the signing secrets](#protect-the-signing-secrets).
 Leave out all of a platform's secrets and its installers are built unsigned, with a warning on the
 run. If only some of them are set, whichever ones are missing, the build stops instead of shipping
 something half-signed, and so it does when both ways to notarize, or both ways to sign for
@@ -127,13 +138,39 @@ repository it runs in. Outside the workflow, builds use `RELEASE_REPO` in
 build.
 
 `gh secret set` reads a value from a file or from standard input, which keeps it out of your
-shell history:
+shell history; `--env release` makes it an environment secret:
 
 ```sh
-base64 -i DeveloperID.p12 | gh secret set MAC_CSC_LINK
-gh secret set APPLE_API_KEY_P8 < AuthKey_ABC123DEFG.p8
-gh secret set MAC_CSC_KEY_PASSWORD   # asks for the value
+base64 -i DeveloperID.p12 | gh secret set MAC_CSC_LINK --env release
+gh secret set APPLE_API_KEY_P8 --env release < AuthKey_ABC123DEFG.p8
+gh secret set MAC_CSC_KEY_PASSWORD --env release   # asks for the value
+gh secret list                                     # repository secrets: none of the above
 ```
+
+### Protect the signing secrets
+
+Anyone who can push to the repository can change the workflow file in a commit, tag it, and so
+run their own workflow when the tag is pushed. Three settings keep that from reaching the signing
+secrets:
+
+1. **The `release` environment.** Under **Settings**, **Environments**, create `release`:
+   - **Required reviewers**: the maintainers who may approve a release. If you are the only one,
+     leave **Prevent self-review** off, or nobody can approve.
+   - **Deployment branches and tags**: **Selected branches and tags**, with one rule of the
+     **Tag** type for `v*`. A run for a branch can't use the environment, even with approval.
+   - **Environment secrets**: the signing secrets in the table above, and none of them as
+     repository secrets. Delete any repository secret with those names.
+2. **A tag ruleset.** Under **Settings**, **Rules**, **Rulesets**, add a **tag ruleset** named
+   `release tags`, **Active**, targeting tags that match `v*`, with **Restrict creations**,
+   **Restrict updates** and **Restrict deletions**. Under **Bypass list**, add only the
+   **Repository admin** role, or the **Maintain** role too if maintainers release. Only they can
+   then push, move or delete a `v*` tag.
+3. **The `REQUIRE_SIGNING` variable**, once a signed version is out; see above.
+
+The reviewer is the last check: a run waiting for approval runs whatever workflow file the tag's
+commit has. Approve only a run for a tag you pushed, at a commit on the default branch. The
+version check job also stops a tag that isn't on the default branch, but someone who changes the
+workflow file can remove that check.
 
 ### The macOS certificate
 
@@ -224,6 +261,10 @@ release instead, and the user installs the new `deb` the same way.
   larger arm64 runner or remove the Linux arm64 build from the matrix. `macos-15-intel` is
   GitHub's last Intel macOS image; when GitHub retires it, Intel Macs need a universal build or
   no build.
+- Environments with required reviewers, and tag rulesets, are available for public repositories
+  on every plan. A private repository needs GitHub Team or Pro for rulesets and environment
+  secrets, and GitHub Enterprise for required reviewers; without reviewers, the tag ruleset is
+  the only thing between someone who can push and the signing secrets.
 - There is no Windows arm64 build: the Cursor SDK has no Windows arm64 binaries. Windows on Arm
   runs the x64 build under emulation.
 - The workflow has only been checked with actionlint, and its scripts only run on a Mac. Before
