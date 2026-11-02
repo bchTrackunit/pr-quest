@@ -36,9 +36,10 @@ GitHub's search API allows 30 searches a minute, and each refresh uses 2.
   detection and HTTP 429 are secondary limits. A plain 403 isn't, because GitHub also uses it for
   missing permissions and SAML.
 - **Backoff.** PR Quest waits until the reset time from the failed response's
-  `x-ratelimit-reset` or `retry-after` header, or else from `GET /rate_limit`, which doesn't count
-  against the limit. Without any reset time, it waits 60 seconds, doubling on each repeat up to 10
-  minutes. The backoff is saved with the cache, so a restart doesn't retry early.
+  `x-ratelimit-reset` or `retry-after` header, or, for a primary limit, from `GET /rate_limit`,
+  which doesn't count against the limit. Without any reset time, it waits 60 seconds, doubling on
+  each repeat up to 10 minutes, so a secondary limit without `retry-after` always uses this
+  backoff. The backoff is saved with the cache, so a restart doesn't retry early.
 - **During the backoff** the poll, **Refresh** and `?refresh=1` don't call GitHub. The API
   returns the cached quests with `stale: true` and `rateLimit: { kind, limitedUntil }`, the board
   shows a banner with the retry time, and the server retries once by itself when the backoff ends.
@@ -136,10 +137,11 @@ unless it found something that changes the fix or the severity.
 A reviewer skips what comments already raise, so a comment could talk it out of a finding. A
 comment is therefore only passed on when its author gains nothing by steering the reviewer:
 
-- **People who can push to the repo.** The PR's author qualifies by having pushed its branch.
-  Every other `OWNER`, `MEMBER` or `COLLABORATOR` is checked with
-  `GET /repos/{owner}/{repo}/collaborators/{login}/permission`, and only `admin` and `write` pass.
-  A check that fails for any reason counts as no access.
+- **The PR's author**, who already controls the diff and gains nothing more from a comment. On a
+  PR from a fork, which only Claude reviews, that is someone who can't push to the repo.
+- **People who can push to the repo.** Every other `OWNER`, `MEMBER` or `COLLABORATOR` is checked
+  with `GET /repos/{owner}/{repo}/collaborators/{login}/permission`, and only `admin` and `write`
+  pass. A check that fails for any reason counts as no access.
 - **Review bots:** Bugbot (`cursor`), Copilot (`copilot-pull-request-reviewer`) and CodeRabbit
   (`coderabbitai`), matched only on GitHub App accounts. Other apps, `github-actions` among them,
   can post text anyone wrote, so they're left out. A review bot's reply after a left-out comment
@@ -157,10 +159,12 @@ endpoint accepts only `comment` and `requestChanges`, and the only way to approv
 
 **Selecting findings.** The selection is saved on the server with the run as you make it
 (`PUT /api/runs/:id/selection`), so it survives a reload and a restart, and other open tabs see it
-through the live updates stream. Once a run is posted, its selection can't change.
+through the live updates stream. Once a run is posted, its selection can't change. Selecting
+earns no XP and costs none.
 
 **Posting.** The confirmation says what will go out, for example "Posting 3 of 6 findings in one
-GitHub review: 2 as inline comments and 1 in the review body." It always starts at **Comment**;
+GitHub review: 2 as inline comments and 1 in the review body." With nothing selected, it says the
+review will hold only the summary, and you can still post it. It always starts at **Comment**;
 when the reviewer suggests requesting changes, it says so but never picks it for you. The server
 doesn't trust the page: the post request names the findings you confirmed, and the server refuses
 with `409` if they differ from its saved selection, for example because another tab changed it.
@@ -173,14 +177,14 @@ the same XP however many findings it includes.
 reads the PR's current head first; if new commits were pushed, it approves nothing and answers
 `409 headChanged`, and the dialog shows the new commit. Otherwise it approves with
 `POST /repos/<owner>/<repo>/pulls/<number>/reviews`, `event: APPROVE` and `commit_id` set to that
-commit. Draft PRs can't be approved.
+commit. The board disables **Approve** on draft PRs.
 
 Runs are saved, so a server restart reattaches to a Cursor run that was still going. A Claude
 review is a single request, so a restart during one marks it as failed.
 
 ## Local server protections
 
-The API acts as you, so it only accepts requests that come from PR Quest:
+The API acts as you, so it only accepts browser requests that come from PR Quest's own UI:
 
 - **Host** must be `127.0.0.1` or `localhost`, which stops DNS rebinding.
 - **Origin**, when the browser sends one, must be exactly the UI or API origin. Pages on other
@@ -190,6 +194,10 @@ The API acts as you, so it only accepts requests that come from PR Quest:
 - **Every POST, PUT and DELETE must be `Content-Type: application/json`**, or the server answers
   `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
   never grants.
+
+These checks stop other websites, not other programs. A request without `Origin` or
+`Sec-Fetch-Site`, such as one from `curl`, passes them, and the API has no authentication, so any
+process running on this computer, under any user, can call it and act as you.
 
 Secrets stay in the server process. The UI only learns whether a key is set, its source and, for
 keys of 12 characters or more, its last four characters. The server doesn't log keys or the
@@ -215,11 +223,14 @@ When a file can't be used:
   an error instead of loading it.
 - The first time PR Quest reads a version 1 `state.json`, it copies it to `state.json.v1.bak`.
   Copy it back to run an older build.
+- Runs saved before findings were selected for posting kept an accepted or rejected decision per
+  finding. They load with the accepted findings selected, which were the ones that got posted.
 
 Before per-user folders, `state.json` and `quests.json` sat directly in `~/.pr-quest`. The first
 GitHub user PR Quest sees gets them: they are copied into `users/<login>/` and the originals are
-renamed to `<file>.migrated-to-<login>-<UTC time>.bak`, which nothing reads again. The login is
-recorded in `users/.legacy-owner` first, so an interrupted migration finishes for the same user.
+renamed to `<file>.migrated-to-<login>-<UTC time>.bak`, which nothing reads again. A user who
+already has a `state.json` in their folder keeps it. The login is recorded in
+`users/.legacy-owner` first, so an interrupted migration finishes for the same user.
 A `state.json` or `quests.json` that shows up in `~/.pr-quest` later is renamed to
 `<file>.orphaned-<UTC time>.bak` rather than given to anyone.
 
@@ -248,7 +259,7 @@ achievements behind a hint until they unlock.
 | Night Owl        | A review action at 22:00 or later                                                   | Common    |
 | Weekend Warrior  | A review action on a Saturday or Sunday                                             | Common    |
 | **Feats**        |                                                                                     |           |
-| Quick Draw       | Approve within an hour of the review request                                        | Rare      |
+| Quick Draw       | Approve within an hour of the PR opening                                            | Rare      |
 | Boss Slayer      | Post a review on, or approve, a Boss-tier PR                                        | Rare      |
 | Inbox Zero       | GitHub finds no review requests on a day you reviewed something                     | Rare      |
 | Clean Sweep      | Act on 5 direct requests in a day, and leave no direct request on the board         | Epic      |
@@ -271,6 +282,8 @@ count, and neither does a refresh where most PR details couldn't be read.
 Achievements are defined in
 [`apps/server/src/features/game/achievements.ts`](../apps/server/src/features/game/achievements.ts);
 the UI renders whatever that file lists.
+
+Achievements unlocked before bonus XP existed don't pay it afterwards.
 
 State from before these achievements keeps its XP, level, streak and unlocked achievements, and
 some progress is rebuilt from what was stored: Centurion, Team Player and Agent Commander from the

@@ -54,16 +54,21 @@ chmod 600 .env.local
 | `PR_QUEST_UI_PORT`          | UI port, default `4318`                                                                            |
 | `PR_QUEST_STATE_DIR`        | Where PR Quest keeps its data, default `~/.pr-quest` (see [Where state lives](#where-state-lives)) |
 
-Environment variables win over `.env.local`, and both win over keys saved in Settings. Keys from
-the environment are read-only in Settings; saved keys apply without a restart. Settings never
-shows a key, only whether it's set, where it came from and its last four characters.
+Environment variables win over `.env.local`, and both win over keys saved in Settings. Setting a
+variable to an empty value ignores both, so the default applies; for an API key that's the key
+saved in Settings, so `CURSOR_API_KEY= yarn start` still uses a saved Cursor key. Keys from the
+environment are read-only in Settings; saved keys apply without a restart. Settings never shows a
+key, only whether it's set, where it came from and, for keys of 12 characters or more, its last
+four characters. The key inputs ask 1Password, LastPass and Bitwarden not to save them.
 
 ![The settings dialog](docs/screenshots/settings.png)
 
 Settings also picks the **review provider** (Cursor or Claude) and the model for each. With the
-provider's key, the model list comes from the provider; without it, Settings shows a built-in
-list. Keys, the provider and the models belong to this computer: every GitHub account that signs
-in here shares them, and signing out doesn't remove them.
+provider's key, the model list comes from the provider (Cursor's model list, Anthropic's
+`GET /v1/models`); without it, Settings shows a built-in list. Cursor defaults to its own default
+model and Claude to `claude-sonnet-5-5`. Keys, the provider and the models belong to this
+computer: every GitHub account that signs in here shares them, and signing out doesn't remove
+them.
 
 ### Sign in with GitHub
 
@@ -75,10 +80,11 @@ callback, but it does need a GitHub OAuth App, which you create once:
 
 1. On GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App** (or the same
    under an organization's settings).
-2. Set **Homepage URL** and **Authorization callback URL** to `http://127.0.0.1:4318`. GitHub
-   requires a callback, but the device flow never uses it.
-3. Check **Enable Device Flow**, choose **Register application** and copy the **Client ID**. Don't
-   generate a client secret.
+2. Set **Homepage URL** and **Authorization callback URL** to `http://127.0.0.1:4318`, or your
+   port if you set `PR_QUEST_UI_PORT`. GitHub requires a callback, but the device flow never uses
+   it.
+3. Check **Enable Device Flow**, since without it GitHub refuses to issue codes. Choose **Register
+   application** and copy the **Client ID**. Don't generate a client secret.
 4. Put it in `.env.local` as `PR_QUEST_GITHUB_CLIENT_ID=...` and restart PR Quest.
 
 PR Quest asks for the `repo` and `read:org` scopes. OAuth Apps have no read-only scope for
@@ -87,9 +93,11 @@ token from this computer but doesn't revoke it; revoke it under
 [Authorized OAuth Apps](https://github.com/settings/applications) when you're done.
 
 Organizations such as Trackunit can restrict which OAuth Apps see their private repos. Until an
-organization owner approves your app, that organization's PRs don't show up. A signed-in token
-wins over the GitHub CLI, so **Sign out** to go back to the CLI's token, which Trackunit already
-allows.
+organization owner approves your app, that organization's PRs don't show up. When you authorize
+the app, GitHub shows a **Request** button next to each restricted organization; you can also
+request access later under **Settings → Applications → Authorized OAuth Apps**. An owner approves
+it under the organization's **Third-party access → OAuth app policy**. A signed-in token wins over
+the GitHub CLI, so **Sign out** to go back to the CLI's token, which Trackunit already allows.
 
 ## Using the board
 
@@ -99,6 +107,8 @@ under 400, **Hard** under 2,000 lines and 50 files, and **Boss** above that.
 
 The bar above the cards narrows and orders the board, without calling GitHub:
 
+- **Requests** (_All_, _Direct_, _Team_) picks which requests to show. With _All_, the board is
+  grouped into direct and team requests, and the other filters and the sort apply inside each.
 - **Search** matches the title, author, branch and PR number (`#123`, `repo#123` or
   `owner/repo#123`). Press `/` to jump to it.
 - **Sort**: _Smart_ (direct requests, then PRs that need attention, then the longest-waiting),
@@ -114,11 +124,12 @@ The bar above the cards narrows and orders the board, without calling GitHub:
 
 - **Cursor** starts a Cursor cloud agent that checks out the repo at the PR's head commit and
   reviews the diff with the rest of the repo as context. Because the agent can act as you, it only
-  reviews PRs opened from the repo itself by members, collaborators, Dependabot or Renovate. On
-  other PRs the button is disabled and suggests Claude.
-- **Claude** sends only the diff, title and branch names to Anthropic's API. Lockfiles, generated
-  and binary files are left out, and the review lists any file it didn't see. Claude can't run
-  anything or reach GitHub.
+  reviews PRs opened from the repo itself by members, collaborators, Dependabot or Renovate, and
+  whose branch names are safe in shell commands. On other PRs the button is disabled and suggests
+  Claude.
+- **Claude** sends the diff, title, branch names and the PR's trusted comments to Anthropic's API,
+  never the rest of the repo. Lockfiles, generated and binary files are left out, and the review
+  lists any file it didn't see. Claude can't run anything or reach GitHub.
 
 Both reviewers also get the PR's existing comments from people who can push to the repo and from
 known review bots (Bugbot, Copilot, CodeRabbit), so they don't repeat what's already been said.
@@ -131,6 +142,7 @@ findings:
 No finding starts selected. Tick the ones worth posting, or use **Select all** and **Clear**.
 **Post to PR** posts one GitHub review, as a comment or a change request, with the summary and the
 selected findings as inline comments on the commit that was reviewed. The rest are never posted.
+With nothing selected, you can still post the summary on its own. Selecting earns no XP.
 `@mentions` in the reviewer's text are escaped, so posting never pings anyone.
 
 The reviewer's verdict is only advice. **Approve** is a separate action with its own
@@ -177,8 +189,9 @@ unreadable or older files.
 
 ## Security
 
-- **Loopback only.** The server listens on `127.0.0.1` and only accepts requests from its own UI,
-  so other websites and local dev servers can't use it to act as you.
+- **Loopback only.** The server listens on `127.0.0.1` and only accepts browser requests from its
+  own UI, so other websites and local dev servers can't use it to act as you. It has no
+  authentication, so any program running on this computer can call it.
 - **Secrets stay in the server.** No route returns a key or the GitHub token. They're stored in
   plain text in `secrets.json`, protected only by its file mode.
 - **The Cursor agent's limits are only in its prompt.** It runs with your Cursor identity and
@@ -204,6 +217,8 @@ these protections in full.
 - **Switching GitHub users stops that user's running reviews**, rather than finishing them as the
   new user.
 - **Posted reviews match no Agent filter**, so selecting any agent state hides those PRs.
+- **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
+  PR Quest's built-in guess; with a key, it comes from Cursor.
 
 ## Development
 
