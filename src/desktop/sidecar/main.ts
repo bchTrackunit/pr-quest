@@ -1,0 +1,161 @@
+/*
+ * The PR Quest server as a sidecar of the Tauri shell in src-tauri/, which has no Node of its own.
+ * The shell starts it with the Node binary it bundles; protocol.ts says how the two talk.
+ */
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+
+import {
+  type AppConfig,
+  BOOTSTRAP_PATH,
+  loadConfig,
+  type RunningServer,
+} from '../../app/server/server.ts';
+import { startDesktopServer } from '../desktopServer.ts';
+import {
+  type DesktopSecrets,
+  ENCRYPTED_SECRETS_FILE,
+  openDesktopSecrets,
+} from '../keychainSecrets.ts';
+import { readPreferences, writePreferences } from '../preferences.ts';
+import { type Check, runChecks, sdkChecks, serverChecks } from '../smoke.ts';
+import { dataKeyEncryptor } from './dataKeyEncryptor.ts';
+import {
+  type Launch,
+  parseCommand,
+  parseLaunch,
+  readyLine,
+  SMOKE_DONE_PREFIX,
+} from './protocol.ts';
+
+/** How long stopping waits for the server to close before it gives up on a stuck connection. */
+const CLOSE_TIMEOUT_MS = 5000;
+/** dist/ and node_modules/ sit next to this bundle in the app's resources. */
+const APP_DIR = dirname(fileURLToPath(import.meta.url));
+const smokeTest = process.env.PR_QUEST_SMOKE_TEST === '1';
+
+const info = (message: string): void => {
+  process.stderr.write(`[pr-quest] ${message}\n`);
+};
+const warn = (message: string): void => {
+  process.stderr.write(`[pr-quest] warning: ${message}\n`);
+};
+const print = (line: string): void => {
+  process.stdout.write(`${line}\n`);
+};
+
+interface Started {
+  config: AppConfig;
+  server: RunningServer;
+  secrets: DesktopSecrets;
+}
+
+async function main(): Promise<void> {
+  if (smokeTest && process.env.PR_QUEST_STATE_DIR === undefined) {
+    throw new Error('The smoke test needs PR_QUEST_STATE_DIR, so it leaves ~/.pr-quest alone');
+  }
+  let launch: Launch | undefined;
+  let started: Started | undefined;
+  try {
+    // Ends when stdin closes, which is how the shell stops the sidecar, and what happens if it dies.
+    for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+      if (launch === undefined) {
+        launch = parseLaunch(line);
+        started = await start(launch);
+        print(readyLine({ port: started.server.port, storage: started.secrets.storage }));
+      } else if (smokeTest && started && parseCommand(line)?.command === 'smoke') {
+        const ok = await runChecks(
+          [...serverChecks(started.server.url), ...sidecarChecks(started, launch), ...sdkChecks()],
+          print,
+        );
+        print(`${SMOKE_DONE_PREFIX}${JSON.stringify({ ok })}`);
+      }
+    }
+  } finally {
+    if (started) {
+      await Promise.race([started.server.close(), delay(CLOSE_TIMEOUT_MS)]);
+    }
+  }
+}
+
+async function start(launch: Launch): Promise<Started> {
+  // State stays in ~/.pr-quest (or PR_QUEST_STATE_DIR), shared with the CLI.
+  const config = loadConfig({ onWarning: warn });
+  const preferences = await readPreferences(launch.preferencesFile);
+  const secrets = await openDesktopSecrets(config.stateDir, {
+    encryptor: encryptorFor(launch),
+    allowPlaintext: preferences.plaintextSecrets === true,
+    info,
+    warn,
+  });
+  const server = await startDesktopServer(config, preferences.port, {
+    secrets: secrets.store,
+    staticDir: join(APP_DIR, 'dist'),
+    requestSecret: launch.requestSecret,
+    bootstrapCode: launch.bootstrapCode,
+    info,
+    warn,
+  });
+  preferences.port = server.port;
+  await writePreferences(launch.preferencesFile, preferences);
+  return { config, server, secrets };
+}
+
+function encryptorFor(launch: Launch) {
+  return launch.dataKey === null
+    ? undefined
+    : dataKeyEncryptor(Buffer.from(launch.dataKey, 'base64'));
+}
+
+/** What only the Tauri build has: the one-time bootstrap link and the keychain's data key. */
+function sidecarChecks({ config, server, secrets }: Started, launch: Launch): Array<Check> {
+  return [
+    {
+      name: 'bootstrap-once',
+      run: async () => {
+        // The window opened the link before the shell asked for the smoke test.
+        const res = await fetch(`${server.url}${BOOTSTRAP_PATH}?code=${launch.bootstrapCode}`, {
+          redirect: 'manual',
+        });
+        if (res.status !== 403) {
+          throw new Error(`opening the start-up link again got ${res.status}`);
+        }
+        return 'the start-up link worked once, for the window';
+      },
+    },
+    {
+      name: 'secrets-data-key',
+      run: async () => {
+        if (secrets.storage !== 'keychain') {
+          throw new Error(`saved keys go to ${secrets.storage}, not the keychain's data key`);
+        }
+        const value = 'pr-quest-smoke-test-saved-key';
+        await secrets.store.set('linear', value);
+        const file = await readFile(join(config.stateDir, ENCRYPTED_SECRETS_FILE), 'utf8');
+        const reopened = await openDesktopSecrets(config.stateDir, {
+          encryptor: encryptorFor(launch),
+          allowPlaintext: false,
+          info,
+          warn,
+        });
+        await secrets.store.delete('linear');
+        if (file.includes(value) || reopened.store.get('linear') !== value) {
+          throw new Error(`${ENCRYPTED_SECRETS_FILE} didn't hold the key encrypted`);
+        }
+        return `a saved key is AES-GCM encrypted in ${ENCRYPTED_SECRETS_FILE} and reads back`;
+      },
+    },
+  ];
+}
+
+main().then(
+  () => process.exit(0),
+  (error: unknown) => {
+    // Only the message: nothing here may print the launch message, which holds the secrets.
+    warn(`stopped: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  },
+);
