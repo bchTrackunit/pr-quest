@@ -176,6 +176,49 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: 'Account and settings' })).toBeTruthy();
   });
 
+  test('disables the agent on quests the Cursor provider refuses, once the settings load', async () => {
+    api.fetchSettings.mockResolvedValue({
+      reviewProvider: 'cursor',
+      models: {},
+      keys: { cursor: { set: true }, anthropic: { set: false }, linear: { set: false } },
+    });
+    api.fetchQuests.mockResolvedValue({
+      quests: [makeQuest({ authorAssociation: 'NONE', isCrossRepository: false })],
+      fetchedAt: new Date().toISOString(),
+      source: 'linear',
+      stale: false,
+    });
+    await renderApp();
+
+    const send = screen.getByRole('button', { name: 'Send review agent' });
+    await vi.waitFor(() => expect(send).toHaveProperty('disabled', true));
+    expect(screen.getByText(/Review it with Claude instead/)).toBeTruthy();
+  });
+
+  test('re-reads the review provider when the settings close', async () => {
+    const user = userEvent.setup();
+    api.fetchQuests.mockResolvedValue({
+      quests: [makeQuest({ authorAssociation: 'NONE', isCrossRepository: false })],
+      fetchedAt: new Date().toISOString(),
+      source: 'linear',
+      stale: false,
+    });
+    await renderApp();
+    const send = screen.getByRole('button', { name: 'Send review agent' });
+    expect(send).toHaveProperty('disabled', false);
+
+    api.fetchSettings.mockResolvedValue({
+      reviewProvider: 'cursor',
+      models: {},
+      keys: { cursor: { set: true }, anthropic: { set: false }, linear: { set: false } },
+    });
+    await user.click(await screen.findByRole('button', { name: 'GitHub account @octocat' }));
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await user.keyboard('{Escape}');
+
+    await vi.waitFor(() => expect(send).toHaveProperty('disabled', true));
+  });
+
   test('runs a review from send to loot: toast, browser notification and result', async () => {
     const user = userEvent.setup();
     MockNotification.permission = 'granted';

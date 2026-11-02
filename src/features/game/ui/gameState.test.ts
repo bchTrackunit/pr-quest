@@ -36,6 +36,7 @@ describe('resetForAccountChange', () => {
       runsError: 'Old runs error',
       connection: 'open' as const,
       settings: { section: 'github' as const },
+      reviewProvider: 'cursor' as const,
       soundEnabled: false,
     };
 
@@ -43,6 +44,7 @@ describe('resetForAccountChange', () => {
       ...createInitialGameState('granted'),
       connection: 'open',
       settings: { section: 'github' },
+      reviewProvider: 'cursor',
       soundEnabled: false,
     });
   });

@@ -1,9 +1,10 @@
 import { useId } from 'react';
 
-import type { Quest, ReviewRun } from '../../../shared/api.ts';
+import type { Quest, ReviewProvider, ReviewRun } from '../../../shared/api.ts';
+import { cursorReviewBlocker } from '../../../shared/cursorReview.ts';
 import { formatAge, formatNumber } from '../../../platform/ui/format.ts';
 import { questLabel, type QuestAction, type QuestActionError } from '../../game/ui/index.ts';
-import { RunStatus } from './RunStatus.tsx';
+import { offersRetry, RunStatus } from './RunStatus.tsx';
 import type { SettingsTarget } from '../../settings/ui/index.ts';
 import { TierBadge } from './TierBadge.tsx';
 
@@ -11,6 +12,8 @@ export interface QuestCardProps {
   quest: Quest;
   now: number;
   run?: ReviewRun;
+  /** With `cursor`, quests the Cursor agent refuses get a disabled send button and the reason. */
+  reviewProvider?: ReviewProvider;
   pendingAction?: QuestAction;
   actionError?: QuestActionError;
   onClickSendAgent: (questId: string) => void;
@@ -32,6 +35,7 @@ export const QuestCard = ({
   quest,
   now,
   run = undefined,
+  reviewProvider = undefined,
   pendingAction = undefined,
   actionError = undefined,
   onClickSendAgent,
@@ -41,9 +45,12 @@ export const QuestCard = ({
 }: QuestCardProps) => {
   const titleId = useId();
   const draftNoteId = useId();
+  const blockedNoteId = useId();
   const isBoss = quest.difficulty === 'Boss';
   const isStarting = pendingAction === 'review';
   const canSendAgent = !run || run.disposition === 'posted';
+  const cursorBlocker = reviewProvider === 'cursor' ? cursorReviewBlocker(quest) : undefined;
+  const showsBlocker = cursorBlocker !== undefined && (canSendAgent || offersRetry(run));
   const label = questLabel(quest);
   const age = formatAge(quest.requestedAt, now);
   const sendAgent = (): void => onClickSendAgent(quest.id);
@@ -119,7 +126,12 @@ export const QuestCard = ({
       </dl>
 
       {run ? (
-        <RunStatus onClickOpenResult={onClickOpenResult} onClickRetry={sendAgent} run={run} />
+        <RunStatus
+          onClickOpenResult={onClickOpenResult}
+          onClickRetry={sendAgent}
+          retryBlockedNoteId={showsBlocker ? blockedNoteId : undefined}
+          run={run}
+        />
       ) : null}
 
       {actionError ? (
@@ -144,8 +156,9 @@ export const QuestCard = ({
       <div className="button-row">
         {canSendAgent ? (
           <button
+            aria-describedby={cursorBlocker ? blockedNoteId : undefined}
             className="button button--primary"
-            disabled={isStarting}
+            disabled={isStarting || cursorBlocker !== undefined}
             onClick={() => onClickSendAgent(quest.id)}
             type="button"
           >
@@ -171,6 +184,22 @@ export const QuestCard = ({
           Approve<span className="visually-hidden"> {label}</span>
         </button>
       </div>
+      {showsBlocker ? (
+        <div className="quest__blocked">
+          <p className="muted" id={blockedNoteId}>
+            {cursorBlocker}
+          </p>
+          {onClickOpenSettings ? (
+            <button
+              className="button button--small"
+              onClick={() => onClickOpenSettings({ section: 'provider' })}
+              type="button"
+            >
+              <span aria-hidden="true">⚙️</span> Choose the review provider
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {quest.isDraft ? (
         <p className="muted" id={draftNoteId}>
           Drafts can't be approved yet.

@@ -7,14 +7,38 @@ export interface RunStatusProps {
   run: ReviewRun;
   onClickOpenResult: (runId: string) => void;
   onClickRetry: MouseEventHandler<HTMLButtonElement>;
+  /** Disables Retry, pointing at the element that says why. */
+  retryBlockedNoteId?: string;
 }
+
+/** The run failed or came back unreadable, so the card offers to send the agent again. */
+export const offersRetry = (run: ReviewRun): boolean =>
+  run.status === 'error' ||
+  run.status === 'startupFailed' ||
+  (run.status === 'finished' && run.disposition !== 'posted' && !run.result);
 
 /**
  * The quest card's view of a review agent run, from queued through loot or defeat. Failures are
  * static text: the error toast already announces the change, and an alert per failed card would
  * fire for every one of them on page load.
  */
-export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusProps) => {
+export const RunStatus = ({
+  run,
+  onClickOpenResult,
+  onClickRetry,
+  retryBlockedNoteId = undefined,
+}: RunStatusProps) => {
+  const retry = (
+    <button
+      aria-describedby={retryBlockedNoteId}
+      className="button button--small"
+      disabled={retryBlockedNoteId !== undefined}
+      onClick={onClickRetry}
+      type="button"
+    >
+      Retry
+    </button>
+  );
   switch (run.status) {
     case 'queued':
       return (
@@ -58,9 +82,7 @@ export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusPro
         return (
           <div className="run run--error">
             <span>The agent came back without a readable report.</span>
-            <button className="button button--small" onClick={onClickRetry} type="button">
-              Retry
-            </button>
+            {retry}
           </div>
         );
       }
@@ -85,9 +107,7 @@ export const RunStatus = ({ run, onClickOpenResult, onClickRetry }: RunStatusPro
               : 'The agent fell in battle'}
             : {run.error?.message ?? 'unknown error'}
           </span>
-          <button className="button button--small" onClick={onClickRetry} type="button">
-            Retry
-          </button>
+          {retry}
         </div>
       );
     default:
