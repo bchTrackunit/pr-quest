@@ -47,6 +47,13 @@ export interface Quest {
   repo: RepoRef;
   number: number;
   author: QuestAuthor;
+  /**
+   * GitHub's `CommentAuthorAssociation` for the author on this repo (`OWNER`, `MEMBER`,
+   * `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, ...), when known.
+   */
+  authorAssociation?: string;
+  /** The source branch lives in a fork rather than the PR's repo, when known. */
+  isCrossRepository?: boolean;
   sourceBranch: string;
   targetBranch: string;
   /** Head commit of the source branch, when known. */

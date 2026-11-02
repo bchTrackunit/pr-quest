@@ -11,6 +11,8 @@
         "deletions": 0,
         "changedFiles": 1,
         "author": { "login": "kfr-example", "name": "" },
+        "authorAssociation": "COLLABORATOR",
+        "isCrossRepository": false,
         "reviewRequests": {
           "nodes": [{ "requestedReviewer": { "__typename": "Team", "slug": "team-gluon" } }]
         },
@@ -27,6 +29,8 @@
         "deletions": 150,
         "changedFiles": 12,
         "author": { "login": "kpr-example", "name": "Kieran Example" },
+        "authorAssociation": "MEMBER",
+        "isCrossRepository": false,
         "reviewRequests": {
           "nodes": [
             { "requestedReviewer": { "__typename": "Team", "slug": "team-gluon" } },
