@@ -12,7 +12,8 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-${{ github.ref }}
+  # The event is part of the group, so a dry run started on a tag can't cancel that tag's release.
+  group: release-${{ github.event_name }}-${{ github.ref }}
   # Never stop a release halfway through publishing; a newer dry run replaces an older one.
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
