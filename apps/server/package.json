@@ -1,0 +1,28 @@
+{
+  "name": "@pr-quest/server",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "PR Quest's local API: GitHub and Linear polling, game state and review runs",
+  "exports": {},
+  "scripts": {
+    "dev": "tsx watch src/app/dev.ts",
+    "start": "node dist/main.js",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.2.0",
+    "@cursor/sdk": "1.0.40",
+    "@pr-quest/contract": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.13",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

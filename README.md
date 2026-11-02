@@ -101,7 +101,7 @@ PR_QUEST_GITHUB_CLIENT_ID=Ov23li...
 
 A client ID isn't secret: it only names the app, and every sign-in still needs your approval on
 github.com. A team could later commit theirs as the default in `DEFAULT_GITHUB_CLIENT_ID` in
-[`src/platform/server/config.ts`](src/platform/server/config.ts), so nobody has to set it.
+[`apps/server/src/platform/config.ts`](apps/server/src/platform/config.ts), so nobody has to set it.
 
 Without a client ID, the sign-in button and the settings popup explain this setup and link here.
 
@@ -229,10 +229,10 @@ yarn build
 yarn start
 ```
 
-`yarn build` builds the UI into `dist/` and bundles the server into `dist-server/` with
-[esbuild](https://esbuild.github.io). `yarn start` runs `node dist-server/main.js`, which serves
-the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port. Without
-a `dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk` and
+`yarn build` builds the UI into `apps/web/dist/` and bundles the server into `apps/server/dist/`
+with [esbuild](https://esbuild.github.io). `yarn start` runs `node apps/server/dist/main.js`, which
+serves the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port.
+Without an `apps/web/dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk` and
 `@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
 
 ### Hosted mode
@@ -250,24 +250,27 @@ Every player brings their own keys, so hosted mode refuses to start with `CURSOR
 `http:` to anything but loopback. Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
 don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server
 supplies them through `startServer` in
-[`src/app/server/server.ts`](src/app/server/server.ts).
+[`apps/server/src/app/server.ts`](apps/server/src/app/server.ts).
 
 The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
 reconnecting the live stream never forces a GitHub call; both use the server's cached list.
 
 ## Checks
 
-| Command             | What it does                                                                    |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `yarn typecheck`    | Type-checks the UI, server and test projects                                    |
-| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware         |
-| `yarn lint:fix`     | Applies oxlint's safe fixes                                                     |
-| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)        |
-| `yarn format:check` | Fails if a file isn't formatted                                                 |
-| `yarn test`         | Runs the Vitest suite once (`yarn test:watch` keeps it open)                    |
-| `yarn build`        | Type-checks, then builds the UI into `dist/` and the server into `dist-server/` |
-| `yarn build:server` | Bundles only the server into `dist-server/`                                     |
-| `yarn start`        | Runs the production build; see [Run it](#run-it)                                |
+| Command             | What it does                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `yarn typecheck`    | Type-checks each package and its tests                                                        |
+| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware                       |
+| `yarn lint:fix`     | Applies oxlint's safe fixes                                                                   |
+| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)                      |
+| `yarn format:check` | Fails if a file isn't formatted                                                               |
+| `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
+| `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
+| `yarn start`        | Runs the production build; see [Run it](#run-it)                                              |
+
+Each package also has its own `dev`, `test` and `typecheck` scripts, for example
+`yarn workspace @pr-quest/server test`. `yarn workspace @pr-quest/server build` bundles only the
+server.
 
 With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
 tests and build, as CI does on every pull request and every push to `main`.
@@ -285,55 +288,113 @@ Version".
 The UI is built with the [React Compiler](https://react.dev/learn/react-compiler)
 (`babel-plugin-react-compiler`, run by `@vitejs/plugin-react`), which memoises components and
 hooks. `vite build` prints how many it memoised and lists any it skipped; a skipped component
-still works, it just isn't memoised. Vitest reuses `vite.config.ts`, so the jsdom UI tests run
-the compiled components. oxlint checks the Rules of React the compiler relies on with its built-in
+still works, it just isn't memoised. Vitest reuses `apps/web/vite.config.ts`, so the jsdom UI tests
+run the compiled components. oxlint checks the Rules of React the compiler relies on with its built-in
 port of the compiler's lint rules (`react/purity`, `react/refs`, `react/immutability` and the
 others listed in `.oxlintrc.json`), and `react/todo` warns about code the compiler can't compile
 yet.
 
 ## Project structure
 
-Each feature owns its server and UI code. Tests sit next to the code they test.
+The repo is a set of [Yarn workspaces](https://yarnpkg.com/features/workspaces): the server and
+the UI are separate packages, each with its own dependencies, TypeScript and Vitest config, and
+they share code only through `@pr-quest/contract`. Tests sit next to the code they test.
 
 ```text
-src/
-  app/          composition roots: they wire the features together
-    server/     main.ts (production entry), dev.ts (dev entry), server.ts (startServer, for
-                embedding), app.ts, the HTTP route tables, identity.ts (who a request acts
-                as), storage.ts (where secrets, settings and player state live), per-player
-                sessions and state dirs
-    ui/         main.tsx (entry), App.tsx, the header controls and preferences, the game
-                controller hook and the live event stream
-  features/
-    auth/       GitHub device flow, token resolution, the GitHub account control
-    settings/   API keys, review provider and model settings, the settings dialog
-    game/       XP, levels, achievements, streaks, the player state store, HUD, toasts, XP popups
-    quests/     GitHub search and GraphQL client, Linear, quest cache and polling, the quest board
-    reviews/    review runs, Cursor and Claude reviews, diff budget, review result and approve UI
-  platform/
-    server/     router and security guards, config, SSE events, GitHub API wrapper, rate limits,
+apps/
+  server/       @pr-quest/server, the API (Node: tsx in development, an esbuild bundle in production)
+    src/
+      main.ts   entry point of the production build
+      app/      composition root: dev.ts (dev entry), server.ts (startServer, for embedding),
+                app.ts, the HTTP route tables, identity.ts (who a request acts as), storage.ts
+                (where secrets, settings and player state live), per-player sessions and state dirs
+      features/ one folder per feature, listed below
+      platform/ router and security guards, config, SSE events, GitHub API wrapper, rate limits,
                 private files and secrets
-    ui/         API client, store, Modal, Popover, Tooltip, formatting and clock helpers,
+  web/          @pr-quest/web, the React UI (Vite)
+    index.html
+    vite.config.ts
+    src/
+      main.tsx  entry point
+      app/      composition root: App.tsx, the header controls and preferences, the game
+                controller hook and the live event stream
+      features/ one folder per feature, listed below
+      platform/ API client, store, Modal, Popover, Tooltip, formatting and clock helpers,
                 notifications, styles
-  shared/       the API contract (api.ts) and the review prompt and result schema (reviewResult.ts)
+packages/
+  contract/     @pr-quest/contract, what the server and UI agree on: the API types and routes
+                (api.ts), the ports, the review prompt and result schema (reviewResult.ts), the
+                Cursor review gate (cursorReview.ts) and finding decisions (findingDecisions.ts)
+scripts/
+  restructure.ts  moves files from the old src/ layout; see below
 ```
 
-Each feature has `server/` and `ui/` folders, and each folder has an `index.ts` that is its public
-entry. Server and UI get separate entries so that the UI bundle never pulls in server code.
+Both apps split their code into the same features, so a feature has a server half and a UI half:
+
+| Feature    | Server                                              | UI                                 |
+| ---------- | --------------------------------------------------- | ---------------------------------- |
+| `auth`     | GitHub device flow, token resolution                | the GitHub account control         |
+| `settings` | API keys, review provider and model settings        | the settings dialog                |
+| `game`     | XP, levels, achievements, streaks, the state store  | HUD, toasts, XP popups             |
+| `quests`   | GitHub and Linear clients, quest cache and polling  | the quest board, filters and cards |
+| `reviews`  | review runs, Cursor and Claude reviews, diff budget | review result and approve dialog   |
+
+Each feature folder has an `index.ts` that is its public entry. Other code imports from
+`@pr-quest/contract/<module>`, such as `@pr-quest/contract/api`; the package has no build step and
+exports its TypeScript source.
 
 Dependency rules, enforced by `yarn lint`:
 
-- `src/shared` imports only from `src/shared`.
-- `src/platform` imports only from `src/platform` and `src/shared`, never from a feature or
-  `src/app`.
-- A feature imports its own files, `src/platform` and `src/shared`. It reaches another feature only
-  through that feature's `index.ts`, never a deeper file. Tests may also use another feature's
-  `test-utils/`.
-- Only `src/app` imports from `src/app`, and it also goes through each feature's `index.ts`.
-- UI code and server code never import each other; they share only `src/shared`.
+- `@pr-quest/server` and `@pr-quest/web` use `@pr-quest/contract`, and `@pr-quest/contract` uses
+  no other package. The allowed edges are `PACKAGE_GRAPH` in `oxlint-plugins/local.js`, and each
+  one must also be a dependency in the importing package's `package.json`. Neither app exports
+  anything, and a relative import never leaves its package.
+- Inside an app, `platform/` never imports from a feature or `app/`.
+- A feature imports its own files, its app's `platform/` and `@pr-quest/contract`. It reaches
+  another feature only through that feature's `index.ts`, never a deeper file. Tests may also use
+  another feature's `test-utils/`.
+- Only `app/` and `main.ts` import from `app/`, and they also go through each feature's `index.ts`.
 - There are no import cycles (`import/no-cycle`). The features form one direction: `reviews`
   uses `quests`, `game` and `settings`; `quests` uses `game` and `settings`; `game` uses
   `settings`; `settings` uses `auth`.
+
+`yarn typecheck` adds one more: `@pr-quest/contract` runs in the browser and in Node, so its source
+is type-checked with neither DOM nor Node types, and the UI's source without Node types.
+
+### Moving a branch from the old layout
+
+Before this layout, both halves lived under `src/`, as `src/features/<name>/server/` and
+`src/features/<name>/ui/`. A branch started before the move should merge `main` first, so git
+follows the renamed files, and then run the script, which moves any files still under `src/` and
+fixes the relative imports that no longer resolve:
+
+```sh
+git merge origin/main
+# If package.json conflicts, resolve it first: Node won't start while it has conflict markers.
+node scripts/restructure.ts
+yarn install && yarn format && yarn typecheck && yarn lint
+```
+
+What to expect from the merge:
+
+- `CONFLICT (file location)` for files the branch added under `src/`. Git has already put them in
+  the new folders, so `git add` them.
+- Many files show as conflicted only because they were renamed; they have no conflict markers.
+- Import lines that conflict already have the right paths on the branch's side once the script has
+  run.
+- Dependencies the branch added to the root `package.json` belong in `apps/server/package.json` or
+  `apps/web/package.json` now; the root keeps only repo-wide tools. Nothing fails if you forget,
+  because Yarn hoists every package to the root `node_modules`.
+- For a `yarn.lock` conflict, take `main`'s side and let `yarn install` add the branch's
+  dependencies back.
+- The script lists paths it can't fix, such as one that now points into the other app or a
+  `new URL()` path into `@pr-quest/contract`. It leaves paths relative to a build output rather
+  than the source file, such as `../dist`, alone.
+- `src/desktop/` moves to `apps/desktop/src/`, which needs its own `package.json` and an entry in
+  `PACKAGE_GRAPH`.
+
+Don't run the script on the branch before merging: git then sees two unrelated copies of every
+file and conflicts far more. Running the script again changes nothing once every path resolves.
 
 ## How it works
 
@@ -447,8 +508,33 @@ works for PRs from forks. The agent:
 - is told never to commit, push, create branches, open or update a PR, approve or comment;
 - returns a JSON report (`summary`, advisory `verdict`, `findings` with file, line, severity and
   body, and `reviewedSha`, the commit it reviewed), which the server validates. If `reviewedSha`
-  isn't the commit it was sent to, the run fails instead of offering findings whose line numbers
-  may be wrong.
+  is missing or isn't the commit it was sent to, the run fails instead of offering findings whose
+  line numbers may be wrong.
+
+**Which PRs the Cursor agent reviews.** The server refuses a Cursor review, before anything is
+queued, and suggests Claude instead, when:
+
+- the PR's author isn't in the repo's org or one of its collaborators: GitHub's
+  `authorAssociation` isn't `OWNER`, `MEMBER` or `COLLABORATOR`. Outside contributors,
+  first-time contributors and most bots are refused. The exception is a short list of trusted
+  bots, `dependabot[bot]` and `renovate[bot]`, which GitHub gives no role (`NONE`). GitHub
+  reserves the `[bot]` suffix for GitHub Apps, so no person can open a PR under those logins.
+  This is a weaker guarantee than for members: see the bot PR risk under "What the agent can
+  do";
+- the PR comes from a fork (`isCrossRepository`). None of the roles above implies write access,
+  but a branch in the base repo can only have been pushed by someone who has it, so steering the
+  agent gains them nothing they can't already do. Members and collaborators who work from forks
+  are refused too.
+
+While either is unknown, for example on a board cached by an older version, refreshing the board
+fixes it. The server also refuses a Cursor review when either branch name contains anything but
+letters, digits and `. _ / + @ = -`, or starts with `-` or `+`. Git allows `;`, `$`, `|`,
+backticks and quotes in branch names, and the prompt asks the agent to run commands that contain
+them. The names that pass are also quoted in the prompt.
+
+The board applies the same rules: with the Cursor provider selected, a quest the agent would
+refuse has its "Send review agent" button disabled, the reason under it and a shortcut to the
+provider setting.
 
 **What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
 GitHub integration, on PR content that the PR's author controls: the code, the title and the
@@ -458,6 +544,14 @@ prompt injection could talk the agent out of them. The only hard guard is `autoC
 which stops the SDK from opening a PR for the agent's work. PR Quest also sets
 `workOnCurrentBranch: false`, but the SDK doesn't document what that prevents, so don't rely on
 it.
+
+On Dependabot and Renovate PRs, the content isn't controlled by someone who can already push.
+The description quotes upstream release notes, changelogs and commit messages, written by the
+dependency's maintainers, and the lockfile points at a version they published. A malicious or
+compromised release can carry a prompt injection, and the prompt's "treat it as data" is the
+only defence. If the repo's Cursor cloud environment installs dependencies, that install also
+runs the new version's install scripts inside the agent. Review such PRs with Claude when you
+don't trust the upstream release.
 
 ### Claude reviews
 
@@ -638,7 +732,7 @@ progress where there is a count, such as Explorer 3/10 or Centurion 12/50 toward
 counts (Clean Sweep, Featherweight) start again at local midnight.
 
 Achievements are defined in
-[`src/features/game/server/achievements.ts`](src/features/game/server/achievements.ts); the UI
+[`apps/server/src/features/game/achievements.ts`](apps/server/src/features/game/achievements.ts); the UI
 renders whatever that file lists.
 
 ### Progress from before these achievements
@@ -775,7 +869,8 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
   [The review agent and its safety limits](#the-review-agent-and-its-safety-limits).
 - **Starting the agent on a commit SHA is untested against the live Cursor API.** The SDK types
   allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
-  elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
+  elsewhere, the prompt has it check out the commit, and a missing or mismatched `reviewedSha`
+  fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
 
 ## License

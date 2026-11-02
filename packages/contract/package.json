@@ -1,0 +1,22 @@
+{
+  "name": "@pr-quest/contract",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "What the PR Quest server and UI agree on: the API types and routes, ports and review gates",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.lib.json --noEmit && tsc -p tsconfig.spec.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

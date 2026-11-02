@@ -10,7 +10,7 @@
     "node": true,
     "es2024": true
   },
-  "ignorePatterns": ["dist/**", "dist-server/**", "coverage/**", ".yarn/**"],
+  "ignorePatterns": ["dist/**", "coverage/**", ".yarn/**"],
   "categories": {
     "correctness": "error"
   },
@@ -113,13 +113,13 @@
       }
     },
     {
-      "files": ["src/features/*/server/index.ts", "src/features/*/ui/index.ts"],
+      "files": ["apps/*/src/features/*/index.ts"],
       "rules": {
         "local/no-barrel-files": "off"
       }
     },
     {
-      "files": ["src/**/ui/**/*.ts", "src/**/ui/**/*.tsx"],
+      "files": ["apps/web/src/**/*.ts", "apps/web/src/**/*.tsx"],
       "rules": {
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "error",
@@ -141,7 +141,7 @@
           "error",
           {
             "name": "localStorage",
-            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in apps/web/src/features/quests/useBoardView.ts, the one storage access point."
           }
         ],
         "eslint/no-restricted-properties": [
@@ -149,13 +149,13 @@
           {
             "object": "window",
             "property": "localStorage",
-            "message": "Use browserStorage() in src/features/quests/ui/useBoardView.ts, the one storage access point."
+            "message": "Use browserStorage() in apps/web/src/features/quests/useBoardView.ts, the one storage access point."
           }
         ]
       }
     },
     {
-      "files": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
       "plugins": ["vitest"],
       "rules": {
         "eslint/no-restricted-properties": "off",

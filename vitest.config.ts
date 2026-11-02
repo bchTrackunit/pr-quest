@@ -1,14 +1,7 @@
-import { defineConfig, mergeConfig } from 'vitest/config';
+import { defineConfig } from 'vitest/config';
 
-import viteConfig from './vite.config.ts';
-
-export default mergeConfig(
-  viteConfig,
-  defineConfig({
-    test: {
-      include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-      exclude: ['node_modules/**'],
-      environment: 'node',
-    },
-  }),
-);
+export default defineConfig({
+  test: {
+    projects: ['apps/*', 'packages/*'],
+  },
+});
