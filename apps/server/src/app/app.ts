@@ -127,6 +127,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       cursorApiKey: () => apiKeys.get('cursor'),
       settings: () => settings.get(),
       claude: claude.forGitHub(github),
+      github,
       log: info,
     });
     const quests = new QuestService({

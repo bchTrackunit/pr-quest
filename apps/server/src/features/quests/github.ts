@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 import type { Quest, RepoRef } from '@pr-quest/contract/api';
+import type {
+  DiscussionComment,
+  DiscussionThread,
+  PullRequestDiscussion,
+} from '@pr-quest/contract/discussion';
 import { GitHubApiError, type GitHubApi } from '../../platform/githubApi.ts';
 import type { LinearReviewInfo } from './linear.ts';
 import { difficultyFor, formatQuestId, type QuestRef } from './quests.ts';
@@ -86,6 +91,68 @@ const BatchResponseSchema = z.object({
       }),
     )
     .nullish(),
+});
+
+const COMMENT_FIELDS = 'body authorAssociation author { __typename login }';
+
+/** The newest 100 of each, which is what GitHub allows per connection. Drafts are left out. */
+const DISCUSSION_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+        nodes { ${COMMENT_FIELDS} }
+      }
+      reviewThreads(last: 100) {
+        nodes {
+          path line isResolved isOutdated
+          comments(first: 50) { nodes { state ${COMMENT_FIELDS} } }
+        }
+      }
+      comments(last: 100) { nodes { ${COMMENT_FIELDS} } }
+    }
+  }
+}`;
+
+const PENDING = 'PENDING';
+const PUSH_PERMISSIONS: ReadonlySet<string> = new Set(['admin', 'write']);
+const PERMISSION_CONCURRENCY = 4;
+
+const PermissionSchema = z.object({ permission: z.string() });
+
+const CommentSchema = z.object({
+  body: z.string(),
+  authorAssociation: z.string().nullish(),
+  author: z.object({ __typename: z.string(), login: z.string() }).nullish(),
+});
+
+const nodesOf = <TSchema extends z.ZodType>(schema: TSchema) =>
+  z.object({ nodes: z.array(schema.nullish()) });
+
+const DiscussionResponseSchema = z.object({
+  data: z
+    .object({
+      repository: z
+        .object({
+          pullRequest: z
+            .object({
+              reviews: nodesOf(CommentSchema),
+              reviewThreads: nodesOf(
+                z.object({
+                  path: z.string(),
+                  line: z.number().int().nullish(),
+                  isResolved: z.boolean(),
+                  isOutdated: z.boolean(),
+                  comments: nodesOf(CommentSchema.extend({ state: z.string() })),
+                }),
+              ),
+              comments: nodesOf(CommentSchema),
+            })
+            .nullish(),
+        })
+        .nullish(),
+    })
+    .nullish(),
+  errors: z.array(z.object({ message: z.string() })).nullish(),
 });
 
 const CreatedReviewSchema = z.object({ html_url: z.string() });
@@ -311,6 +378,57 @@ export function parsePullRequestBatch(text: string, count: number): PullRequestB
   return viewerLogin ? { entries, viewerLogin } : { entries };
 }
 
+/** Throws when GitHub returned no pull request, e.g. because the player can't read the repo. */
+export function parseDiscussion(text: string): PullRequestDiscussion {
+  const { data, errors } = parseJson(text, DiscussionResponseSchema, 'GraphQL');
+  const pullRequest = data?.repository?.pullRequest;
+  if (!pullRequest) {
+    throw new GitHubApiError(
+      `GitHub returned no pull request: ${errors?.at(0)?.message ?? 'no reason'}`,
+      { body: text },
+    );
+  }
+  const present = <TNode>(nodes: ReadonlyArray<TNode | null | undefined>): Array<TNode> =>
+    nodes.flatMap((node) => node ?? []);
+  const withBody = (comments: Array<z.infer<typeof CommentSchema>>): Array<DiscussionComment> =>
+    comments.flatMap((comment) => (comment.body.trim() ? [toDiscussionComment(comment)] : []));
+  return {
+    reviews: withBody(present(pullRequest.reviews.nodes)),
+    threads: present(pullRequest.reviewThreads.nodes).flatMap((thread) => {
+      const comments = withBody(
+        present(thread.comments.nodes).filter((comment) => comment.state !== PENDING),
+      );
+      if (comments.length === 0) {
+        return [];
+      }
+      const entry: DiscussionThread = {
+        file: thread.path,
+        resolved: thread.isResolved,
+        outdated: thread.isOutdated,
+        comments,
+      };
+      if (typeof thread.line === 'number') {
+        entry.line = thread.line;
+      }
+      return [entry];
+    }),
+    conversation: withBody(present(pullRequest.comments.nodes)),
+  };
+}
+
+/** GitHub shows a deleted account as `ghost`. */
+function toDiscussionComment(raw: z.infer<typeof CommentSchema>): DiscussionComment {
+  const comment: DiscussionComment = {
+    author: raw.author?.login ?? 'ghost',
+    isBot: raw.author?.__typename === 'Bot',
+    body: raw.body,
+  };
+  if (raw.authorAssociation) {
+    comment.authorAssociation = raw.authorAssociation;
+  }
+  return comment;
+}
+
 export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInput): Quest {
   const diffStats = {
     fileCount: details.changedFiles,
@@ -482,6 +600,37 @@ export class GitHubClient {
     const diff = await this.api.request('GET', pullPath(ref), { accept: DIFF_MEDIA_TYPE });
     await this.assertHead(ref, headSha);
     return diff;
+  }
+
+  /** Reviews, inline threads and conversation comments already on the PR, in one query. */
+  public async fetchDiscussion(ref: QuestRef): Promise<PullRequestDiscussion> {
+    const text = await this.api.graphql(DISCUSSION_QUERY, {
+      owner: ref.repo.owner,
+      name: ref.repo.name,
+      number: ref.number,
+    });
+    return parseDiscussion(text);
+  }
+
+  /**
+   * The lower-cased `logins` that can push to the repo, one call each. A login GitHub doesn't
+   * confirm, for example because the player may not see the repo's collaborators, can't.
+   */
+  public async pushersAmong(ref: QuestRef, logins: ReadonlyArray<string>): Promise<Set<string>> {
+    const checked = await mapWithConcurrency(logins, PERMISSION_CONCURRENCY, async (login) => {
+      try {
+        const text = await this.api.request(
+          'GET',
+          `${repoPath(ref.repo)}/collaborators/${encodeURIComponent(login)}/permission`,
+        );
+        const { permission } = parseJson(text, PermissionSchema, 'permission');
+        return PUSH_PERMISSIONS.has(permission) ? [login.toLowerCase()] : [];
+      } catch (error) {
+        this.onWarning(`Could not check whether ${login} can push: ${errorMessage(error)}`);
+        return [];
+      }
+    });
+    return new Set(checked.flat());
   }
 
   public async approve(ref: QuestRef, { commitId, body }: ApproveOptions): Promise<void> {

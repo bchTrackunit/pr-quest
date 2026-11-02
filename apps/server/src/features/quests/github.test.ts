@@ -549,6 +549,143 @@ describe('GitHubClient.fetchHeadSha', () => {
   });
 });
 
+describe('GitHubClient.fetchDiscussion', () => {
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const member = (body: string) => ({
+    body,
+    authorAssociation: 'MEMBER',
+    author: { __typename: 'User', login: 'ada' },
+  });
+  const submitted = (body: string) => ({ ...member(body), state: 'SUBMITTED' });
+  const pullRequest = {
+    reviews: { nodes: [member('Needs expiry.'), member('  '), null] },
+    reviewThreads: {
+      nodes: [
+        {
+          path: 'src/cache.ts',
+          line: 12,
+          isResolved: false,
+          isOutdated: false,
+          comments: {
+            nodes: [
+              {
+                body: 'Race in `get`.',
+                state: 'SUBMITTED',
+                authorAssociation: 'NONE',
+                author: { __typename: 'Bot', login: 'cursor' },
+              },
+              submitted('Will fix.'),
+              { ...member('My draft reply'), state: 'PENDING' },
+            ],
+          },
+        },
+        {
+          path: 'src/old.ts',
+          line: null,
+          isResolved: true,
+          isOutdated: true,
+          comments: {
+            nodes: [{ body: 'Gone.', state: 'SUBMITTED', authorAssociation: 'NONE', author: null }],
+          },
+        },
+        {
+          path: 'src/draft.ts',
+          line: 4,
+          isResolved: false,
+          isOutdated: false,
+          comments: { nodes: [{ ...member('Only a draft'), state: 'PENDING' }] },
+        },
+        {
+          path: 'src/empty.ts',
+          line: 1,
+          isResolved: false,
+          isOutdated: false,
+          comments: { nodes: [] },
+        },
+      ],
+    },
+    comments: { nodes: [member('Ship it after expiry.')] },
+  };
+
+  test('reads reviews, inline threads and conversation comments in one query', async () => {
+    const github = fakeGitHub(() => json({ data: { repository: { pullRequest } } }));
+
+    const discussion = await github.client().fetchDiscussion(ref);
+
+    expect(github.calls).toHaveLength(1);
+    expect(github.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/graphql',
+      body: {
+        query: expect.stringContaining(
+          'states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]',
+        ),
+        variables: { owner: 'o', name: 'r', number: 5 },
+      },
+    });
+    const ada = { author: 'ada', authorAssociation: 'MEMBER', isBot: false };
+    expect(discussion).toEqual({
+      reviews: [{ ...ada, body: 'Needs expiry.' }],
+      threads: [
+        {
+          file: 'src/cache.ts',
+          line: 12,
+          resolved: false,
+          outdated: false,
+          comments: [
+            { author: 'cursor', authorAssociation: 'NONE', isBot: true, body: 'Race in `get`.' },
+            { ...ada, body: 'Will fix.' },
+          ],
+        },
+        {
+          file: 'src/old.ts',
+          resolved: true,
+          outdated: true,
+          comments: [{ author: 'ghost', authorAssociation: 'NONE', isBot: false, body: 'Gone.' }],
+        },
+      ],
+      conversation: [{ ...ada, body: 'Ship it after expiry.' }],
+    });
+  });
+
+  test('rejects when GitHub returns no pull request', async () => {
+    const github = fakeGitHub(() =>
+      json({ data: { repository: null }, errors: [{ message: 'Could not resolve' }] }),
+    );
+
+    await expect(github.client().fetchDiscussion(ref)).rejects.toThrow(/Could not resolve/);
+  });
+});
+
+describe('GitHubClient.pushersAmong', () => {
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const PERMISSIONS: Record<string, Reply> = {
+    Admin: json({ permission: 'admin' }),
+    writer: json({ permission: 'write' }),
+    reader: json({ permission: 'read' }),
+    stranger: json({ message: 'Not Found' }, 404),
+    odd: json({ role_name: 'write' }),
+  };
+
+  test('keeps the logins GitHub says can push, lower-cased, and refuses the rest', async () => {
+    const github = fakeGitHub((call) => {
+      const login = /\/collaborators\/([^/]+)\/permission$/.exec(call.path)?.[1];
+      return login ? PERMISSIONS[decodeURIComponent(login)] : undefined;
+    });
+    const warnings: Array<string> = [];
+
+    const pushers = await github
+      .client((message) => warnings.push(message))
+      .pushersAmong(ref, Object.keys(PERMISSIONS));
+
+    expect(pushers).toEqual(new Set(['admin', 'writer']));
+    expect(github.calls.map((call) => call.path)).toContain(
+      '/repos/o/r/collaborators/reader/permission',
+    );
+    expect(warnings).toEqual([expect.stringContaining('stranger'), expect.stringContaining('odd')]);
+  });
+});
+
 describe('GitHubClient.fetchDiff', () => {
   const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
   const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';

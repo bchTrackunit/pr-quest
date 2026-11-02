@@ -457,10 +457,45 @@ works for PRs from forks. The agent:
 - reviews only `git diff origin/<target>...HEAD` at that commit, reading other code just for
   context;
 - is told never to commit, push, create branches, open or update a PR, approve or comment;
+- is told not to repeat what the PR's existing comments already raise (see below);
 - returns a JSON report (`summary`, advisory `verdict`, `findings` with file, line, severity and
   body, and `reviewedSha`, the commit it reviewed), which the server validates. If `reviewedSha`
   is missing or isn't the commit it was sent to, the run fails instead of offering findings whose
   line numbers may be wrong.
+
+**Existing comments.** With either provider, before the review starts, the server reads what
+has already been said on the PR with your GitHub token, in one GraphQL query: the newest 100
+review summaries, inline threads (up to 50 comments each, with their file, line and whether
+they're resolved or outdated) and conversation comments. Pending reviews, draft comments and
+empty bodies are skipped. The prompt lists them as one JSON object per line between markers
+with a random nonce, says they're data rather than instructions, and asks the reviewer not to
+report a problem a comment already raises, even in a resolved or outdated thread, unless it
+found something that changes the fix or the severity. The Cursor agent gets all of that in its
+prompt. Claude gets the rules in its system prompt and the comments in the user message, after
+the diff. Each comment is cut to 2,000 characters and the list to about 40,000; an entry that
+doesn't fit is skipped, and the prompt says how many comments were.
+
+A comment reaches the reviewer only when its author gains nothing by steering the reviewer.
+That matters for both providers: a reviewer skips what comments already raise, so a comment
+could talk it out of a finding, and the Cursor agent can also act. The comments that get
+through are:
+
+- **People who can push to the repo.** The PR's author qualifies by having pushed its branch.
+  Every other commenter whose role is `OWNER`, `MEMBER` or `COLLABORATOR` is checked with one
+  `GET /repos/{owner}/{repo}/collaborators/{login}/permission` call each, and only `admin` and
+  `write` pass. Those roles alone don't imply write access, and a check that fails for any
+  reason, for example because your token may not see the repo's collaborators, counts as no
+  access.
+- **Review bots:** Bugbot (`cursor`), Copilot (`copilot-pull-request-reviewer`) and CodeRabbit
+  (`coderabbitai`), matched only on GitHub App accounts. They write about PR content the
+  reviewer reads anyway. Other apps, `github-actions` among them, can post text anyone wrote, so they're
+  left out. In a thread, a review bot's reply that follows a left-out comment is dropped too,
+  since it may quote it; a bot that quotes an outsider elsewhere still passes their text on.
+
+Everything else is left out and only counted in the server log. If GitHub can't list the
+comments, the review runs without them and the server logs why, so the reviewer may repeat a
+comment. The comments are read at the PR's latest head, so if it moved since the board last
+refreshed, a thread's line may belong to a newer commit than the one being reviewed.
 
 **Which PRs the Cursor agent reviews.** The server refuses a Cursor review, before anything is
 queued, and suggests Claude instead, when:
@@ -525,6 +560,8 @@ With the Claude provider, the server reviews the PR's diff, never the repo:
 - **PR content is treated as data.** The title, branches and diff sit between delimiters with a
   random nonce, and the system prompt says never to follow instructions inside them and to report
   attempts to steer the reviewer as a security finding.
+- **Claude doesn't repeat existing comments.** It gets the PR's trusted comments after the diff,
+  as described under [Existing comments](#the-review-agent-and-its-safety-limits).
 - **The answer is a forced tool call.** The request offers one tool, `submit_review`, and makes
   Claude call it. The server validates its input as the same report the Cursor agent returns,
   with up to 16,000 output tokens. A refusal, a truncated answer or invalid output fails the run.
@@ -533,7 +570,8 @@ With the Claude provider, the server reviews the PR's diff, never the repo:
 repo or write anywhere: the request has no tools that act, `submit_review` is only read by PR
 Quest, and nothing Claude returns reaches GitHub until you choose **Post to PR**. A prompt
 injection in the diff can still make the review itself wrong or misleading, so read the findings
-as advice. The diff, title and branch names are sent to Anthropic under your API key.
+as advice. The diff, title, branch names and the PR's trusted comments are sent to Anthropic
+under your API key.
 
 ### What PR Quest does with the findings
 
@@ -758,7 +796,7 @@ anyone.
 - **Reviewers see PR content.** The Cursor agent runs in Cursor's cloud with access to the repo
   through your Cursor GitHub integration, and its rules are prompt-only (see
   [The review agent and its safety limits](#the-review-agent-and-its-safety-limits)). Claude gets
-  the diff, title and branch names under your Anthropic key, and can't act (see
+  the diff, title, branch names and the PR's trusted comments under your Anthropic key, and can't act (see
   [Claude reviews](#claude-reviews)). Neither can approve; only the **Approve** dialog can.
 
 ## Known limitations
@@ -776,6 +814,8 @@ anyone.
 - **Secondary rate limits without `retry-after` have no reset time**, so they always use the
   exponential backoff.
 - **"Approved by others" reads at most 100 latest reviews** per PR.
+- **Reviewers see at most the newest 100** review summaries, inline threads and conversation
+  comments, so on a busy PR they may repeat an older one.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
 - **Switching GitHub users stops that user's running reviews.** Each signed-in session uses only
