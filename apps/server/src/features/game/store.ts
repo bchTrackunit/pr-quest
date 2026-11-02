@@ -141,7 +141,9 @@ const StoredRunSchema = z.object({
     startedAt: z.string(),
     finishedAt: z.string().optional(),
     result: StoredReviewResultSchema.optional(),
-    /** Unreadable decisions fall back to undecided, which posts nothing, instead of failing the file. */
+    /** An unreadable selection falls back to none, which posts nothing, instead of failing the file. */
+    selectedFindings: z.array(z.number().int().nonnegative()).optional().catch(undefined),
+    /** Written before selections; only `accepted` findings were posted. Converted on load. */
     findingDecisions: z
       .array(z.enum(['undecided', 'accepted', 'rejected']))
       .optional()
@@ -276,10 +278,16 @@ async function readState(
 type ParsedRun = z.infer<typeof StoredRunSchema>;
 
 function withRunQuests(runs: Array<ParsedRun>): Array<StoredRun> {
-  return runs.map(({ run, quest }) => ({
-    run: { ...run, quest: run.quest ?? runQuestOf(quest) },
-    quest,
-  }));
+  return runs.map(({ run: { findingDecisions, ...run }, quest }) => {
+    const stored: ReviewRun = { ...run, quest: run.quest ?? runQuestOf(quest) };
+    const selectedFindings =
+      run.selectedFindings ??
+      findingDecisions?.flatMap((decision, index) => (decision === 'accepted' ? [index] : []));
+    if (selectedFindings) {
+      stored.selectedFindings = selectedFindings;
+    }
+    return { run: stored, quest };
+  });
 }
 
 /**

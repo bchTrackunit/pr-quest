@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Agent, type Run, type SDKAgent } from '@cursor/sdk';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { FindingDecision, ReviewRun } from '@pr-quest/contract/api';
+import type { ReviewRun } from '@pr-quest/contract/api';
 import { EventHub } from '../platform/events.ts';
 import { GameService, StateStore } from '../features/game/index.ts';
 import { GitHubApiError, NotSignedInError } from '../platform/githubApi.ts';
@@ -89,12 +89,12 @@ function mockAgentFinishing(text = REVIEW_TEXT): void {
   } as unknown as SDKAgent);
 }
 
-function decide(
+function select(
   runId: string,
   findingIndexes: Array<number>,
-  decision: FindingDecision,
+  selected = true,
 ): Promise<TestResponse> {
-  return send('PUT', `/api/runs/${runId}/decisions`, { findingIndexes, decision });
+  return send('PUT', `/api/runs/${runId}/selection`, { findingIndexes, selected });
 }
 
 async function finishedRun(): Promise<ReviewRun> {
@@ -411,10 +411,9 @@ describe('runs', () => {
     expect((await send('GET', '/api/runs')).body).toMatchObject({ runs: [{ id: run.id }] });
   });
 
-  test('posting sends only the accepted findings as one review and awards XP', async () => {
+  test('posting sends only the selected findings as one review and awards XP', async () => {
     const run = await finishedRun();
-    await decide(run.id, [0], 'rejected');
-    await decide(run.id, [1], 'accepted');
+    await select(run.id, [1]);
 
     const response = await send('POST', `/api/runs/${run.id}/post`, {
       event: 'requestChanges',
@@ -438,7 +437,7 @@ describe('runs', () => {
       run: {
         disposition: 'posted',
         postedReviewUrl: 'https://github.com/r#pullrequestreview-9',
-        findingDecisions: ['rejected', 'accepted'],
+        selectedFindings: [1],
       },
       outcome: {
         xpGained: 30 + 25 + 50,
@@ -450,17 +449,16 @@ describe('runs', () => {
   });
 
   test('Eagle Eye counts only the findings that were posted', async () => {
-    const majorRejected = await finishedRun();
-    const majorAccepted = await finishedRun();
-    await decide(majorRejected.id, [0], 'rejected');
-    await decide(majorRejected.id, [1], 'accepted');
-    await send('POST', `/api/runs/${majorRejected.id}/post`, { findingIndexes: [1] });
+    const majorLeftOut = await finishedRun();
+    const majorSelected = await finishedRun();
+    await select(majorLeftOut.id, [1]);
+    await send('POST', `/api/runs/${majorLeftOut.id}/post`, { findingIndexes: [1] });
     const eagleEye = () =>
       services.game.achievements().find((status) => status.id === 'eagle-eye')?.unlockedAt;
     expect(eagleEye()).toBeUndefined();
 
-    await decide(majorAccepted.id, [0, 1], 'accepted');
-    const response = await send('POST', `/api/runs/${majorAccepted.id}/post`, {
+    await select(majorSelected.id, [0, 1]);
+    const response = await send('POST', `/api/runs/${majorSelected.id}/post`, {
       findingIndexes: [0, 1],
     });
 
@@ -471,8 +469,7 @@ describe('runs', () => {
   test('hands the posted findings, and only those, to the game', async () => {
     const recordReviewAction = vi.spyOn(services.game, 'recordReviewAction');
     const run = await finishedRun();
-    await decide(run.id, [0], 'accepted');
-    await decide(run.id, [1], 'rejected');
+    await select(run.id, [0]);
 
     await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0] });
 
@@ -484,13 +481,14 @@ describe('runs', () => {
     );
   });
 
-  test.each<[string, FindingDecision | undefined]>([
-    ['undecided', undefined],
-    ['rejected', 'rejected'],
-  ])('never posts a finding that is %s', async (_label, decision) => {
+  test.each([
+    ['never selected', false],
+    ['selected and cleared again', true],
+  ])('never posts a finding that was %s', async (_label, wasSelected) => {
     const run = await finishedRun();
-    if (decision) {
-      await decide(run.id, [0], decision);
+    if (wasSelected) {
+      await select(run.id, [0]);
+      await select(run.id, [0], false);
     }
 
     const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0] });
@@ -501,9 +499,9 @@ describe('runs', () => {
     expect(services.game.player().xp).toBe(0);
   });
 
-  test('refuses to post when the confirmed findings leave out an accepted one', async () => {
+  test('refuses to post when the confirmed findings leave out a selected one', async () => {
     const run = await finishedRun();
-    await decide(run.id, [0, 1], 'accepted');
+    await select(run.id, [0, 1]);
 
     const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [1] });
 
@@ -516,7 +514,7 @@ describe('runs', () => {
 
   test('refuses a post that does not say which findings to post', async () => {
     const run = await finishedRun();
-    await decide(run.id, [0, 1], 'accepted');
+    await select(run.id, [0, 1]);
 
     const response = await send('POST', `/api/runs/${run.id}/post`, { event: 'comment' });
 
@@ -527,9 +525,8 @@ describe('runs', () => {
     expect(github.submitReview).not.toHaveBeenCalled();
   });
 
-  test('with nothing accepted, posts the summary alone and still awards the same XP', async () => {
+  test('with nothing selected, posts the summary alone and still awards the same XP', async () => {
     const run = await finishedRun();
-    await decide(run.id, [0, 1], 'rejected');
 
     const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
@@ -540,11 +537,11 @@ describe('runs', () => {
     });
   });
 
-  test('deciding on findings earns no XP', async () => {
+  test('selecting findings earns no XP', async () => {
     const run = await finishedRun();
 
-    await decide(run.id, [0], 'rejected');
-    await decide(run.id, [1], 'accepted');
+    await select(run.id, [0, 1]);
+    await select(run.id, [0], false);
 
     expect(services.game.player().xp).toBe(0);
   });
@@ -620,7 +617,7 @@ describe('runs', () => {
 
   test('rejects finding indexes that do not exist', async () => {
     const run = await finishedRun();
-    await decide(run.id, [0, 1], 'accepted');
+    await select(run.id, [0, 1]);
 
     const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0, 1, 2] });
 
@@ -648,44 +645,45 @@ describe('runs', () => {
     );
   });
 
-  test('PUT /api/runs/:id/decisions saves the decisions and returns the run', async () => {
+  test('PUT /api/runs/:id/selection saves the selection and returns the run', async () => {
     const run = await finishedRun();
 
-    const response = await decide(run.id, [0, 1], 'accepted');
-    const reset = await decide(run.id, [1], 'undecided');
+    const response = await select(run.id, [0, 1]);
+    const cleared = await select(run.id, [1], false);
 
     expect(response).toMatchObject({
       status: 200,
-      body: { run: { id: run.id, findingDecisions: ['accepted', 'accepted'] } },
+      body: { run: { id: run.id, selectedFindings: [0, 1] } },
     });
-    expect(reset.body).toMatchObject({ run: { findingDecisions: ['accepted', 'undecided'] } });
+    expect(cleared.body).toMatchObject({ run: { selectedFindings: [0] } });
     expect((await send('GET', `/api/runs/${run.id}`)).body).toMatchObject({
-      run: { findingDecisions: ['accepted', 'undecided'] },
+      run: { selectedFindings: [0] },
     });
   });
 
   test.each([
-    ['an unknown decision', { findingIndexes: [0], decision: 'maybe' }],
-    ['no findings', { findingIndexes: [], decision: 'accepted' }],
-    ['a negative id', { findingIndexes: [-1], decision: 'accepted' }],
-    ['a fractional id', { findingIndexes: [0.5], decision: 'accepted' }],
-    ['a finding the result does not have', { findingIndexes: [2], decision: 'accepted' }],
+    ['a selection that is not a boolean', { findingIndexes: [0], selected: 'yes' }],
+    ['a missing selection', { findingIndexes: [0] }],
+    ['no findings', { findingIndexes: [], selected: true }],
+    ['a negative id', { findingIndexes: [-1], selected: true }],
+    ['a fractional id', { findingIndexes: [0.5], selected: true }],
+    ['a finding the result does not have', { findingIndexes: [2], selected: true }],
     ['no body', undefined],
-  ])('PUT /api/runs/:id/decisions refuses %s', async (_label, body) => {
+  ])('PUT /api/runs/:id/selection refuses %s', async (_label, body) => {
     const run = await finishedRun();
 
-    const response = await send('PUT', `/api/runs/${run.id}/decisions`, body);
+    const response = await send('PUT', `/api/runs/${run.id}/selection`, body);
 
     expect(response).toMatchObject({ status: 400, body: { error: { code: 'badRequest' } } });
-    expect(services.runs.get(run.id)?.run.findingDecisions).toBeUndefined();
+    expect(services.runs.get(run.id)?.run.selectedFindings).toBeUndefined();
   });
 
-  test('PUT /api/runs/:id/decisions 404s for unknown runs and 409s once posted', async () => {
+  test('PUT /api/runs/:id/selection 404s for unknown runs and 409s once posted', async () => {
     const run = await finishedRun();
     await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
 
-    expect((await decide('nope', [0], 'accepted')).status).toBe(404);
-    expect((await decide(run.id, [0], 'accepted')).status).toBe(409);
+    expect((await select('nope', [0])).status).toBe(404);
+    expect((await select(run.id, [0])).status).toBe(409);
   });
 
   test('discarding marks the run discarded', async () => {

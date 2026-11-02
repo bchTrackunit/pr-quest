@@ -274,7 +274,7 @@ apps/
 packages/
   contract/     @pr-quest/contract, what the server and UI agree on: the API types and routes
                 (api.ts), the ports, the review prompt and result schema (reviewResult.ts), the
-                Cursor review gate (cursorReview.ts) and finding decisions (findingDecisions.ts)
+                Cursor review gate (cursorReview.ts) and finding selection (findingSelection.ts)
 scripts/
   restructure.ts  moves files from the old src/ layout; see below
 ```
@@ -580,25 +580,23 @@ shown as advice only, the post endpoint accepts only `comment` and `requestChang
 approve path is the **Approve** dialog. Findings appear on a result screen first, and nothing
 reaches GitHub until you choose **Post to PR** and confirm.
 
-**Accepting and rejecting findings.** Every finding starts undecided. Each finding card has a
-✓ **Accept** and a ✕ **Reject** toggle; pressing the one that's on makes the finding undecided
-again. **Accept all**, **Reject all** and **Reset** decide on every finding at once, and a line
-such as "3 accepted · 1 rejected · 2 undecided" keeps count. Accepted findings get a green edge;
-rejected ones are dimmed and struck through, and **Hide rejected** takes them off the screen. The
-toggles are ordinary buttons that report their state with `aria-pressed`, and each has a tooltip.
-Decisions are saved on the server with the run as you make them (`PUT /api/runs/:id/decisions`),
-so they survive a page reload and a server restart, and other open tabs see them through the live
-updates stream. Once a run is posted, its decisions are shown but can't change. Deciding earns no
-XP and costs none.
+**Selecting findings.** No finding starts selected. Each finding card has a ✓ toggle that
+selects it for posting; pressing it again leaves the finding out. **Select all** and **Clear**
+change every finding at once, and a line such as "2 of 6 selected" keeps count. Selected findings
+get a green edge. The toggle is an ordinary button that reports its state with `aria-pressed`, and
+it has a tooltip. The selection is saved on the server with the run as you make it
+(`PUT /api/runs/:id/selection`), so it survives a page reload and a server restart, and other open
+tabs see it through the live updates stream. Once a run is posted, its selection is shown but
+can't change. Selecting earns no XP and costs none.
 
-**Posting.** Only accepted findings are posted; rejected and undecided findings never are, and the
-summary always is. The confirmation says what will go out, for example "Posting 3 of 6 findings in
-one GitHub review: 2 as inline comments and 1 in the review body. 1 rejected and 2 undecided won't
-be posted." With nothing accepted, it says the review will hold only the summary, and you can
-still post it. The server enforces this rather than trusting the page: the post request names the
-accepted findings you confirmed, and the server posts the findings its saved decisions accept,
-refusing with `409` if the two differ (for example because another tab changed a decision) and
-with `400` for a finding the review doesn't have or for a request that names no findings at all.
+**Posting.** Only selected findings are posted; the rest never are, and the summary always is. The
+confirmation says what will go out, for example "Posting 3 of 6 findings in one GitHub review: 2 as
+inline comments and 1 in the review body. The other 3 won't be posted." With nothing selected, it
+says the review will hold only the summary, and you can still post it. The server enforces this
+rather than trusting the page: the post request names the selected findings you confirmed, and the
+server posts the findings its saved selection holds, refusing with `409` if the two differ (for
+example because another tab changed the selection) and with `400` for a finding the review doesn't
+have or for a request that names no findings at all.
 A finding's id is its position in the review's findings, which never changes once the review has
 finished.
 
@@ -747,8 +745,9 @@ the current token is. Signing in as someone else opens their own folder, startin
 set in the environment or `.env.local` are never written to `secrets.json`.
 
 An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
-Quest starts without it. Unreadable finding decisions on a run are the exception: they are
-dropped, which leaves that run's findings undecided, and the rest of `state.json` is kept. An unreadable `settings.json` is replaced with the defaults (Cursor
+Quest starts without it. An unreadable finding selection on a run is the exception: it is
+dropped, which leaves none of that run's findings selected, and the rest of `state.json` is kept.
+Runs saved when findings were accepted or rejected load with their accepted findings selected. An unreadable `settings.json` is replaced with the defaults (Cursor
 reviews, default models) without a copy, and the next settings change overwrites it. An
 unreadable `quests.json` is ignored and replaced on the next successful fetch. A `secrets.json`
 or `settings.json` written by a newer PR Quest stops the server at startup with a message, so

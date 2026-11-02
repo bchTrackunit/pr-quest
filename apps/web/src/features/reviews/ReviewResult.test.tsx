@@ -4,20 +4,20 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import type { FindingDecision, PostReviewEvent, Quest, ReviewRun } from '@pr-quest/contract/api';
-import { findingDecisionsOf } from '@pr-quest/contract/findingDecisions';
+import type { PostReviewEvent, Quest, ReviewRun } from '@pr-quest/contract/api';
+import { selectedFindingIndexes } from '@pr-quest/contract/findingSelection';
 import { ReviewResult } from './ReviewResult.tsx';
 import { makeQuest, makeResult, makeRun } from '../../platform/test-utils/fixtures.ts';
 
 interface Handlers {
   onClickClose: () => void;
-  onDecide: (findingIndexes: Array<number>, decision: FindingDecision) => Promise<void>;
+  onSelect: (findingIndexes: Array<number>, selected: boolean) => Promise<void>;
   onPost: (event: PostReviewEvent, findingIndexes: Array<number>) => Promise<void>;
   onDiscard: () => Promise<void>;
   onClickApprove: (questId: string) => void;
 }
 
-/** Saves decisions the way the server does, so the result re-renders with them. */
+/** Saves selections the way the server does, so the result re-renders with them. */
 const Harness = ({
   initialRun,
   quest,
@@ -28,17 +28,21 @@ const Harness = ({
   handlers: Handlers;
 }) => {
   const [run, setRun] = useState(initialRun);
-  const onDecide = async (findingIndexes: Array<number>, decision: FindingDecision) => {
-    await handlers.onDecide(findingIndexes, decision);
+  const onSelect = async (findingIndexes: Array<number>, selected: boolean) => {
+    await handlers.onSelect(findingIndexes, selected);
     setRun((current) => {
-      const findingDecisions = findingDecisionsOf(current);
+      const selection = new Set(selectedFindingIndexes(current));
       for (const index of findingIndexes) {
-        findingDecisions[index] = decision;
+        if (selected) {
+          selection.add(index);
+        } else {
+          selection.delete(index);
+        }
       }
-      return { ...current, findingDecisions };
+      return { ...current, selectedFindings: [...selection].sort((a, b) => a - b) };
     });
   };
-  return <ReviewResult quest={quest} run={run} {...handlers} onDecide={onDecide} />;
+  return <ReviewResult quest={quest} run={run} {...handlers} onSelect={onSelect} />;
 };
 
 function renderResult(
@@ -48,7 +52,7 @@ function renderResult(
 ) {
   const handlers = {
     onClickClose: vi.fn(),
-    onDecide: vi.fn((_indexes: Array<number>, _decision: FindingDecision) => Promise.resolve()),
+    onSelect: vi.fn((_indexes: Array<number>, _selected: boolean) => Promise.resolve()),
     onPost: vi.fn((_event: PostReviewEvent, _indexes: Array<number>) => Promise.resolve()),
     onDiscard: vi.fn(() => Promise.resolve()),
     onClickApprove: vi.fn(),
@@ -58,12 +62,12 @@ function renderResult(
 }
 
 /** The fixture's findings by index: 0 is `src/widget.tsx:12`, 1 `src/query.ts:40`, 2 `README.md`. */
-function decidedRun(findingDecisions: Array<FindingDecision>): ReviewRun {
-  return makeRun({ status: 'finished', result: makeResult(), findingDecisions });
+function selectedRun(selectedFindings: Array<number>): ReviewRun {
+  return makeRun({ status: 'finished', result: makeResult(), selectedFindings });
 }
 
-const decisionGroup = (location: string) =>
-  screen.getByRole('group', { name: `Decision on ${location}` });
+const selectToggle = (location: string) =>
+  screen.getByRole('button', { name: `Select ${location}` });
 
 const findingItem = (location: string) => {
   const item = screen.getByText(location).closest('li');
@@ -129,7 +133,7 @@ describe('ReviewResult', () => {
 
   test('the post confirmation counts only findings with a line as inline comments', async () => {
     const user = userEvent.setup();
-    renderResult(decidedRun(['accepted', 'accepted', 'accepted']));
+    renderResult(selectedRun([0, 1, 2]));
 
     await user.click(screen.getByRole('button', { name: 'Post to PR' }));
 
@@ -138,168 +142,127 @@ describe('ReviewResult', () => {
     );
   });
 
-  describe('deciding on findings', () => {
-    test('every finding has Accept and Reject toggles, and starts undecided', () => {
+  describe('selecting findings', () => {
+    test('every finding has a select toggle, and none starts selected', () => {
       renderResult();
 
       for (const location of ['src/query.ts:40', 'src/widget.tsx:12', 'README.md']) {
-        const group = decisionGroup(location);
-        expect(
-          within(group)
-            .getAllByRole('button')
-            .map((button) => [button.getAttribute('aria-label'), button.ariaPressed]),
-        ).toEqual([
-          ['Accept', 'false'],
-          ['Reject', 'false'],
-        ]);
+        expect(selectToggle(location).ariaPressed).toBe('false');
       }
-      expect(screen.getByRole('status').textContent).toBe('0 accepted · 0 rejected · 3 undecided');
+      expect(screen.queryByRole('button', { name: /^(Accept|Reject)/ })).toBeNull();
+      expect(screen.getByRole('status').textContent).toBe('0 of 3 selected');
     });
 
-    test('toggles one finding between accepted, rejected and undecided', async () => {
+    test('toggles one finding between selected and not', async () => {
       const user = userEvent.setup();
       const handlers = renderResult();
-      const group = decisionGroup('src/query.ts:40');
-      const accept = within(group).getByRole('button', { name: 'Accept' });
-      const reject = within(group).getByRole('button', { name: 'Reject' });
+      const toggle = selectToggle('src/query.ts:40');
 
-      await user.click(accept);
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([1], 'accepted');
-      expect(accept.ariaPressed).toBe('true');
-      expect(reject.ariaPressed).toBe('false');
-      expect(screen.getByRole('status').textContent).toBe('1 accepted · 0 rejected · 2 undecided');
+      await user.click(toggle);
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([1], true);
+      expect(toggle.ariaPressed).toBe('true');
+      expect(findingItem('src/query.ts:40').className).toContain('finding--selected');
+      expect(screen.getByRole('status').textContent).toBe('1 of 3 selected');
 
-      await user.click(reject);
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([1], 'rejected');
-      expect(accept.ariaPressed).toBe('false');
-      expect(reject.ariaPressed).toBe('true');
-      expect(findingItem('src/query.ts:40').className).toContain('finding--rejected');
-
-      await user.click(reject);
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([1], 'undecided');
-      expect(reject.ariaPressed).toBe('false');
-      expect(findingItem('src/query.ts:40').className).not.toContain('finding--rejected');
+      await user.click(toggle);
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([1], false);
+      expect(toggle.ariaPressed).toBe('false');
+      expect(findingItem('src/query.ts:40').className).not.toContain('finding--selected');
     });
 
     test('works from the keyboard', async () => {
       const user = userEvent.setup();
       const handlers = renderResult();
-      within(decisionGroup('README.md')).getByRole('button', { name: 'Accept' }).focus();
+      selectToggle('README.md').focus();
 
       await user.keyboard(' ');
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([2], 'accepted');
-      await user.tab();
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([2], true);
       await user.keyboard('{Enter}');
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([2], 'rejected');
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([2], false);
     });
 
-    test('the icon-only toggles have tooltips', () => {
+    test('the icon-only toggle has a tooltip that follows its state', async () => {
+      const user = userEvent.setup();
       renderResult();
-      const group = decisionGroup('src/query.ts:40');
+      const toggle = selectToggle('src/query.ts:40');
+      const tooltip = () => document.getElementById(toggle.getAttribute('aria-describedby') ?? '');
 
-      const tooltips = within(group)
-        .getAllByRole('button')
-        .map((button) => document.getElementById(button.getAttribute('aria-describedby') ?? ''));
+      expect(tooltip()?.getAttribute('role')).toBe('tooltip');
+      expect(tooltip()?.textContent).toBe('Select to post this finding');
 
-      expect(tooltips.map((tooltip) => tooltip?.getAttribute('role'))).toEqual([
-        'tooltip',
-        'tooltip',
-      ]);
-      expect(tooltips.map((tooltip) => tooltip?.textContent)).toEqual([
-        'Accept: post this finding',
-        "Reject: don't post this finding",
-      ]);
+      await user.click(toggle);
+      expect(tooltip()?.textContent).toBe('Selected: this finding will be posted');
     });
 
-    test('Accept all, Reject all and Reset decide on every finding at once', async () => {
+    test('Select all and Clear change every finding at once', async () => {
       const user = userEvent.setup();
-      const handlers = renderResult(decidedRun(['rejected']));
+      const handlers = renderResult(selectedRun([1]));
       const status = screen.getByRole('status');
-      expect(status.textContent).toBe('0 accepted · 1 rejected · 2 undecided');
+      expect(status.textContent).toBe('1 of 3 selected');
 
-      await user.click(screen.getByRole('button', { name: 'Accept all' }));
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([0, 1, 2], 'accepted');
-      expect(status.textContent).toBe('3 accepted · 0 rejected · 0 undecided');
-      expect(screen.getByRole('button', { name: 'Accept all' })).toHaveProperty('disabled', true);
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([0, 1, 2], true);
+      expect(status.textContent).toBe('3 of 3 selected');
+      expect(screen.getByRole('button', { name: 'Select all' })).toHaveProperty('disabled', true);
 
-      await user.click(screen.getByRole('button', { name: 'Reject all' }));
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([0, 1, 2], 'rejected');
-      expect(status.textContent).toBe('0 accepted · 3 rejected · 0 undecided');
-
-      await user.click(screen.getByRole('button', { name: 'Reset' }));
-      expect(handlers.onDecide).toHaveBeenLastCalledWith([0, 1, 2], 'undecided');
-      expect(status.textContent).toBe('0 accepted · 0 rejected · 3 undecided');
-      expect(screen.getByRole('button', { name: 'Reset' })).toHaveProperty('disabled', true);
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(handlers.onSelect).toHaveBeenLastCalledWith([0, 1, 2], false);
+      expect(status.textContent).toBe('0 of 3 selected');
+      expect(screen.getByRole('button', { name: 'Clear' })).toHaveProperty('disabled', true);
     });
 
-    test('rejected findings can be hidden and shown again', async () => {
-      const user = userEvent.setup();
-      renderResult(decidedRun(['accepted', 'rejected', 'undecided']));
-      const hide = screen.getByRole('button', { name: 'Hide rejected' });
-      expect(hide.ariaPressed).toBe('false');
-
-      await user.click(hide);
-
-      expect(hide.ariaPressed).toBe('true');
-      expect(screen.queryByText('src/query.ts:40')).toBeNull();
-      expect(screen.queryByRole('region', { name: /Critical/ })).toBeNull();
-      expect(screen.getByText('1 rejected finding hidden.')).toBeTruthy();
-      expect(screen.getByText('src/widget.tsx:12')).toBeTruthy();
-
-      await user.click(hide);
-      expect(screen.getByText('src/query.ts:40')).toBeTruthy();
-    });
-
-    test('shows a decision that could not be saved', async () => {
+    test('shows a selection that could not be saved', async () => {
       const user = userEvent.setup();
       const handlers = renderResult();
-      handlers.onDecide.mockRejectedValueOnce(new Error('disk full'));
+      handlers.onSelect.mockRejectedValueOnce(new Error('disk full'));
 
-      await user.click(screen.getByRole('button', { name: 'Accept all' }));
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
 
       expect((await screen.findByRole('alert')).textContent).toContain('disk full');
-      expect(screen.getByRole('status').textContent).toBe('0 accepted · 0 rejected · 3 undecided');
+      expect(screen.getByRole('status').textContent).toBe('0 of 3 selected');
     });
 
-    test('a posted run shows its decisions but no longer changes them', () => {
+    test('a posted run shows its selection but no longer changes it', () => {
       renderResult(
         makeRun({
           status: 'finished',
           disposition: 'posted',
           result: makeResult(),
-          findingDecisions: ['accepted', 'rejected', 'accepted'],
+          selectedFindings: [0, 2],
         }),
       );
 
-      expect(screen.queryByRole('button', { name: 'Accept all' })).toBeNull();
-      const toggles = within(decisionGroup('src/query.ts:40')).getAllByRole('button');
+      expect(screen.queryByRole('button', { name: 'Select all' })).toBeNull();
       expect(
-        toggles.map((button) => [button.ariaPressed, button.hasAttribute('disabled')]),
+        ['src/widget.tsx:12', 'src/query.ts:40'].map((location) => {
+          const toggle = selectToggle(location);
+          return [toggle.ariaPressed, toggle.hasAttribute('disabled')];
+        }),
       ).toEqual([
-        ['false', true],
         ['true', true],
+        ['false', true],
       ]);
-      expect(screen.getByRole('status').textContent).toBe('2 accepted · 1 rejected · 0 undecided');
+      expect(screen.getByRole('status').textContent).toBe('2 of 3 selected');
     });
 
-    test('a run with no findings offers no decisions', () => {
+    test('a run with no findings offers no selection', () => {
       renderResult(makeRun({ status: 'finished', result: makeResult({ findings: [] }) }));
 
-      expect(screen.queryByRole('button', { name: 'Accept all' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Select all' })).toBeNull();
       expect(screen.queryByRole('status')).toBeNull();
     });
   });
 
   describe('the post confirmation', () => {
-    test('posts only the accepted findings and says what stays behind', async () => {
+    test('posts only the selected findings and says what stays behind', async () => {
       const user = userEvent.setup();
-      const handlers = renderResult(decidedRun(['rejected', 'accepted']));
+      const handlers = renderResult(selectedRun([1]));
 
       await user.click(screen.getByRole('button', { name: 'Post to PR' }));
       const group = screen.getByRole('group', { name: /^Post to/ });
 
       expect(group.textContent).toContain(
-        "Posting 1 of 3 findings in one GitHub review, as an inline comment. 1 rejected and 1 undecided won't be posted.",
+        "Posting 1 of 3 findings in one GitHub review, as an inline comment. The other 2 won't be posted.",
       );
       await user.click(within(group).getByRole('button', { name: 'Confirm post' }));
       expect(handlers.onPost).toHaveBeenCalledWith('comment', [1]);
@@ -307,24 +270,24 @@ describe('ReviewResult', () => {
 
     test('says plainly when only the summary will be posted', async () => {
       const user = userEvent.setup();
-      const handlers = renderResult(decidedRun(['rejected', 'rejected']));
+      const handlers = renderResult();
 
       await user.click(screen.getByRole('button', { name: 'Post to PR' }));
       const group = screen.getByRole('group', { name: /^Post to/ });
 
       expect(group.textContent).toContain(
-        "No findings are accepted, so this posts a GitHub review with only the summary. 2 rejected and 1 undecided won't be posted.",
+        'No findings are selected, so this posts a GitHub review with only the summary.',
       );
       await user.click(within(group).getByRole('button', { name: 'Confirm post' }));
       expect(handlers.onPost).toHaveBeenCalledWith('comment', []);
     });
 
-    test('follows decisions made while it is open', async () => {
+    test('follows selections made while it is open', async () => {
       const user = userEvent.setup();
       const handlers = renderResult();
 
       await user.click(screen.getByRole('button', { name: 'Post to PR' }));
-      await user.click(screen.getByRole('button', { name: 'Accept all' }));
+      await user.click(screen.getByRole('button', { name: 'Select all' }));
 
       expect(screen.getByRole('group', { name: /^Post to/ }).textContent).toContain(
         'Posting all 3 findings',

@@ -1755,61 +1755,33 @@ code {
   justify-content: space-between;
 }
 
-.finding--accepted {
+.finding--selected {
   border-color: var(--xp);
   box-shadow: inset 4px 0 0 var(--xp);
 }
 
-.finding--rejected {
-  border-style: dashed;
-  background: var(--panel);
-}
-
-.finding--rejected .finding__location,
-.finding--rejected .finding__body {
-  opacity: 0.55;
-  text-decoration: line-through;
-}
-
-.decisions {
+.selection {
   display: grid;
   gap: 0.4rem;
   margin-top: 0.5rem;
 }
 
-.decisions p {
+.selection p {
   margin: 0;
 }
 
-.decisions__summary {
+.selection__summary {
   font-weight: 600;
 }
 
-.decisions__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.decision-toggle {
-  display: inline-flex;
-  flex-shrink: 0;
-  border: 2px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.decision-toggle .tooltip + .tooltip {
-  border-left: 2px solid var(--border);
-}
-
-.decision-toggle__option {
+.finding-select {
   display: inline-grid;
+  flex-shrink: 0;
   place-items: center;
   width: 2rem;
   height: 2rem;
-  border: 0;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--muted);
   font: inherit;
@@ -1817,29 +1789,19 @@ code {
   cursor: pointer;
 }
 
-.decision-toggle__option:hover:not(:disabled) {
+.finding-select:hover:not(:disabled) {
   background: #313569;
   color: var(--text);
 }
 
-.decision-toggle__option:disabled {
+.finding-select:disabled {
   cursor: not-allowed;
 }
 
-.decision-toggle__option:focus-visible {
-  outline-offset: -3px;
-}
-
-.decision-toggle__option--accepted[aria-pressed='true'] {
+.finding-select[aria-pressed='true'] {
   background: #1f5a33;
   color: var(--xp);
   box-shadow: inset 0 -3px 0 var(--xp);
-}
-
-.decision-toggle__option--rejected[aria-pressed='true'] {
-  background: #5a1f2a;
-  color: var(--danger);
-  box-shadow: inset 0 -3px 0 var(--danger);
 }
 
 .confirm-post {

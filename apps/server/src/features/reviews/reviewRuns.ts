@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Agent, CursorAgentError, type Run, type RunResult, type SDKAgent } from '@cursor/sdk';
 
 import type {
-  FindingDecision,
   Quest,
   ReviewProvider,
   ReviewResult,
@@ -26,7 +25,7 @@ import {
   type PullRequestDiscussion,
   trustedDiscussion,
 } from '@pr-quest/contract/discussion';
-import { findingDecisionsOf } from '@pr-quest/contract/findingDecisions';
+import { selectedFindingIndexes } from '@pr-quest/contract/findingSelection';
 import type { GitHubClient } from '../quests/index.ts';
 import { ApiError } from '../../platform/router.ts';
 import type { AppSettings } from '../settings/index.ts';
@@ -226,14 +225,14 @@ export class ReviewRunService {
   }
 
   /**
-   * Sets the decision on the given findings of a finished run that is still awaiting a decision.
-   * The run is checked when the write applies, so a decision queued before a post claimed the run
-   * is refused rather than landing after the post read the accepted findings.
+   * Selects or clears the given findings of a finished run that is still awaiting a decision. The
+   * run is checked when the write applies, so a selection queued before a post claimed the run is
+   * refused rather than landing after the post read the selected findings.
    */
-  public async decide(
+  public async select(
     id: string,
     findingIndexes: ReadonlyArray<number>,
-    decision: FindingDecision,
+    selected: boolean,
   ): Promise<ReviewRun> {
     let updated: ReviewRun | undefined;
     await this.store.update((state) => {
@@ -243,7 +242,7 @@ export class ReviewRunService {
       }
       const { run } = entry;
       if (run.status !== 'finished' || !run.result) {
-        throw new ApiError(409, 'conflict', 'Only a finished review has findings to decide on');
+        throw new ApiError(409, 'conflict', 'Only a finished review has findings to select');
       }
       if (run.disposition !== 'pending' || this.posting.has(id)) {
         throw new ApiError(
@@ -257,16 +256,23 @@ export class ReviewRunService {
       if (unknown !== undefined) {
         throw new ApiError(400, 'badRequest', `findingIndexes: ${unknown} is out of range`);
       }
-      const findingDecisions = findingDecisionsOf(run);
+      const selection = new Set(selectedFindingIndexes(run));
       for (const index of findingIndexes) {
-        findingDecisions[index] = decision;
+        if (selected) {
+          selection.add(index);
+        } else {
+          selection.delete(index);
+        }
       }
-      const decided: ReviewRun = { ...run, findingDecisions };
-      updated = decided;
+      const selectedRun: ReviewRun = {
+        ...run,
+        selectedFindings: [...selection].sort((a, b) => a - b),
+      };
+      updated = selectedRun;
       return {
         ...state,
         runs: state.runs.map((candidate) =>
-          candidate === entry ? { ...candidate, run: decided } : candidate,
+          candidate === entry ? { ...candidate, run: selectedRun } : candidate,
         ),
       };
     });

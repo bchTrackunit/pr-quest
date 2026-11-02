@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   AchievementDef,
-  FindingDecision,
   GameOutcome,
   PostReviewEvent,
   ReviewRun,
@@ -22,7 +21,7 @@ import {
   fetchRuns,
   fetchSettings,
   postRun,
-  saveFindingDecisions,
+  saveFindingSelection,
   startReview,
 } from '../platform/apiClient.ts';
 import { connectEventStream, type EventStream } from './eventStream.ts';
@@ -72,13 +71,13 @@ export interface GameActions {
    * can show it and stay open; on `headChanged` it also reloads the quests to show the new commit.
    */
   confirmApprove: (questId: string, headSha: string, comment: string) => Promise<void>;
-  /** Saves decisions one request at a time per run, so they reach the server in order. */
-  decideFindings: (
+  /** Saves selections one request at a time per run, so they reach the server in order. */
+  selectFindings: (
     runId: string,
     findingIndexes: Array<number>,
-    decision: FindingDecision,
+    selected: boolean,
   ) => Promise<void>;
-  /** Waits for the run's decisions to be saved, then posts the accepted findings the player confirmed. */
+  /** Waits for the run's selection to be saved, then posts the selected findings the player confirmed. */
   postFindings: (
     runId: string,
     event: PostReviewEvent,
@@ -125,8 +124,8 @@ export function useGameController(): GameController {
     const announcedAchievements = new Set<string>();
     const announcedRuns = new Set<string>();
     const shownXpGains = new Set<string>();
-    /** The latest decision save per run; each new save waits for the one before it. */
-    const decisionSaves = new Map<string, Promise<unknown>>();
+    /** The latest selection save per run; each new save waits for the one before it. */
+    const selectionSaves = new Map<string, Promise<unknown>>();
     /** Bumped on every account change; responses started for an older account are dropped. */
     const account = { generation: 0 };
     const isCurrent = (started: number): boolean => started === account.generation;
@@ -446,27 +445,27 @@ export function useGameController(): GameController {
         });
         applyOutcome(response.outcome);
       },
-      decideFindings: async (runId, findingIndexes, decision) => {
+      selectFindings: async (runId, findingIndexes, selected) => {
         const started = account.generation;
-        const previous = decisionSaves.get(runId) ?? Promise.resolve();
+        const previous = selectionSaves.get(runId) ?? Promise.resolve();
         const save = previous
           .catch(() => undefined)
-          .then(() => saveFindingDecisions(runId, { findingIndexes, decision }));
-        decisionSaves.set(runId, save);
+          .then(() => saveFindingSelection(runId, { findingIndexes, selected }));
+        selectionSaves.set(runId, save);
         try {
           const response = await save;
           if (isCurrent(started)) {
             store.setState((state) => upsertRun(state, response.run));
           }
         } finally {
-          if (decisionSaves.get(runId) === save) {
-            decisionSaves.delete(runId);
+          if (selectionSaves.get(runId) === save) {
+            selectionSaves.delete(runId);
           }
         }
       },
       postFindings: async (runId, event, findingIndexes) => {
         const started = account.generation;
-        await decisionSaves.get(runId)?.catch(() => undefined);
+        await selectionSaves.get(runId)?.catch(() => undefined);
         const response = await postRun(runId, { event, findingIndexes });
         if (!isCurrent(started)) {
           return;
