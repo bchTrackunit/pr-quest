@@ -43,6 +43,12 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           version="$(jq -r .version package.json)"
+          # Checked on dry runs too, so a bad version shows up before anyone tags it.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
+          if [[ ! "$version" =~ $semver ]]; then
+            echo "::error title=Bad version::package.json has version $version. Use major.minor.patch, with an optional prerelease part such as 1.2.0-beta.1."
+            exit 1
+          fi
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
               echo "::error title=Version mismatch::The tag is $GITHUB_REF_NAME, but package.json has version $version. Tag the commit that sets the version, as v$version."
@@ -264,6 +270,12 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
+          # The tag could have been moved or recreated while the builds ran.
+          tagged="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
+          if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+            echo "::error title=Tag moved::$TAG points at $tagged now, but these installers were built from $GITHUB_SHA. Release a new version instead."
+            exit 1
+          fi
           if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [[ "$is_draft" != true ]]; then
               echo "::error title=Already published::The release for $TAG is published already; tag a new version instead."

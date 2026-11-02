@@ -8,9 +8,9 @@ draft by hand.
 
 Pushing a tag that starts with `v` runs these jobs:
 
-1. **Check the version.** The tag must be `v` followed by the `version` in `package.json`, and
-   the tagged commit must be on the default branch. A version with a hyphen, such as
-   `0.2.0-beta.1`, makes a prerelease.
+1. **Check the version.** The `version` in `package.json` must look like `0.2.0`, or
+   `0.2.0-beta.1` for a prerelease; dry runs check this too. The tag must be `v` followed by that
+   version, and the tagged commit must be on the default branch.
 2. **Check.** Type-checks, lints, checks formatting and runs the tests: `just check` without its
    build, since every build job builds anyway.
 3. **Build**, once per platform, each on a runner with that processor: macOS on Apple Silicon
@@ -27,7 +27,8 @@ Pushing a tag that starts with `v` runs these jobs:
    also name the publisher, so the app checks who signed an update before installing it.
 4. **Publish the draft release.** Once every build has passed, one job gathers their files,
    merges the two macOS update files, checks that every update file gives the size and sha512 of
-   the installers it lists, and creates the draft release with all of them. Because only
+   the installers it lists, and creates the draft release with all of them. It stops if the tag
+   no longer points at the commit the installers were built from. Because only
    this job creates the release, parallel builds can't create duplicate releases. Re-running it
    uploads to the same draft again, replacing its files.
 
@@ -252,7 +253,8 @@ installers. Updates still install. A signed installer can still get a SmartScree
 while, until enough people have installed it for SmartScreen to trust it.
 
 **Linux.** Nothing is signed. The AppImage runs once it's made executable, and the `deb`
-installs with `sudo apt install ./pr-quest-<version>-<arch>.deb`. The AppImage updates itself.
+installs with `sudo apt install ./pr-quest-<version>-linux-<arch>.deb`, where `<arch>` is
+`amd64` or `arm64`. The AppImage updates itself.
 An app installed from the `deb` never does, since electron-updater would install the new package
 as root with only a checksum from the same release to trust; its **Help** menu opens the latest
 release instead, and the user installs the new `deb` the same way.
