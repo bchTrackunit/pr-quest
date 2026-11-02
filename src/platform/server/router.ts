@@ -76,6 +76,11 @@ export interface RawRoute {
    * GET route can be cross-site, and only in hosted mode.
    */
   crossSite?: boolean;
+  /**
+   * Answered without `RouterOptions.requestSecret`, for the route that hands it out to a window
+   * that can't set cookies itself (see bootstrap.ts). Only a GET that isn't cross-site can skip it.
+   */
+  skipsRequestSecret?: boolean;
   handle: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 }
 
@@ -233,6 +238,11 @@ function compileRawRoutes(routes: ReadonlyArray<RawRoute>): ReadonlyMap<string, 
         `Raw route ${key} can't be cross-site: only a GET may come from another site`,
       );
     }
+    if (route.skipsRequestSecret && (route.method !== 'GET' || route.crossSite)) {
+      throw new Error(
+        `Raw route ${key} can't skip the request secret: only a GET that isn't cross-site may`,
+      );
+    }
     compiled.set(key, route);
   }
   return compiled;
@@ -246,10 +256,10 @@ async function handle(
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const method = req.method ?? 'GET';
   const isHealthCheck = method === 'GET' && url.pathname === API_ROUTES.health.path;
-  if (secret && !isHealthCheck && !carriesSecret(req, secret)) {
+  const raw = rawRoutes.get(rawRouteKey(method, url.pathname));
+  if (secret && !isHealthCheck && !raw?.skipsRequestSecret && !carriesSecret(req, secret)) {
     throw new ApiError(403, 'forbidden', 'This server answers only the app that started it');
   }
-  const raw = rawRoutes.get(rawRouteKey(method, url.pathname));
   if (raw) {
     if (raw.crossSite) {
       assertTrustedHost(req, trust.allowedHosts);

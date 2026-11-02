@@ -7,6 +7,7 @@ import { type AppConfig, loadConfig } from '../../platform/server/config.ts';
 import type { SecretName, SecretStore } from '../../platform/server/secrets.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from '../../platform/server/test-utils/config.ts';
 import {
+  BOOTSTRAP_PATH,
   type IdentityFactory,
   MACHINE_SCOPE,
   REQUEST_SECRET_COOKIE,
@@ -110,6 +111,34 @@ describe('startServer', () => {
     expect(without.status).toBe(403);
     expect(withSecret.status).toBe(200);
     expect(health.status).toBe(200);
+  });
+
+  test('hands the request secret to whoever opens the bootstrap link first', async () => {
+    const requestSecret = 'r'.repeat(43);
+    const bootstrapCode = 'b'.repeat(43);
+    const server = await start(LOCAL_CONFIG, { requestSecret, bootstrapCode });
+    const link = `${server.url}${BOOTSTRAP_PATH}?code=${bootstrapCode}`;
+
+    const first = await fetch(link, { redirect: 'manual' });
+    const second = await fetch(link, { redirect: 'manual' });
+    const cookie = first.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
+
+    expect(first.status).toBe(303);
+    expect(second.status).toBe(403);
+    expect(cookie).toBe(`${REQUEST_SECRET_COOKIE}=${requestSecret}`);
+    expect(
+      (await fetch(`${server.url}/api/settings`, { headers: { Cookie: cookie } })).status,
+    ).toBe(200);
+    expect(logs.join('\n')).not.toContain(bootstrapCode);
+  });
+
+  test('takes a bootstrap code only in local mode with a request secret', async () => {
+    const bootstrapCode = 'b'.repeat(43);
+
+    await expect(start(LOCAL_CONFIG, { bootstrapCode })).rejects.toThrow(/request secret/);
+    await expect(
+      start(HOSTED_CONFIG, { bootstrapCode, requestSecret: 'r'.repeat(43) }),
+    ).rejects.toThrow(/local mode/);
   });
 
   test('serves the built UI from the static directory', async () => {
