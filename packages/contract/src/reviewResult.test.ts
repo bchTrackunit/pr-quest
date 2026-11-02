@@ -89,6 +89,51 @@ describe('parseReviewResult', () => {
     });
   });
 
+  test('keeps a suggestion exactly as written apart from a trailing newline', () => {
+    const parsed = parseReviewResult(
+      fence({
+        ...valid,
+        findings: [
+          {
+            file: 'a.ts',
+            line: 12,
+            startLine: '10',
+            severity: 'minor',
+            body: 'b',
+            suggestion: '    if (x) {\r\n      y();\r\n    }\n',
+          },
+        ],
+      }),
+    );
+
+    expect(parsed.ok && parsed.result.findings[0]).toEqual({
+      file: 'a.ts',
+      line: 12,
+      startLine: 10,
+      severity: 'minor',
+      body: 'b',
+      suggestion: '    if (x) {\n      y();\n    }',
+    });
+  });
+
+  test.each([
+    ['a blank suggestion', { line: 3, suggestion: '  \n' }],
+    ['a suggestion that is not a string', { line: 3, suggestion: null }],
+    [
+      'a start line after the line, with its suggestion',
+      { line: 3, startLine: 5, suggestion: 'x' },
+    ],
+    ['a start line without a line', { startLine: 2 }],
+  ])('drops %s', (_name, extra) => {
+    const parsed = parseReviewResult(
+      fence({ ...valid, findings: [{ file: 'a.ts', severity: 'nit', body: 'b', ...extra }] }),
+    );
+
+    const finding = parsed.ok ? parsed.result.findings[0] : undefined;
+    expect(finding).not.toHaveProperty('suggestion');
+    expect(finding).not.toHaveProperty('startLine');
+  });
+
   test('rejects an unknown verdict with a reason', () => {
     const parsed = parseReviewResult(fence({ ...valid, verdict: 'merge it' }));
 

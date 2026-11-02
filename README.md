@@ -141,8 +141,10 @@ findings:
 
 No finding starts selected. Tick the ones worth posting, or use **Select all** and **Clear**.
 **Post to PR** posts one GitHub review, as a comment or a change request, with the summary and the
-selected findings as inline comments on the commit that was reviewed. The rest are never posted.
-With nothing selected, you can still post the summary on its own. Selecting earns no XP.
+selected findings as inline comments on the commit that was reviewed. When the reviewer wrote
+replacement code, the comment is a suggested change the author can apply in one click. A finding
+without a line goes on its file; findings are never listed in the review body. The rest are never
+posted. With nothing selected, you can still post the summary on its own. Selecting earns no XP.
 `@mentions` in the reviewer's text are escaped, so posting never pings anyone.
 
 The reviewer's verdict is only advice. **Approve** is a separate action with its own

@@ -11,6 +11,7 @@ import {
   parseQuestId,
   type QuestRef,
   type ReviewDraft,
+  ReviewNotPostedError,
 } from '../features/quests/index.ts';
 import { GitHubApiError, NotSignedInError } from '../platform/githubApi.ts';
 import type { ReviewRunService } from '../features/reviews/index.ts';
@@ -73,6 +74,9 @@ async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResul
     }
     if (error instanceof NotSignedInError) {
       throw new ApiError(401, 'notSignedIn', error.message);
+    }
+    if (error instanceof ReviewNotPostedError) {
+      throw new ApiError(409, 'conflict', error.message);
     }
     if (error instanceof GitHubApiError && error.httpStatus === 401) {
       throw new ApiError(

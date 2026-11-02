@@ -57,8 +57,8 @@ what it reviews. The repo is always the base repo; the prompt has the agent chec
 - reviews only `git diff origin/<target>...HEAD` at that commit, reading other code for context;
 - is told never to commit, push, create branches, open or update a PR, approve or comment;
 - is told not to repeat what the PR's [existing comments](#existing-comments) already raise;
-- returns a JSON report (`summary`, an advisory `verdict`, `findings` with file, line, severity
-  and body, and `reviewedSha`), which the server validates. If `reviewedSha` isn't the commit the
+- returns a JSON report (`summary`, an advisory `verdict`, `findings` with file, line, severity,
+  body and an optional suggested replacement, and `reviewedSha`), which the server validates. If `reviewedSha` isn't the commit the
   agent was sent to, the run fails rather than offer findings whose line numbers may be wrong.
 
 ### Which PRs it reviews
@@ -163,15 +163,35 @@ through the live updates stream. Once a run is posted, its selection can't chang
 earns no XP and costs none.
 
 **Posting.** The confirmation says what will go out, for example "Posting 3 of 6 findings in one
-GitHub review: 2 as inline comments and 1 in the review body." With nothing selected, it says the
-review will hold only the summary, and you can still post it. It always starts at **Comment**;
-when the reviewer suggests requesting changes, it says so but never picks it for you. The server
-doesn't trust the page: the post request names the findings you confirmed, and the server refuses
-with `409` if they differ from its saved selection, for example because another tab changed it.
-The review is anchored to the commit that was reviewed. If GitHub rejects the inline line numbers,
-the findings go in the review body instead. The footer names the provider and model, and `@user`
-or `@org/team` in the reviewer's text is wrapped in backticks so nobody is pinged. Posting earns
-the same XP however many findings it includes.
+GitHub review: 2 as inline comments and 1 as a comment on its file." With nothing selected, it
+says the review will hold only the summary, and you can still post it. It always starts at
+**Comment**; when the reviewer suggests requesting changes, it says so but never picks it for you.
+The server doesn't trust the page: the post request names the findings you confirmed, and the
+server refuses with `409` if they differ from its saved selection, for example because another tab
+changed it. The footer names the provider and model, and `@user` or `@org/team` in the reviewer's
+text is wrapped in backticks so nobody is pinged. Posting earns the same XP however many findings
+it includes.
+
+**Where findings go.** Findings are always comments, never part of the review body, which holds
+only the summary, the advisory verdict and the omitted files. The review is anchored to the commit
+that was reviewed:
+
+- A finding with a line is an inline comment on it. When the reviewer wrote replacement code
+  (`suggestion`, optionally over `startLine` to `line`), the comment carries a GitHub suggested
+  change.
+- A finding without a line is a comment on its file. GitHub's REST API can't add those to a review,
+  so PR Quest creates the review pending, adds them with GraphQL's `addPullRequestReviewThread`,
+  then submits it.
+- GitHub refuses a whole review if one line is outside the diff. PR Quest then starts the review
+  pending and empty and adds each finding on its own; only a finding whose line is refused moves
+  to its file, with the line named in the comment and any suggestion shown as plain code.
+- If GitHub won't take a finding even on its file, usually because the file isn't part of the PR,
+  PR Quest deletes the pending review, posts nothing and answers `409` naming the file, so you can
+  deselect it and post again.
+
+When every finding has a line GitHub accepts, the review goes out in one request. GitHub allows one
+pending review per person and PR, so if you have one open in GitHub's own UI, PR Quest posts
+nothing and asks you to submit or discard it first.
 
 **Approving.** The dialog names the PR and the short head commit you're approving. The server
 reads the PR's current head first; if new commits were pushed, it approves nothing and answers
