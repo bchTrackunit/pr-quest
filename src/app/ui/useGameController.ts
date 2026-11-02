@@ -20,6 +20,7 @@ import {
   fetchPlayer,
   fetchQuests,
   fetchRuns,
+  fetchSettings,
   postRun,
   saveFindingDecisions,
   startReview,
@@ -278,9 +279,31 @@ export function useGameController(): GameController {
         });
     };
 
+    /** Bumped per settings read, so an older response can't overwrite the provider a newer one read. */
+    const providerReads = { latest: 0 };
+
+    /** Lets quest cards say up front which quests the Cursor agent refuses; the server still checks. */
+    const loadReviewProvider = (signal?: AbortSignal): void => {
+      providerReads.latest += 1;
+      const read = providerReads.latest;
+      fetchSettings(signal)
+        .then((response) => {
+          if (read !== providerReads.latest) {
+            return;
+          }
+          store.setState((state) =>
+            state.reviewProvider === response.reviewProvider
+              ? state
+              : { ...state, reviewProvider: response.reviewProvider },
+          );
+        })
+        .catch(() => undefined);
+    };
+
     /** `replaceRuns` drops runs the server no longer lists, e.g. another player's. */
     const loadSideData = (signal?: AbortSignal, options: { replaceRuns?: boolean } = {}): void => {
       const started = account.generation;
+      loadReviewProvider(signal);
       fetchRuns(signal)
         .then((response) => {
           if (isCurrent(started)) {
@@ -467,7 +490,10 @@ export function useGameController(): GameController {
       },
       openSettings: (target = { section: 'github' }) =>
         store.setState((state) => ({ ...state, settings: target })),
-      closeSettings: () => store.setState((state) => ({ ...state, settings: undefined })),
+      closeSettings: () => {
+        store.setState((state) => ({ ...state, settings: undefined }));
+        loadReviewProvider();
+      },
       dismissToast: (toastId) =>
         store.setState((state) => ({
           ...state,

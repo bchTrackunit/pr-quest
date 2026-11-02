@@ -8,6 +8,7 @@ import type {
   QuestSource,
   RateLimitStatus,
   ReviewFinding,
+  ReviewProvider,
   ReviewRun,
   ServerEvent,
   XpReason,
@@ -75,6 +76,8 @@ export interface GameState {
   approveQuestId?: string;
   /** The settings popup is open at this section. */
   settings?: SettingsTarget;
+  /** The review provider chosen in the settings; unknown until they load. */
+  reviewProvider?: ReviewProvider;
   soundEnabled: boolean;
   notificationsEnabled: boolean;
   notificationAccess: NotificationAccess;
@@ -132,14 +135,15 @@ export function replaceRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): G
 
 /**
  * After signing in or out the server serves another player's game, so everything that belonged
- * to the previous one goes. The connection, sound and notification choices and an open settings
- * popup stay.
+ * to the previous one goes. The connection, sound and notification choices, the review provider
+ * and an open settings popup stay.
  */
 export function resetForAccountChange(state: GameState): GameState {
   return {
     ...createInitialGameState(state.notificationAccess),
     connection: state.connection,
     settings: state.settings,
+    reviewProvider: state.reviewProvider,
     soundEnabled: state.soundEnabled,
     notificationsEnabled: state.notificationsEnabled,
   };

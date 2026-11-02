@@ -1425,7 +1425,8 @@ code {
   color: #ffd5d9;
 }
 
-.quest__error {
+.quest__error,
+.quest__blocked {
   display: grid;
   gap: 0.5rem;
   justify-items: start;

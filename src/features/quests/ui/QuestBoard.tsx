@@ -5,6 +5,7 @@ import type {
   QuestSource,
   RateLimitStatus,
   RequestKind,
+  ReviewProvider,
   ReviewRun,
 } from '../../../shared/api.ts';
 import { formatAgo, formatClock, formatElapsed } from '../../../platform/ui/format.ts';
@@ -39,6 +40,7 @@ export interface QuestBoardProps {
   source?: QuestSource;
   stale?: boolean;
   rateLimit?: RateLimitStatus;
+  reviewProvider?: ReviewProvider;
   questActions: Record<string, QuestAction>;
   questActionErrors: Record<string, QuestActionError>;
   onClickRefresh: MouseEventHandler<HTMLButtonElement>;
@@ -71,6 +73,7 @@ export const QuestBoard = ({
   source = undefined,
   stale = false,
   rateLimit = undefined,
+  reviewProvider = undefined,
   questActions,
   questActionErrors,
   onClickRefresh,
@@ -126,6 +129,7 @@ export const QuestBoard = ({
             onClickSendAgent={onClickSendAgent}
             pendingAction={questActions[quest.id]}
             quest={quest}
+            reviewProvider={reviewProvider}
             run={runFor(quest)}
           />
         </li>

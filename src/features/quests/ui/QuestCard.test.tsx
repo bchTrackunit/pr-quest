@@ -119,6 +119,110 @@ describe('QuestCard', () => {
     expect(onClickOpenSettings).toHaveBeenCalledWith({ section: 'keys', key: 'cursor' });
   });
 
+  describe('a quest by an author the Cursor agent refuses', () => {
+    const outsider = makeQuest({ authorAssociation: 'NONE', isCrossRepository: false });
+
+    test('disables sending the agent on a quest it refuses, and says why', () => {
+      render(
+        <QuestCard
+          now={NOW}
+          onClickApprove={vi.fn()}
+          onClickOpenResult={vi.fn()}
+          onClickSendAgent={vi.fn()}
+          quest={outsider}
+          reviewProvider="cursor"
+        />,
+      );
+
+      const send = screen.getByRole('button', { name: 'Send review agent' });
+      expect(send).toHaveProperty('disabled', true);
+      expect(
+        document.getElementById(send.getAttribute('aria-describedby') ?? '')?.textContent,
+      ).toContain("outside the repo's org and collaborators (NONE)");
+    });
+
+    test('disables Retry on a failed run, and says why', () => {
+      render(
+        <QuestCard
+          now={NOW}
+          onClickApprove={vi.fn()}
+          onClickOpenResult={vi.fn()}
+          onClickSendAgent={vi.fn()}
+          quest={outsider}
+          reviewProvider="cursor"
+          run={makeRun({ provider: 'claude', status: 'error', error: { message: 'Overloaded' } })}
+        />,
+      );
+
+      const retry = screen.getByRole('button', { name: 'Retry' });
+      expect(retry).toHaveProperty('disabled', true);
+      expect(
+        document.getElementById(retry.getAttribute('aria-describedby') ?? '')?.textContent,
+      ).toContain('Review it with Claude instead');
+    });
+
+    test('says nothing about the provider while a run is on its way', () => {
+      render(
+        <QuestCard
+          now={NOW}
+          onClickApprove={vi.fn()}
+          onClickOpenResult={vi.fn()}
+          onClickSendAgent={vi.fn()}
+          quest={outsider}
+          reviewProvider="cursor"
+          run={makeRun({ provider: 'claude', status: 'running' })}
+        />,
+      );
+
+      expect(screen.queryByText(/Review it with Claude instead/)).toBeNull();
+    });
+
+    test('offers to switch the review provider from a refused quest', async () => {
+      const user = userEvent.setup();
+      const onClickOpenSettings = vi.fn();
+      render(
+        <QuestCard
+          now={NOW}
+          onClickApprove={vi.fn()}
+          onClickOpenResult={vi.fn()}
+          onClickOpenSettings={onClickOpenSettings}
+          onClickSendAgent={vi.fn()}
+          quest={outsider}
+          reviewProvider="cursor"
+        />,
+      );
+
+      await user.click(screen.getByRole('button', { name: /Choose the review provider/ }));
+      expect(onClickOpenSettings).toHaveBeenCalledWith({ section: 'provider' });
+    });
+
+    test.each([
+      {
+        provider: 'cursor',
+        by: 'Dependabot',
+        quest: { author: { name: 'dependabot', githubLogin: 'dependabot[bot]' } },
+      },
+      { provider: 'claude', by: 'an outside contributor', quest: {} },
+    ] as const)('sends the $provider agent on a PR by $by', async ({ provider, quest }) => {
+      const user = userEvent.setup();
+      const onClickSendAgent = vi.fn();
+      render(
+        <QuestCard
+          now={NOW}
+          onClickApprove={vi.fn()}
+          onClickOpenResult={vi.fn()}
+          onClickSendAgent={onClickSendAgent}
+          quest={{ ...outsider, ...quest }}
+          reviewProvider={provider}
+        />,
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+      expect(onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
+      expect(screen.queryByText(/Review it with Claude instead/)).toBeNull();
+    });
+  });
+
   test('shows the error as static text, not an alert, and retries a failed run', async () => {
     const user = userEvent.setup();
     const handlers = renderCard(

@@ -79,6 +79,7 @@ export const App = () => {
           questActions={state.questActions}
           quests={state.quests}
           rateLimit={state.questsRateLimit}
+          reviewProvider={state.reviewProvider}
           runs={state.runs}
           source={state.questSource}
           stale={state.questsStale}
