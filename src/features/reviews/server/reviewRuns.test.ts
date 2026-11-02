@@ -264,6 +264,54 @@ describe('ReviewRunService.start', () => {
     },
   );
 
+  test.each(['dependabot[bot]', 'renovate[bot]', 'Dependabot[bot]'])(
+    'starts a Cursor review of a PR by the trusted bot %s, which GitHub calls NONE',
+    async (githubLogin) => {
+      fakeAgent();
+      const runs = service();
+
+      await expect(
+        runs.start({
+          ...quest,
+          author: { name: githubLogin, githubLogin },
+          authorAssociation: 'NONE',
+          sourceBranch: 'dependabot/npm_and_yarn/team-gluon-react-6a1b2c3d4e',
+        }),
+      ).resolves.toMatchObject({ status: 'queued' });
+      await runs.whenIdle();
+    },
+  );
+
+  test.each(['dependabot', 'dependabot-bot', 'evil[bot]'])(
+    'refuses a Cursor review of a PR by %s, which is not a trusted bot',
+    async (githubLogin) => {
+      fakeAgent();
+
+      await expect(
+        service().start({
+          ...quest,
+          author: { name: 'dependabot[bot]', githubLogin },
+          authorAssociation: 'NONE',
+        }),
+      ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('NONE') });
+      expect(createMock).not.toHaveBeenCalled();
+    },
+  );
+
+  test('refuses a Cursor review of a trusted bot PR from a fork', async () => {
+    fakeAgent();
+
+    await expect(
+      service().start({
+        ...quest,
+        author: { name: 'dependabot[bot]', githubLogin: 'dependabot[bot]' },
+        authorAssociation: 'NONE',
+        isCrossRepository: true,
+      }),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('fork') });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   test('refuses a Cursor review of a PR from a fork, even by a member', async () => {
     fakeAgent();
 

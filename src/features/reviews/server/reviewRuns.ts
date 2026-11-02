@@ -18,11 +18,8 @@ import {
   type StateStore,
   type StoredRun,
 } from '../../game/server/index.ts';
-import {
-  buildReviewPrompt,
-  isPromptSafeBranch,
-  parseReviewResult,
-} from '../../../shared/reviewResult.ts';
+import { buildReviewPrompt, parseReviewResult } from '../../../shared/reviewResult.ts';
+import { cursorReviewBlocker } from '../../../shared/cursorReview.ts';
 import { findingDecisionsOf } from '../../../shared/findingDecisions.ts';
 import { ApiError } from '../../../platform/server/router.ts';
 import type { AppSettings } from '../../settings/server/index.ts';
@@ -30,15 +27,6 @@ import type { AppSettings } from '../../settings/server/index.ts';
 const ACTIVE_STATUSES: ReadonlyArray<ReviewRunStatus> = ['queued', 'running'];
 const MAX_STORED_RUNS = 200;
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
-/**
- * Roles GitHub gives people in the repo's org or invited to it. None of them implies write access,
- * which only a head branch in the base repo shows, so the Cursor agent also needs one of those.
- */
-const TRUSTED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
-  'OWNER',
-  'MEMBER',
-  'COLLABORATOR',
-]);
 
 export type { ClaudeRunner };
 
@@ -530,41 +518,10 @@ export class ReviewRunService {
   }
 }
 
-/**
- * The Cursor agent runs PR content in the repo with the player's Cursor GitHub integration, and
- * only its prompt stops it from pushing, so it reviews only PRs pushed to the base repo by its
- * org's members or collaborators, on branches whose names are safe in the commands its prompt
- * contains. Claude can't act, so it reviews anything.
- */
 function assertCursorMayReview(quest: Quest): void {
-  const association = quest.authorAssociation;
-  if (!association || quest.isCrossRepository === undefined) {
-    throw new ApiError(
-      409,
-      'conflict',
-      `PR Quest doesn't know who could push ${quest.id}'s branch yet. Refresh the board, then send the agent again.`,
-    );
-  }
-  if (!TRUSTED_AUTHOR_ASSOCIATIONS.has(association)) {
-    throw new ApiError(
-      409,
-      'conflict',
-      `${quest.id} is by an author outside the repo's org and collaborators (${association}), and its content could steer the Cursor agent. Review it with Claude instead.`,
-    );
-  }
-  if (quest.isCrossRepository) {
-    throw new ApiError(
-      409,
-      'conflict',
-      `${quest.id} comes from a fork, so its author may not be able to push to the repo, and its content could steer the Cursor agent. Review it with Claude instead.`,
-    );
-  }
-  if (!isPromptSafeBranch(quest.sourceBranch) || !isPromptSafeBranch(quest.targetBranch)) {
-    throw new ApiError(
-      409,
-      'conflict',
-      `${quest.id} has a branch name the Cursor agent can't use safely in a command. Review it with Claude instead.`,
-    );
+  const blocker = cursorReviewBlocker(quest);
+  if (blocker) {
+    throw new ApiError(409, 'conflict', blocker);
   }
 }
 
