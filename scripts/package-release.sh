@@ -54,8 +54,17 @@ require_all() {
   fi
 }
 
+# true, 1 or yes in any case turns it on; anything else that isn't empty is a mistake to stop on,
+# since reading it as off would ship unsigned builds.
+require_signing=false
+case "$(printf '%s' "${REQUIRE_SIGNING:-}" | tr '[:upper:]' '[:lower:]')" in
+  true | 1 | yes) require_signing=true ;;
+  '') ;;
+  *) fail "REQUIRE_SIGNING is \"$REQUIRE_SIGNING\". Set it to true to require signing, or delete it." ;;
+esac
+
 unsigned() {
-  if [[ "${REQUIRE_SIGNING:-}" == true ]]; then
+  if [[ "$require_signing" == true ]]; then
     fail "$1 REQUIRE_SIGNING is true, so the build stops instead of shipping it unsigned."
   fi
   echo "::warning title=Unsigned build::$1"

@@ -97,13 +97,27 @@ describe.skipIf(process.platform === 'win32')('package-release.sh', () => {
       expect(result.output).toBe('signed=false\n');
     });
 
-    test('stops an unsigned build when REQUIRE_SIGNING is true', () => {
-      const result = run('Darwin', { REQUIRE_SIGNING: 'true' });
+    test.each(['true', 'TRUE', '1', 'yes', 'Yes'])(
+      'stops an unsigned build when REQUIRE_SIGNING is %s',
+      (value) => {
+        const result = run('Darwin', { REQUIRE_SIGNING: value });
 
-      expect(result.status).toBe(1);
-      expect(result.packaged).toBe(false);
-      expect(result.stdout).toContain('REQUIRE_SIGNING');
-    });
+        expect(result.status).toBe(1);
+        expect(result.packaged).toBe(false);
+        expect(result.stdout).toContain('so the build stops instead of shipping it unsigned');
+      },
+    );
+
+    test.each(['false', 'on', 'ture'])(
+      'stops when REQUIRE_SIGNING is %s, rather than guessing what it means',
+      (value) => {
+        const result = run('Darwin', { ...macCertificate, ...macApiKey, REQUIRE_SIGNING: value });
+
+        expect(result.status).toBe(1);
+        expect(result.packaged).toBe(false);
+        expect(result.stdout).toContain(`REQUIRE_SIGNING is "${value}"`);
+      },
+    );
 
     test('signs and notarizes with the API key, removing the key file afterwards', () => {
       const result = run('Darwin', { ...macCertificate, ...macApiKey, REQUIRE_SIGNING: 'true' });

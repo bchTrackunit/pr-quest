@@ -98,7 +98,8 @@ something half-signed, and so it does when both ways to notarize, or both ways t
 Windows, are set.
 
 Once you have released a signed version, set the repository **variable** `REQUIRE_SIGNING` to
-`true`. A tag build then stops when macOS or Windows would be unsigned, for example because a
+`true` (`1` and `yes` work too, in any case; any other value stops the build rather than being
+read as off). A tag build then stops when macOS or Windows would be unsigned, for example because a
 secret was deleted or expired. Users of a signed version couldn't update to it: macOS installs an
 update only when it's signed by the same developer, and a signed Windows app refuses an update
 that its publisher didn't sign. Dry runs are always unsigned and ignore it.
