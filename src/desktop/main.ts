@@ -24,7 +24,7 @@ import { LATEST_RELEASE_URL, README_URL, RELEASE_REPO } from './release.ts';
 import { secretsNotice } from './secretsNotice.ts';
 import {
   prepareUpdater,
-  scheduleUpdateChecks,
+  startUpdateChecks,
   updatesEnabled,
   updateSource,
   type UpdateSource,
@@ -182,9 +182,11 @@ function run(): void {
       if (updates === 'download') {
         log.info(`this install doesn't update itself; new versions are at ${LATEST_RELEASE_URL}`);
       } else if (updates !== undefined) {
-        const updater = prepareUpdater(openUpdater(updates));
-        updater.logger = { info: log.info, warn: log.warn, error: log.warn };
-        stopUpdates = scheduleUpdateChecks(updater, log);
+        stopUpdates = startUpdateChecks(() => {
+          const updater = openUpdater(updates);
+          updater.logger = { info: log.info, warn: log.warn, error: log.warn };
+          return updater;
+        }, log);
       }
     })
     .catch((error: unknown) => {
@@ -360,7 +362,20 @@ async function runSmokeTestAndExit(
   log.info(
     `smoke test window: ${window.webContents.isLoading() ? 'still loading' : 'loaded'} ${window.webContents.getURL()}, ${window.isVisible() ? 'visible' : 'hidden'}`,
   );
-  const ok = await runSmokeTest(window, server.url, cspViolations);
+  const ok = await runSmokeTest(window, server.url, cspViolations, [
+    {
+      // The smoke test turns update checks off, so this sets up the updater a release would use
+      // without checking.
+      name: 'updater',
+      run: () => {
+        const source = updateSource({ platform: process.platform, env: process.env });
+        if (source === 'download') {
+          return Promise.resolve("this install doesn't update itself");
+        }
+        return Promise.resolve(`${prepareUpdater(openUpdater(source)).constructor.name} is set up`);
+      },
+    },
+  ]);
   // A page that never finished loading keeps its connection open, and closing waits for it.
   await Promise.race([server.close(), delay(CLOSE_TIMEOUT_MS)]);
   await log.close();

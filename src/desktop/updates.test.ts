@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from 'vitest';
 
 import {
   prepareUpdater,
+  type Updater,
   scheduleUpdateChecks,
+  startUpdateChecks,
   UPDATE_CHECK_INTERVAL_MS,
   updatesEnabled,
   updateSource,
@@ -67,9 +69,13 @@ describe('updateSource', () => {
   });
 });
 
-describe('prepareUpdater', () => {
-  const fresh = () => ({ checkForUpdatesAndNotify: vi.fn(), allowDowngrade: false, channel: null });
+const fresh = (): Updater & { checkForUpdatesAndNotify: Mock } => ({
+  checkForUpdatesAndNotify: vi.fn().mockResolvedValue(null),
+  allowDowngrade: false,
+  channel: null,
+});
 
+describe('prepareUpdater', () => {
   test('never lets a release install an older version', () => {
     const updater = { ...fresh(), allowDowngrade: true };
 
@@ -80,6 +86,39 @@ describe('prepareUpdater', () => {
   test('refuses an updater set to a channel, which would allow downgrades again', () => {
     expect(() => prepareUpdater({ ...fresh(), channel: 'beta' })).toThrow(/channel/);
   });
+});
+
+describe('startUpdateChecks', () => {
+  test('checks with the updater it opens, never allowing downgrades', () => {
+    const updater = { ...fresh(), allowDowngrade: true };
+
+    const stop = startUpdateChecks(() => updater, { warn: vi.fn() });
+
+    expect(updater.allowDowngrade).toBe(false);
+    expect(updater.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    stop?.();
+  });
+
+  test.each([
+    [
+      'opening the updater fails',
+      () => {
+        throw new Error('Cannot find module electron-updater');
+      },
+      'electron-updater',
+    ],
+    ['the updater is set to a channel', () => ({ ...fresh(), channel: 'beta' }), 'channel'],
+  ])(
+    'leaves updates off with a warning when %s, so the app keeps running',
+    (_case, open, message) => {
+      const warn = vi.fn();
+
+      const stop = startUpdateChecks(open, { warn });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(message));
+      expect(stop).toBeUndefined();
+    },
+  );
 });
 
 describe('scheduleUpdateChecks', () => {
@@ -95,6 +134,25 @@ describe('scheduleUpdateChecks', () => {
     stop();
     await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 2);
     expect(updater.checkForUpdatesAndNotify).toHaveBeenCalledTimes(2);
+  });
+
+  test('reports a check that throws at once and keeps checking', async () => {
+    const updater = {
+      checkForUpdatesAndNotify: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('no app-update.yml');
+        })
+        .mockResolvedValue(null),
+    };
+    const warn = vi.fn();
+
+    const stop = scheduleUpdateChecks(updater, { warn });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('no app-update.yml'));
+
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS);
+    expect(updater.checkForUpdatesAndNotify).toHaveBeenCalledTimes(2);
+    stop();
   });
 
   test('reports a failed check and keeps checking', async () => {

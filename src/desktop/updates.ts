@@ -74,6 +74,23 @@ export function updatesEnabled(options: UpdatesEnabledOptions): boolean {
 }
 
 /**
+ * Opens the updater and schedules its checks, or leaves updates off with a warning when that
+ * fails: the window is open by then, and a broken updater mustn't close the app. Returns a stop
+ * function while checks run.
+ */
+export function startUpdateChecks(
+  openUpdater: () => Updater,
+  log: { warn: (message: string) => void },
+): (() => void) | undefined {
+  try {
+    return scheduleUpdateChecks(prepareUpdater(openUpdater()), log);
+  } catch (error) {
+    log.warn(`updates are off: ${describe(error)}`);
+    return undefined;
+  }
+}
+
+/**
  * Checks GitHub Releases now and every few hours. electron-updater downloads a newer version in
  * the background, shows a notification and installs it when the app quits. Returns a stop function.
  */
@@ -81,14 +98,23 @@ export function scheduleUpdateChecks(
   updater: Pick<Updater, 'checkForUpdatesAndNotify'>,
   log: { warn: (message: string) => void },
 ): () => void {
+  const failed = (error: unknown): void => {
+    log.warn(`update check failed: ${describe(error)}`);
+  };
   const check = (): void => {
-    updater.checkForUpdatesAndNotify().catch((error: unknown) => {
-      log.warn(`update check failed: ${error instanceof Error ? error.message : inspect(error)}`);
-    });
+    try {
+      updater.checkForUpdatesAndNotify().catch(failed);
+    } catch (error) {
+      failed(error);
+    }
   };
   check();
   const timer = setInterval(check, UPDATE_CHECK_INTERVAL_MS);
   return () => {
     clearInterval(timer);
   };
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : inspect(error);
 }

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-interface Check {
+export interface SmokeCheck {
   name: string;
   run: () => Promise<string>;
 }
@@ -23,8 +23,9 @@ export async function runSmokeTest(
   window: BrowserWindow,
   url: string,
   cspViolations: ReadonlyArray<string>,
+  moreChecks: ReadonlyArray<SmokeCheck> = [],
 ): Promise<boolean> {
-  const checks: Array<Check> = [
+  const checks: Array<SmokeCheck> = [
     {
       name: 'health',
       run: async () => {
@@ -128,6 +129,7 @@ export async function runSmokeTest(
         return `models.list: ${await authFailure(client.models.list(), AuthenticationError)}`;
       },
     },
+    ...moreChecks,
   ];
 
   let ok = true;
