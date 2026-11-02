@@ -56,6 +56,15 @@ describe('board view persistence', () => {
     expect(loadView(storage)).toEqual(VIEW);
   });
 
+  test('round-trips a sort by creation time', () => {
+    const storage = memoryStorage();
+    const view: BoardView = { ...VIEW, sort: { mode: 'created', direction: 'desc' } };
+
+    saveView(storage, view);
+
+    expect(loadView(storage)).toEqual(view);
+  });
+
   test.each([
     ['nothing stored', undefined],
     ['invalid JSON', '{nope'],
