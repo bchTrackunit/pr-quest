@@ -3,7 +3,8 @@
  * installed app, or nothing. electron-builder writes the file as flat YAML: one top-level key per
  * line, and `publisherName` as a list of `- ` items below its key.
  *
- * - A `channel` makes electron-updater allow downgrades.
+ * - A `channel` makes the app look for that channel's update files, such as `beta-mac.yml`, while
+ *   releases publish only the `latest` ones.
  * - A signed Windows build must name its publisher, or the updater installs an update without
  *   checking who signed it.
  */
@@ -14,7 +15,9 @@ export function updateConfigProblems(text: string, options: { signed: boolean })
     problems.push('it names no provider, so no updater can use it');
   }
   if (values.has('channel')) {
-    problems.push('it sets a channel, which lets the updater install older versions');
+    problems.push(
+      "it sets a channel, so the app would look for that channel's update files, which releases don't publish",
+    );
   }
   if (options.signed && (values.get('publisherName') ?? []).length === 0) {
     problems.push(

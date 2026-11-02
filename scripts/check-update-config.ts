@@ -1,5 +1,5 @@
 /*
- * Fails when a packaged app's app-update.yml would let the updater install an older version, or,
+ * Fails when a packaged app's app-update.yml names a channel, whose update files releases don't publish, or,
  * with --signed, an update nobody checked the signer of; see src/desktop/updateConfig.ts.
  * Usage: node scripts/check-update-config.ts <app-update.yml> [--signed]
  */

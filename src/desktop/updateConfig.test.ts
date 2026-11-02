@@ -35,7 +35,7 @@ describe('updateConfigProblems', () => {
     ]);
   });
 
-  test('refuses a channel, which makes electron-updater allow downgrades', () => {
+  test("refuses a channel, whose update files releases don't publish", () => {
     expect(updateConfigProblems(`${base}channel: beta\n`, { signed: false })).toEqual([
       expect.stringContaining('channel'),
     ]);

@@ -21,9 +21,10 @@ Pushing a tag that starts with `v` runs these jobs:
    Each job packages the app, signs it when the signing secrets are set, and smoke-tests it with
    `yarn desktop:smoke`: the unpacked app on every platform, the app inside the mounted `dmg` on
    macOS, and the AppImage on Linux. Signed builds also get their signature checked, and macOS
-   builds their notarization. The packaged update settings (`app-update.yml`) must set no update
-   channel, which would let the app install older versions, and on a signed Windows build must
-   name the publisher, so the app checks who signed an update before installing it.
+   builds their notarization. The packaged update settings (`app-update.yml`) must name no update
+   channel, since the app would then look for that channel's update
+   files, such as `beta-mac.yml`, which releases don't publish. On a signed Windows build they must
+   also name the publisher, so the app checks who signed an update before installing it.
 4. **Publish the draft release.** Once every build has passed, one job gathers their files,
    merges the two macOS update files, and creates the draft release with all of them. Because only
    this job creates the release, parallel builds can't create duplicate releases. Re-running it

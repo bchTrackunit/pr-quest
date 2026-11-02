@@ -38,8 +38,8 @@ export function updateSource(options: {
 }
 
 /**
- * Keeps an update from replacing the app with an older version. electron-updater allows that once a
- * channel is set, so an updater with one is refused instead.
+ * Keeps an update from replacing the app with an older version. Setting `updater.channel` in code
+ * turns electron-updater's `allowDowngrade` on, so an updater with a channel is refused instead.
  */
 export function prepareUpdater<T extends Updater>(updater: T): T {
   if (updater.channel !== null) {
