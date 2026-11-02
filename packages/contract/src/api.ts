@@ -108,9 +108,16 @@ export interface ReviewFinding {
   file: string;
   /** Line in the new version of the file; omitted for file-level findings. */
   line?: number;
+  /** First line of a range ending at `line`; only set when `line` is and comes before it. */
+  startLine?: number;
   severity: FindingSeverity;
   /** Markdown. */
   body: string;
+  /**
+   * Replacement for lines `startLine` (or `line`) through `line`, as plain code without a fence;
+   * posted as a GitHub suggested change the author can apply.
+   */
+  suggestion?: string;
 }
 
 /** Why a file was left out of the diff Claude reviewed. */

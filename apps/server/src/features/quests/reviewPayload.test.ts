@@ -19,41 +19,118 @@ const draft: ReviewDraft = {
 };
 
 describe('renderReview', () => {
-  test('puts findings with a valid line inline with a severity prefix', () => {
-    const payload = renderReview(draft, { inline: true });
+  test('puts findings with a valid line on that line with a severity prefix', () => {
+    const review = renderReview(draft);
 
-    expect(payload.comments).toEqual([
-      { path: 'src/a.ts', line: 10, side: 'RIGHT', body: '**[Critical]** SQL injection.' },
+    expect(review.findings[0]).toEqual({
+      onLines: { path: 'src/a.ts', line: 10, side: 'RIGHT', body: '**[Critical]** SQL injection.' },
+      onFile: { path: 'src/a.ts', body: '**[Critical]** On line 10: SQL injection.' },
+    });
+    expect(review.commitId).toBe('sha1');
+    expect(review.event).toBe('COMMENT');
+  });
+
+  test('puts findings without a valid line on their file', () => {
+    const review = renderReview(draft);
+
+    expect(review.findings.slice(1)).toEqual([
+      { onFile: { path: 'src/b.ts', body: '**[Minor]** Bad line number.' } },
+      { onFile: { path: 'README.md', body: '**[Nit]** Typo.' } },
     ]);
-    expect(payload.commit_id).toBe('sha1');
-    expect(payload.event).toBe('COMMENT');
   });
 
-  test('puts findings without a valid line in the body', () => {
-    const payload = renderReview(draft, { inline: true });
+  test('never lists findings in the review body', () => {
+    const { body } = renderReview(draft);
 
-    expect(payload.body).toContain('One serious problem.');
-    expect(payload.body).toContain('**[Minor]** `src/b.ts`');
-    expect(payload.body).toContain('**[Nit]** `README.md`');
-    expect(payload.body).not.toContain('SQL injection.');
+    expect(body).toContain('One serious problem.');
+    for (const text of ['SQL injection.', 'Bad line number.', 'Typo.', 'src/a.ts', 'README.md']) {
+      expect(body).not.toContain(text);
+    }
   });
 
-  test('puts every finding in the body when inline comments are off', () => {
-    const payload = renderReview(draft, { inline: false });
+  test('posts a suggestion as a GitHub suggested change over its lines', () => {
+    const review = renderReview({
+      ...draft,
+      findings: [
+        {
+          file: 'src/a.ts',
+          line: 12,
+          startLine: 10,
+          severity: 'major',
+          body: 'Use a parameter.',
+          suggestion: '  db.query(sql, [id]);\n  return rows;',
+        },
+      ],
+    });
 
-    expect(payload.comments).toEqual([]);
-    expect(payload.commit_id).toBeUndefined();
-    expect(payload.body).toContain('**[Critical]** `src/a.ts:10`');
+    expect(review.findings[0]?.onLines).toEqual({
+      path: 'src/a.ts',
+      line: 12,
+      side: 'RIGHT',
+      start_line: 10,
+      start_side: 'RIGHT',
+      body: '**[Major]** Use a parameter.\n\n```suggestion\n  db.query(sql, [id]);\n  return rows;\n```',
+    });
   });
 
-  test('maps requestChanges to the GitHub event', () => {
-    expect(renderReview({ ...draft, event: 'requestChanges' }, { inline: true }).event).toBe(
-      'REQUEST_CHANGES',
+  test('shows the suggestion as plain code when the finding falls back to its file', () => {
+    const review = renderReview({
+      ...draft,
+      findings: [
+        { file: 'a.ts', line: 3, severity: 'nit', body: 'Rename.', suggestion: 'const total = 1;' },
+      ],
+    });
+
+    expect(review.findings[0]?.onFile.body).toBe(
+      '**[Nit]** On line 3: Rename.\n\nSuggested code for line 3:\n\n```\nconst total = 1;\n```',
     );
   });
 
+  test('ignores a start line that does not come before the line', () => {
+    const review = renderReview({
+      ...draft,
+      findings: [{ file: 'a.ts', line: 3, startLine: 3, severity: 'nit', body: 'b' }],
+    });
+
+    expect(review.findings[0]?.onLines).not.toHaveProperty('start_line');
+  });
+
+  test('fences a suggestion with more backticks than it contains', () => {
+    const review = renderReview({
+      ...draft,
+      findings: [
+        { file: 'a.md', line: 1, severity: 'nit', body: 'b', suggestion: '```ts\nx\n```' },
+      ],
+    });
+
+    expect(review.findings[0]?.onLines?.body).toContain('````suggestion\n```ts\nx\n```\n````');
+  });
+
+  test('keeps suggested code as written, since a fence never notifies anyone', () => {
+    const review = renderReview({
+      ...draft,
+      findings: [
+        {
+          file: 'a.ts',
+          line: 1,
+          severity: 'nit',
+          body: 'b',
+          suggestion: '@Injectable()\nclass A {}',
+        },
+      ],
+    });
+
+    expect(review.findings[0]?.onLines?.body).toContain(
+      '```suggestion\n@Injectable()\nclass A {}\n```',
+    );
+  });
+
+  test('maps requestChanges to the GitHub event', () => {
+    expect(renderReview({ ...draft, event: 'requestChanges' }).event).toBe('REQUEST_CHANGES');
+  });
+
   test('mentions the advisory verdict', () => {
-    expect(renderReview(draft, { inline: true }).body).toContain('Agent verdict: request changes');
+    expect(renderReview(draft).body).toContain('Agent verdict: request changes');
   });
 
   test.each([
@@ -67,7 +144,7 @@ describe('renderReview', () => {
     ],
     [{ provider: 'cursor' }, '_Generated by a Cursor cloud review agent through PR Quest._'],
   ] as const)('names the reviewer that wrote it: %o', (reviewer, footer) => {
-    const body = renderReview({ ...draft, ...reviewer }, { inline: true }).body;
+    const body = renderReview({ ...draft, ...reviewer }).body;
 
     expect(body.endsWith(footer)).toBe(true);
   });
@@ -79,7 +156,7 @@ describe('renderReview', () => {
       { file: 'src/huge.ts', reason: 'tooLarge' },
     ];
 
-    const body = renderReview({ ...draft, provider: 'claude', omitted }, { inline: true }).body;
+    const body = renderReview({ ...draft, provider: 'claude', omitted }).body;
 
     expect(body).toContain('Not reviewed by the agent; check these yourself:');
     expect(body).toContain(
@@ -88,9 +165,7 @@ describe('renderReview', () => {
   });
 
   test('says nothing about omitted files when there are none', () => {
-    expect(renderReview({ ...draft, omitted: [] }, { inline: true }).body).not.toContain(
-      'Not reviewed',
-    );
+    expect(renderReview({ ...draft, omitted: [] }).body).not.toContain('Not reviewed');
   });
 
   test('keeps odd omitted file names inside one code span on one line', () => {
@@ -99,7 +174,7 @@ describe('renderReview', () => {
       { file: '`edge`', reason: 'binary' },
     ];
 
-    const body = renderReview({ ...draft, omitted }, { inline: true }).body;
+    const body = renderReview({ ...draft, omitted }).body;
 
     expect(body).toContain('- ``a`b@evil\\n\\n# Heading`` (generated)');
     expect(body).toContain('- `` `edge` `` (binary)');
@@ -112,7 +187,7 @@ describe('renderReview', () => {
       reason: 'lockfile',
     }));
 
-    const body = renderReview({ ...draft, omitted }, { inline: true }).body;
+    const body = renderReview({ ...draft, omitted }).body;
 
     expect(body).toContain('`pkg49/yarn.lock`');
     expect(body).not.toContain('`pkg50/yarn.lock`');
@@ -120,21 +195,18 @@ describe('renderReview', () => {
   });
 
   test('keeps the model from notifying people in the summary and comments', () => {
-    const payload = renderReview(
-      {
-        ...draft,
-        summary: 'Ping @octocat and @trackunit/security.',
-        findings: [
-          { file: 'src/a.ts', line: 3, severity: 'major', body: 'cc @admin' },
-          { file: 'src/b.ts', severity: 'nit', body: '@someone look' },
-        ],
-      },
-      { inline: true },
-    );
+    const payload = renderReview({
+      ...draft,
+      summary: 'Ping @octocat and @trackunit/security.',
+      findings: [
+        { file: 'src/a.ts', line: 3, severity: 'major', body: 'cc @admin' },
+        { file: 'src/b.ts', severity: 'nit', body: '@someone look' },
+      ],
+    });
 
     expect(payload.body).toContain('Ping `@octocat` and `@trackunit/security`.');
-    expect(payload.body).toContain('`@someone` look');
-    expect(payload.comments[0]?.body).toBe('**[Major]** cc `@admin`');
+    expect(payload.findings[0]?.onLines?.body).toBe('**[Major]** cc `@admin`');
+    expect(payload.findings[1]?.onFile.body).toBe('**[Nit]** `@someone` look');
   });
 });
 

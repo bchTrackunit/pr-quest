@@ -10,7 +10,13 @@ import { GitHubApiError, type GitHubApi } from '../../platform/githubApi.ts';
 import type { LinearReviewInfo } from './linear.ts';
 import { difficultyFor, formatQuestId, type QuestRef } from './quests.ts';
 import { isRateLimitError, parseRateLimitReset } from '../../platform/rateLimit.ts';
-import { renderReview, type ReviewDraft } from './reviewPayload.ts';
+import {
+  renderReview,
+  type GitHubReviewComment,
+  type RenderedFinding,
+  type RenderedReview,
+  type ReviewDraft,
+} from './reviewPayload.ts';
 
 const SEARCH_ALL_QUERY = 'is:pr is:open review-requested:@me';
 const SEARCH_DIRECT_QUERY = 'is:pr is:open user-review-requested:@me';
@@ -157,6 +163,32 @@ const DiscussionResponseSchema = z.object({
 
 const CreatedReviewSchema = z.object({ html_url: z.string() });
 
+const PendingReviewSchema = z.object({ id: z.number().int(), node_id: z.string().min(1) });
+
+const ADD_THREAD_MUTATION = `mutation($input: AddPullRequestReviewThreadInput!) {
+  addPullRequestReviewThread(input: $input) { thread { id } }
+}`;
+
+/** A refused thread comes back as GraphQL errors, or as no thread at all. */
+const AddThreadResponseSchema = z.object({
+  data: z
+    .object({
+      addPullRequestReviewThread: z
+        .object({ thread: z.object({ id: z.string() }).nullish() })
+        .nullish(),
+    })
+    .nullish(),
+  errors: z.array(z.object({ message: z.string(), type: z.string().nullish() })).nullish(),
+});
+
+/** GraphQL error types that say nothing about where a comment can go, so the post stops. */
+const FATAL_THREAD_ERRORS: ReadonlySet<string> = new Set(['FORBIDDEN', 'RATE_LIMITED']);
+
+/** GitHub allows one pending review per person and PR, including one started in its own UI. */
+const PENDING_REVIEW_EXISTS = /one pending review/i;
+
+const MAX_UNANCHORED_LISTED = 5;
+
 const PullRequestHeadSchema = z.object({ head: z.object({ sha: z.string().min(1) }) });
 
 const ViewerSchema = z.object({
@@ -223,8 +255,38 @@ export interface QuestInput extends ReviewRequestData {
 
 export interface SubmittedReview {
   url: string;
-  /** GitHub rejected the inline comments (lines outside the diff), so they went in the body. */
-  inlineCommentsDropped: boolean;
+}
+
+/** A review GitHub has submitted, or one left pending for the findings still to add. */
+type OpenedReview =
+  | { submitted: true; url: string }
+  | { submitted: false; id: number; nodeId: string; remaining: Array<RenderedFinding> };
+
+/** GitHub took nothing of the review, for a reason the player can fix before posting again. */
+export class ReviewNotPostedError extends GitHubApiError {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'ReviewNotPostedError';
+  }
+}
+
+/**
+ * GitHub took some findings neither on their lines nor on their file, usually because the file
+ * isn't part of the PR. Nothing was posted, since the only place left for them is the review body.
+ */
+export class UnanchoredFindingsError extends ReviewNotPostedError {
+  public constructor(files: ReadonlyArray<string>, reason: string) {
+    const unique = [...new Set(files)];
+    const listed = unique.slice(0, MAX_UNANCHORED_LISTED).join(', ');
+    const more =
+      unique.length > MAX_UNANCHORED_LISTED
+        ? ` and ${unique.length - MAX_UNANCHORED_LISTED} more`
+        : '';
+    super(
+      `GitHub would not attach ${files.length === 1 ? 'a finding' : `${files.length} findings`} on ${listed}${more} to the pull request (${reason}). Deselect ${files.length === 1 ? 'it' : 'them'} and post again.`,
+    );
+    this.name = 'UnanchoredFindingsError';
+  }
 }
 
 export interface GitHubClientOptions {
@@ -641,26 +703,164 @@ export class GitHubClient {
     await this.postReview(ref, payload);
   }
 
-  /** Posts one review; retries with everything in the body if GitHub rejects the inline lines. */
+  /**
+   * Posts one review with every finding as a comment on its lines, or on its file when it has no
+   * line or GitHub refuses the line. Findings never go in the review body; if GitHub takes a
+   * finding nowhere, the review is deleted and nothing is posted.
+   */
   public async submitReview(ref: QuestRef, draft: ReviewDraft): Promise<SubmittedReview> {
-    const withInline = renderReview(draft, { inline: true });
+    const review = renderReview(draft);
+    const opened = await this.openReview(ref, review);
+    if (opened.submitted) {
+      return { url: opened.url };
+    }
     try {
-      return { url: await this.postReview(ref, withInline), inlineCommentsDropped: false };
+      await this.addFindings(opened.nodeId, opened.remaining);
     } catch (error) {
-      if (
-        !(error instanceof GitHubApiError) ||
-        error.httpStatus !== 422 ||
-        withInline.comments.length === 0
-      ) {
+      await this.deletePendingReview(ref, opened.id);
+      throw error;
+    }
+    let text: string;
+    try {
+      text = await this.api.request('POST', `${pullPath(ref)}/reviews/${opened.id}/events`, {
+        body: { event: review.event, body: review.body },
+      });
+    } catch (error) {
+      // Without an answer from GitHub the review may have gone out, and a retry would post it twice.
+      if (error instanceof GitHubApiError && error.httpStatus !== undefined) {
+        await this.deletePendingReview(ref, opened.id);
+      }
+      throw error;
+    }
+    return { url: parseJson(text, CreatedReviewSchema, 'review').html_url };
+  }
+
+  private async addFindings(reviewId: string, findings: Array<RenderedFinding>): Promise<void> {
+    const unanchored: Array<string> = [];
+    let reason = '';
+    for (const finding of findings) {
+      const refusal = await this.addFinding(reviewId, finding);
+      if (refusal !== undefined) {
+        unanchored.push(finding.onFile.path);
+        reason ||= refusal;
+      }
+    }
+    if (unanchored.length > 0) {
+      throw new UnanchoredFindingsError(unanchored, reason);
+    }
+  }
+
+  /**
+   * Creates the review with every finding that has a line as an inline comment, submitted at once
+   * when no finding needs more. One refused line fails the whole request, so after a 422 the review
+   * starts pending and empty, and every finding is added on its own.
+   */
+  private async openReview(ref: QuestRef, review: RenderedReview): Promise<OpenedReview> {
+    const onLines = review.findings.flatMap((finding) => finding.onLines ?? []);
+    const complete = onLines.length === review.findings.length;
+    try {
+      const text = await this.createReview(ref, review, onLines, complete);
+      if (complete) {
+        return { submitted: true, url: parseJson(text, CreatedReviewSchema, 'review').html_url };
+      }
+      return pendingReview(
+        text,
+        review.findings.filter((finding) => !finding.onLines),
+      );
+    } catch (error) {
+      if (!(error instanceof GitHubApiError) || error.httpStatus !== 422 || onLines.length === 0) {
         throw error;
       }
       this.onWarning(
-        `GitHub rejected inline comments on ${formatQuestId(ref.repo, ref.number)}; posting them in the body`,
+        `GitHub refused an inline comment on ${formatQuestId(ref.repo, ref.number)}; adding the findings one at a time`,
       );
-      return {
-        url: await this.postReview(ref, renderReview(draft, { inline: false })),
-        inlineCommentsDropped: true,
-      };
+    }
+    return pendingReview(await this.createReview(ref, review, [], false), review.findings);
+  }
+
+  /** Without `submit` the review stays pending, and its body and event come when it's submitted. */
+  private async createReview(
+    ref: QuestRef,
+    review: RenderedReview,
+    comments: Array<GitHubReviewComment>,
+    submit: boolean,
+  ): Promise<string> {
+    const payload: Record<string, unknown> = { comments };
+    if (submit) {
+      payload.event = review.event;
+      payload.body = review.body;
+    }
+    if (review.commitId) {
+      payload.commit_id = review.commitId;
+    }
+    try {
+      return await this.api.request('POST', `${pullPath(ref)}/reviews`, { body: payload });
+    } catch (error) {
+      if (error instanceof GitHubApiError && PENDING_REVIEW_EXISTS.test(error.body ?? '')) {
+        throw new ReviewNotPostedError(
+          `You have a review on ${formatQuestId(ref.repo, ref.number)} that isn't submitted yet. Submit or discard it on GitHub, then post again.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Adds a finding to a pending review on its lines, else on its file; returns why GitHub refused both. */
+  private async addFinding(
+    reviewId: string,
+    finding: RenderedFinding,
+  ): Promise<string | undefined> {
+    const { onLines, onFile } = finding;
+    if (onLines) {
+      const refusal = await this.addThread({
+        pullRequestReviewId: reviewId,
+        path: onLines.path,
+        body: onLines.body,
+        line: onLines.line,
+        side: onLines.side,
+        ...(onLines.start_line === undefined
+          ? {}
+          : { startLine: onLines.start_line, startSide: onLines.start_side ?? 'RIGHT' }),
+      });
+      if (refusal === undefined) {
+        return undefined;
+      }
+      this.onWarning(`GitHub refused line ${onLines.line} of ${onLines.path}: ${refusal}`);
+    }
+    return this.addThread({
+      pullRequestReviewId: reviewId,
+      path: onFile.path,
+      body: onFile.body,
+      subjectType: 'FILE',
+    });
+  }
+
+  /**
+   * Why GitHub refused the thread's place, or `undefined` once it's added. Failed requests,
+   * permission errors and rate limits throw instead, since another place can't fix them.
+   */
+  private async addThread(input: Record<string, unknown>): Promise<string | undefined> {
+    const text = await this.api.graphql(ADD_THREAD_MUTATION, { input });
+    const { data, errors } = parseJson(text, AddThreadResponseSchema, 'GraphQL');
+    if (data?.addPullRequestReviewThread?.thread) {
+      return undefined;
+    }
+    const first = errors?.at(0);
+    const reason = first?.message ?? 'GitHub added no comment';
+    const failure = new GitHubApiError(`GitHub GraphQL failed: ${reason}`, { body: text });
+    if ((first?.type && FATAL_THREAD_ERRORS.has(first.type)) || isRateLimitError(failure)) {
+      throw failure;
+    }
+    return reason;
+  }
+
+  private async deletePendingReview(ref: QuestRef, reviewId: number): Promise<void> {
+    try {
+      await this.api.request('DELETE', `${pullPath(ref)}/reviews/${reviewId}`);
+    } catch (error) {
+      this.onWarning(
+        `Could not delete the pending review on ${formatQuestId(ref.repo, ref.number)}: ${errorMessage(error)}`,
+      );
     }
   }
 
@@ -754,6 +954,11 @@ export const repoPath = (repo: RepoRef): string =>
   `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
 const pullPath = (ref: QuestRef): string => `${repoPath(ref.repo)}/pulls/${ref.number}`;
+
+function pendingReview(text: string, remaining: Array<RenderedFinding>): OpenedReview {
+  const { id, node_id: nodeId } = parseJson(text, PendingReviewSchema, 'review');
+  return { submitted: false, id, nodeId, remaining };
+}
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);

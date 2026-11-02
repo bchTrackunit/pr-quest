@@ -68,10 +68,22 @@ const REVIEW_TOOL: Tool = {
             line: {
               type: 'integer',
               minimum: 1,
-              description: 'Line in the new version of the file; omit for file-level findings',
+              description:
+                'Line in the new version of the file that the diff adds or shows; omit only for findings about the whole file',
+            },
+            startLine: {
+              type: 'integer',
+              minimum: 1,
+              description:
+                'First line of the range a multi-line suggestion replaces, before `line`',
             },
             severity: { type: 'string', enum: SEVERITIES },
             body: { type: 'string', description: 'Markdown explaining the problem and a fix' },
+            suggestion: {
+              type: 'string',
+              description:
+                'The exact new code for lines `startLine` (or `line`) through `line`, indented as in the file, without a code fence; omit when the fix is not a direct replacement of those lines',
+            },
           },
         },
       },

@@ -14,6 +14,7 @@ import {
   type ReviewRequestData,
   LinearReviewClient,
   QuestService,
+  UnanchoredFindingsError,
 } from '../features/quests/index.ts';
 import { createHandlers, type AppServices } from './handlers.ts';
 import { ReviewRunService } from '../features/reviews/index.ts';
@@ -117,7 +118,6 @@ beforeEach(async () => {
     fetchHeadSha: vi.fn(async () => DIRECT_HEAD),
     submitReview: vi.fn(async () => ({
       url: 'https://github.com/r#pullrequestreview-9',
-      inlineCommentsDropped: false,
     })),
   };
   const runs = new ReviewRunService({
@@ -643,6 +643,23 @@ describe('runs', () => {
     expect((await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] })).status).toBe(
       200,
     );
+  });
+
+  test('a finding GitHub takes nowhere answers 409 and leaves the run postable', async () => {
+    const run = await finishedRun();
+    github.submitReview.mockRejectedValueOnce(
+      new UnanchoredFindingsError(['src/gone.ts'], 'Path could not be resolved'),
+    );
+
+    const response = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [] });
+
+    expect(response).toMatchObject({
+      status: 409,
+      body: { error: { code: 'conflict', message: expect.stringContaining('src/gone.ts') } },
+    });
+    expect((await send('GET', `/api/runs/${run.id}`)).body).toMatchObject({
+      run: { disposition: 'pending' },
+    });
   });
 
   test('PUT /api/runs/:id/selection saves the selection and returns the run', async () => {
