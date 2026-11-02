@@ -234,7 +234,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
     def: define({
       id: 'quick-draw',
       name: 'Quick Draw',
-      description: 'Approve a PR within an hour of being asked to review it.',
+      description: 'Approve a PR within an hour of it opening.',
       icon: '⚡',
       rarity: 'rare',
       category: 'feats',
@@ -303,7 +303,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
     def: define({
       id: 'eagle-eye',
       name: 'Eagle Eye',
-      description: 'Post a review with at least one accepted critical or major finding.',
+      description: 'Post a review that includes a critical or major finding.',
       icon: '🦅',
       rarity: 'common',
       category: 'feats',

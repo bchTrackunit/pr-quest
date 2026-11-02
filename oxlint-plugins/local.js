@@ -68,7 +68,8 @@ function boundaryViolation(importer, target, importerIsTest) {
 
 /**
  * Which workspace packages each package may import. The server and the UI share code only through
- * the contract; a new edge is an architecture change, so it goes here and in the README.
+ * the contract; a new edge is an architecture change, so it goes here and in the import rules in
+ * docs/development.md.
  */
 const PACKAGE_GRAPH = {
   'apps/server': ['@pr-quest/contract'],
@@ -115,7 +116,7 @@ export default {
         type: 'problem',
         docs: {
           description:
-            'Keep imports between packages, features, platform and app code inside the dependency rules in the README.',
+            'Keep imports between packages, features, platform and app code inside the import rules in docs/development.md.',
         },
         messages: {
           deepImport:
