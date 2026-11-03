@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -90,6 +98,22 @@ describe.skipIf(process.platform === 'win32')('collect-bundles.sh', () => {
       'PR Quest.app/Contents/Resources/sidecar/server.js',
     ]);
     expect(listing).toMatch(/^l.*link\.js -> server\.js$/m);
+    // User and group 0, without names: bsdtar lists them as "0 0", GNU tar as "0/0".
+    for (const line of listing.trim().split('\n')) {
+      expect(line).toMatch(/^\S+\s+(?:\d+\s+0\s+0\s|0\/0\s)/);
+    }
+  });
+
+  test('stops when the app has hard links', () => {
+    bundles('aarch64-apple-darwin', [`dmg/PR Quest_${v}_aarch64.dmg`, `${APP}/MacOS/pr-quest`]);
+    const app = join(dir, 'target/aarch64-apple-darwin/release/bundle', APP);
+    linkSync(join(app, 'MacOS/pr-quest'), join(app, 'MacOS/linked'));
+
+    const result = collect('aarch64-apple-darwin', '--updater');
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('has hard links');
+    expect(result.files).toEqual([`PR-Quest_${v}_aarch64.dmg`]);
   });
 
   test('stops when a macOS release build has no app to make the update file from', () => {

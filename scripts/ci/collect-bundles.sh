@@ -7,8 +7,10 @@
 #
 # The macOS update file is made here from the finished app, notarization ticket included: a
 # gzipped tar with "PR Quest.app" at its root, as Tauri's bundler makes it and tauri-plugin-updater
-# unpacks it (it drops the first part of every path). Symbolic links stay links, and no extended
-# attributes or AppleDouble files go in.
+# unpacks it (it drops the first part of every path). Symbolic links stay links, every entry
+# belongs to user and group 0 with no names, and no extended attributes or AppleDouble files go
+# in. An app with hard links stops it: the plugin's tar crate unpacks a hard link to whatever path
+# the entry names, so the update file holds none.
 # Usage: scripts/ci/collect-bundles.sh <triple> <version> <output folder> [--updater]
 set -euo pipefail
 
@@ -46,6 +48,7 @@ take() {
 mac_update() {
   local app="$bundle/macos/PR Quest.app"
   local -a flags
+  local listing
   if [[ ! -d "$app" ]]; then
     fail "$triple has no macos/PR Quest.app to make the update file from."
   fi
@@ -53,12 +56,18 @@ mac_update() {
     fail "$out/$1 exists already."
   fi
   if tar --version 2>/dev/null | grep -q bsdtar; then
-    flags=(--format gnutar --no-mac-metadata --no-xattrs --no-acls --no-fflags)
+    flags=(--format gnutar --no-mac-metadata --no-xattrs --no-acls --no-fflags
+      --uid 0 --gid 0 --uname '' --gname '')
   else
-    flags=(--format=gnu --no-xattrs --no-acls --no-selinux)
+    flags=(--format=gnu --no-xattrs --no-acls --no-selinux --owner=0 --group=0 --numeric-owner)
   fi
   COPYFILE_DISABLE=1 tar --create --gzip "${flags[@]}" --file "$out/$1" \
     --directory "$bundle/macos" "PR Quest.app"
+  listing="$(tar -tvzf "$out/$1")"
+  if cut -c1 <<<"$listing" | grep -q '^h'; then
+    rm -f "$out/$1"
+    fail "macos/PR Quest.app has hard links, which the update file can't hold: $(grep '^h' <<<"$listing" | tr '\n' ' ')"
+  fi
   echo "macos/PR Quest.app -> $1"
 }
 
