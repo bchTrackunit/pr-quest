@@ -11,7 +11,8 @@
  *    setting, so the release workflow compiles without its signing secrets.
  * 3. Signs the native code Tauri doesn't (scripts/desktop/sign.ts), when signing is configured.
  * 4. `tauri bundle`, which signs what Tauri signs; for macOS it retries when hdiutil finds the
- *    dmg's volume busy. --skip-compile starts here, with what --compile-only built.
+ *    dmg's volume busy. --skip-compile starts here, with the binary, main.mjs and dist/ that
+ *    --compile-only built, and lays out the sidecar's packages and Node again itself.
  * 5. Linux: makes sure the AppImage has no libwayland-client (scripts/desktop/appimage.ts).
  *
  * Bundles land in $CARGO_TARGET_DIR (default src-tauri/target)/<triple>/release/bundle/.
@@ -34,7 +35,7 @@ import { z } from 'zod';
 import { stripAppImage } from './desktop/appimage.ts';
 import { debBinaries, sidecarBinaryProblem } from './desktop/artifacts.ts';
 import { configOverlay } from './desktop/config.ts';
-import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
+import { layOut, layOutRuntime, SIDECAR_DIR } from './desktop/layout.ts';
 import {
   BUILD_DIR,
   bundleDir as bundleDirFor,
@@ -112,10 +113,13 @@ if (phase !== 'bundle') {
     log(`compiled ${target.triple}; bundle it with --skip-compile`);
     process.exit(0);
   }
-} else if (
-  !existsSync(join(bundleDir, '..', target.os === 'windows' ? 'pr-quest.exe' : 'pr-quest'))
-) {
-  throw new Error(`Nothing compiled for ${target.triple}; run --compile-only first`);
+} else {
+  if (!existsSync(join(bundleDir, '..', target.os === 'windows' ? 'pr-quest.exe' : 'pr-quest'))) {
+    throw new Error(`Nothing compiled for ${target.triple}; run --compile-only first`);
+  }
+  // From this checkout's own node_modules and nodejs.org, not from whatever compiled the shell.
+  const node = layOutRuntime(target);
+  log(`laid out the sidecar's packages and ${relative('.', node)} for ${target.triple}`);
 }
 
 sign(target);
