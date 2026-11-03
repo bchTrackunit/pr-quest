@@ -491,8 +491,16 @@ mod tests {
         (0..50).any(|_| {
             thread::sleep(Duration::from_millis(100));
             // SAFETY: signal 0 only checks whether the process exists.
-            let alive = unsafe { libc::kill(pid, 0) } == 0;
-            !alive
+            let exists = unsafe { libc::kill(pid, 0) } == 0;
+            !exists || zombie(pid)
+        })
+    }
+
+    /// Whether `pid` exited but wasn't reaped, as under a container init that doesn't reap orphans.
+    fn zombie(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(") ")
+                .is_some_and(|(_, rest)| rest.starts_with('Z'))
         })
     }
 
