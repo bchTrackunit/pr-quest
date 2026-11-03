@@ -58,10 +58,10 @@ export function sidecarBinaryProblem(os: Os, files: ReadonlyArray<string>): stri
   return undefined;
 }
 
-/** The files a deb installs into /usr/bin, from `dpkg-deb -c`. */
+/** The files a deb installs into /usr/bin, from `dpkg-deb -c`, whose paths may start with `./`. */
 export function debBinaries(listing: string): Array<string> {
   return listing
     .split('\n')
-    .map((line) => /\.\/usr\/bin\/([^/]+)$/.exec(line.trim())?.[1])
+    .map((line) => /\s(?:\.\/)?usr\/bin\/([^/]+)$/.exec(line.trim())?.[1])
     .filter((name) => name !== undefined);
 }

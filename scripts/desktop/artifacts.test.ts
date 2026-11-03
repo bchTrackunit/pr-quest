@@ -73,4 +73,14 @@ describe('debBinaries', () => {
     ].join('\n');
     expect(debBinaries(listing)).toEqual(['pr-quest', 'pr-quest-node']);
   });
+
+  it("reads tauri's listing, whose paths have no ./", () => {
+    const listing = [
+      'drwxr-xr-x 0/0               0 2026-11-03 10:13 usr/bin',
+      '-rwxr-xr-x 0/0         7412376 2026-11-03 10:13 usr/bin/pr-quest',
+      '-rwxr-xr-x 0/0       123377224 2026-11-03 10:13 usr/bin/pr-quest-node',
+      '-rw-r--r-- 0/0          985430 2026-11-03 10:13 usr/lib/PR Quest/sidecar/main.mjs',
+    ].join('\n');
+    expect(debBinaries(listing)).toEqual(['pr-quest', 'pr-quest-node']);
+  });
 });
