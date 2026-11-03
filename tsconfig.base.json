@@ -7,10 +7,13 @@
     "lib": ["ES2025"],
     "types": ["node"],
     "strict": true,
+    "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "exclude": ["node_modules", "dist", "dist-server", "coverage"]
+  "exclude": ["node_modules", "dist", "coverage"]
 }

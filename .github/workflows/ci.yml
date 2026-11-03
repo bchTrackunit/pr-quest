@@ -44,7 +44,7 @@ jobs:
         run: yarn test
 
       - name: Build
-        run: yarn vite build && yarn build:server
+        run: yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build
 
   # The suite again against a real Postgres server instead of PGlite, as `just test-postgres` runs it.
   test-postgres:
