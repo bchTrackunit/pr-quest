@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
-import { secretsNotice } from './secretsNotice.ts';
+import type { DesktopSecrets, SecretsStorage } from './keychainSecrets.ts';
+import { type NoticeAction, openWithNotices, secretsNotice } from './secretsNotice.ts';
 
 const actions = (notice: ReturnType<typeof secretsNotice>) =>
   notice?.buttons.map((button) => button.action);
@@ -46,5 +47,113 @@ describe('secretsNotice', () => {
 
     expect(notice?.detail).toMatch(/unchanged/);
     expect(actions(notice)).toEqual(['retry', 'continue']);
+  });
+});
+
+describe('openWithNotices', () => {
+  const secrets = (storage: SecretsStorage): DesktopSecrets => ({
+    storage,
+    store: { get: () => undefined, set: vi.fn(), delete: vi.fn() },
+  });
+
+  /** Opens with each storage in turn, as reopening after the player's answer would. */
+  const opening = (...storages: Array<SecretsStorage>) => {
+    const open = vi.fn((_allowPlaintext: boolean) =>
+      Promise.resolve(secrets(storages.shift() ?? 'keychain')),
+    );
+    return open;
+  };
+
+  const answering = (...choices: Array<NoticeAction>) =>
+    vi.fn(() => Promise.resolve(choices.shift() ?? 'continue'));
+
+  test('opens once and asks nothing when there is nothing to say', async () => {
+    const open = opening('keychain');
+    const ask = answering();
+
+    const opened = await openWithNotices({ open, ask, plaintextChoice: undefined, save: vi.fn() });
+
+    expect(opened.storage).toBe('keychain');
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  test('opens again for Try Again, until the keys read', async () => {
+    const open = opening('undecryptable', 'undecryptable', 'keychain');
+    const ask = answering('retry', 'retry');
+
+    const opened = await openWithNotices({ open, ask, plaintextChoice: undefined, save: vi.fn() });
+
+    expect(opened.storage).toBe('keychain');
+    expect(ask).toHaveBeenCalledTimes(2);
+  });
+
+  test('starts without saved keys for Continue Without Saved Keys', async () => {
+    const save = vi.fn();
+
+    const opened = await openWithNotices({
+      open: opening('corrupt'),
+      ask: answering('continue'),
+      plaintextChoice: undefined,
+      save,
+    });
+
+    expect(opened.storage).toBe('corrupt');
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test('remembers keeping keys in memory and asks no more', async () => {
+    const open = opening('memory');
+    const save = vi.fn(() => Promise.resolve());
+
+    const opened = await openWithNotices({
+      open,
+      ask: answering('keepInMemory'),
+      plaintextChoice: undefined,
+      save,
+    });
+
+    expect(opened.storage).toBe('memory');
+    expect(save).toHaveBeenCalledWith(false);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  test('remembers saving keys unencrypted and opens again with that allowed', async () => {
+    const open = opening('memory', 'plaintext');
+    const save = vi.fn(() => Promise.resolve());
+
+    const opened = await openWithNotices({
+      open,
+      ask: answering('savePlaintext'),
+      plaintextChoice: undefined,
+      save,
+    });
+
+    expect(opened.storage).toBe('plaintext');
+    expect(save).toHaveBeenCalledWith(true);
+    expect(open.mock.calls).toEqual([[false], [true]]);
+  });
+
+  test('opens with the earlier answer to saving keys unencrypted', async () => {
+    const open = opening('plaintext');
+
+    await openWithNotices({ open, ask: answering(), plaintextChoice: true, save: vi.fn() });
+
+    expect(open).toHaveBeenCalledWith(true);
+  });
+
+  test('asks nothing when notices are off, as after a restart', async () => {
+    const ask = answering();
+
+    const opened = await openWithNotices({
+      open: opening('locked'),
+      ask,
+      plaintextChoice: undefined,
+      save: vi.fn(),
+      notices: false,
+    });
+
+    expect(opened.storage).toBe('locked');
+    expect(ask).not.toHaveBeenCalled();
   });
 });

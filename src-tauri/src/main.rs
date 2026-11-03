@@ -174,6 +174,7 @@ fn start_sidecar(
         bootstrap_code: bootstrap_code.clone(),
         data_key,
         preferences_file: data_dir.join("desktop.json").to_string_lossy().into_owned(),
+        show_notices: false,
     };
     let (events_tx, events_rx) = mpsc::channel();
     let sidecar = Arc::new(Sidecar::spawn(

@@ -32,6 +32,7 @@ pub struct Launch {
     pub bootstrap_code: String,
     pub data_key: Option<String>,
     pub preferences_file: String,
+    pub show_notices: bool,
 }
 
 #[derive(Deserialize)]

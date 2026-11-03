@@ -1,16 +1,21 @@
 import { z } from 'zod';
 
+import { NOTICE_ACTIONS, type SecretsNotice } from '../secretsNotice.ts';
 import { DATA_KEY_BYTES } from './dataKeyEncryptor.ts';
 
 /*
  * The Tauri shell and this sidecar talk over stdio, which no other program can read:
  * - stdin, one JSON line each: first a `Launch`, then any `Command`s. Closing stdin, which happens
  *   when the shell quits or dies, stops the sidecar.
- * - stdout: `READY_PREFIX` and a `Ready` once the server listens, then smoke test lines. Logs go to
- *   stderr, so nothing a dependency prints can pass for one of these.
+ * - stdout, one prefixed JSON line each: `NOTICE_PREFIX` and a `SecretsNotice` for the shell to
+ *   show, answered with a `notice` command; `READY_PREFIX` and a `Ready` once the server listens;
+ *   `FATAL_PREFIX` and why it couldn't start; then smoke test lines. Logs go to stderr, so nothing
+ *   a dependency prints can pass for one of these.
  */
 
 export const READY_PREFIX = 'PRQUEST_READY ';
+export const NOTICE_PREFIX = 'PRQUEST_NOTICE ';
+export const FATAL_PREFIX = 'PRQUEST_FATAL ';
 export const SMOKE_DONE_PREFIX = 'PRQUEST_SMOKE_DONE ';
 
 /** 32 or more random bytes in base64url, which a cookie and a query string carry as they are. */
@@ -26,10 +31,15 @@ const LaunchSchema = z.object({
     .nullable(),
   /** Where the sidecar remembers its port between runs, in the app's own data folder. */
   preferencesFile: z.string().min(1),
+  /** Whether to ask the shell to show secrets notices; off when it restarts a crashed sidecar. */
+  showNotices: z.boolean(),
 });
 export type Launch = z.infer<typeof LaunchSchema>;
 
-const CommandSchema = z.object({ command: z.literal('smoke') });
+const CommandSchema = z.discriminatedUnion('command', [
+  z.object({ command: z.literal('smoke') }),
+  z.object({ command: z.literal('notice'), action: z.enum(NOTICE_ACTIONS) }),
+]);
 export type Command = z.infer<typeof CommandSchema>;
 
 export interface Ready {
@@ -55,6 +65,15 @@ export function parseCommand(line: string): Command | undefined {
 
 export function readyLine(ready: Ready): string {
   return `${READY_PREFIX}${JSON.stringify(ready)}`;
+}
+
+export function noticeLine(notice: SecretsNotice): string {
+  return `${NOTICE_PREFIX}${JSON.stringify(notice)}`;
+}
+
+/** Why the server couldn't start, which the shell shows in its error dialog. */
+export function fatalLine(message: string): string {
+  return `${FATAL_PREFIX}${JSON.stringify({ message })}`;
 }
 
 function safeParse(line: string): unknown {

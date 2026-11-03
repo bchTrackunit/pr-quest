@@ -1,13 +1,23 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 
-import { parseCommand, parseLaunch, READY_PREFIX, readyLine } from './protocol.ts';
+import {
+  FATAL_PREFIX,
+  fatalLine,
+  NOTICE_PREFIX,
+  noticeLine,
+  parseCommand,
+  parseLaunch,
+  READY_PREFIX,
+  readyLine,
+} from './protocol.ts';
 
 const launch = {
   requestSecret: randomBytes(32).toString('base64url'),
   bootstrapCode: randomBytes(32).toString('base64url'),
   dataKey: randomBytes(32).toString('base64'),
   preferencesFile: '/tmp/desktop.json',
+  showNotices: true,
 };
 
 describe('parseLaunch', () => {
@@ -32,10 +42,37 @@ describe('parseLaunch', () => {
 });
 
 describe('parseCommand', () => {
-  test('knows only the smoke test command', () => {
+  test('knows the smoke test command', () => {
     expect(parseCommand('{"command":"smoke"}')).toEqual({ command: 'smoke' });
     expect(parseCommand('{"command":"exit"}')).toBeUndefined();
   });
+
+  test('reads the button the player chose in a notice, and only a known one', () => {
+    expect(parseCommand('{"command":"notice","action":"retry"}')).toEqual({
+      command: 'notice',
+      action: 'retry',
+    });
+    expect(parseCommand('{"command":"notice","action":"format-disk"}')).toBeUndefined();
+    expect(parseCommand('{"command":"notice"}')).toBeUndefined();
+  });
+});
+
+test('noticeLine asks the shell to show a notice, as one prefixed JSON line', () => {
+  const notice = {
+    message: 'Saved keys',
+    detail: 'Line one\nline two',
+    buttons: [{ label: 'Continue', action: 'continue' as const }],
+  };
+
+  const line = noticeLine(notice);
+
+  expect(line.startsWith(NOTICE_PREFIX)).toBe(true);
+  expect(line).not.toContain('\n');
+  expect(JSON.parse(line.slice(NOTICE_PREFIX.length))).toEqual(notice);
+});
+
+test('fatalLine says why the server could not start, on one line', () => {
+  expect(fatalLine('Port\nin use')).toBe(`${FATAL_PREFIX}{"message":"Port\\nin use"}`);
 });
 
 test('readyLine is one prefixed JSON line', () => {

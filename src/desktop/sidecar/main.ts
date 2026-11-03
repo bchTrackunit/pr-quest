@@ -21,10 +21,13 @@ import {
   openDesktopSecrets,
 } from '../keychainSecrets.ts';
 import { readPreferences, writePreferences } from '../preferences.ts';
+import { type NoticeAction, openWithNotices, type SecretsNotice } from '../secretsNotice.ts';
 import { type Check, runChecks, sdkChecks, serverChecks } from '../smoke.ts';
 import { dataKeyEncryptor } from './dataKeyEncryptor.ts';
 import {
+  fatalLine,
   type Launch,
+  noticeLine,
   parseCommand,
   parseLaunch,
   readyLine,
@@ -53,20 +56,32 @@ interface Started {
   secrets: DesktopSecrets;
 }
 
+/** The lines the shell writes to stdin, in order; `undefined` once it closed stdin. */
+type NextLine = () => Promise<string | undefined>;
+
 async function main(): Promise<void> {
   if (smokeTest && process.env.PR_QUEST_STATE_DIR === undefined) {
     throw new Error('The smoke test needs PR_QUEST_STATE_DIR, so it leaves ~/.pr-quest alone');
   }
-  let launch: Launch | undefined;
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })[
+    Symbol.asyncIterator
+  ]();
+  const next: NextLine = async () => {
+    const line = await lines.next();
+    return line.done === true ? undefined : line.value;
+  };
   let started: Started | undefined;
   try {
+    const first = await next();
+    if (first === undefined) {
+      return;
+    }
+    const launch = parseLaunch(first);
+    started = await start(launch, next);
+    print(readyLine({ port: started.server.port, storage: started.secrets.storage }));
     // Ends when stdin closes, which is how the shell stops the sidecar, and what happens if it dies.
-    for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
-      if (launch === undefined) {
-        launch = parseLaunch(line);
-        started = await start(launch);
-        print(readyLine({ port: started.server.port, storage: started.secrets.storage }));
-      } else if (smokeTest && started && parseCommand(line)?.command === 'smoke') {
+    for (let line = await next(); line !== undefined; line = await next()) {
+      if (smokeTest && parseCommand(line)?.command === 'smoke') {
         const ok = await runChecks(
           [...serverChecks(started.server.url), ...sidecarChecks(started, launch), ...sdkChecks()],
           print,
@@ -81,15 +96,26 @@ async function main(): Promise<void> {
   }
 }
 
-async function start(launch: Launch): Promise<Started> {
+async function start(launch: Launch, next: NextLine): Promise<Started> {
   // State stays in ~/.pr-quest (or PR_QUEST_STATE_DIR), shared with the CLI.
   const config = loadConfig({ onWarning: warn });
   const preferences = await readPreferences(launch.preferencesFile);
-  const secrets = await openDesktopSecrets(config.stateDir, {
-    encryptor: encryptorFor(launch),
-    allowPlaintext: preferences.plaintextSecrets === true,
-    info,
-    warn,
+  const secrets = await openWithNotices({
+    open: (allowPlaintext) =>
+      openDesktopSecrets(config.stateDir, {
+        encryptor: encryptorFor(launch),
+        allowPlaintext,
+        info,
+        warn,
+      }),
+    ask: (notice) => ask(notice, next),
+    plaintextChoice: preferences.plaintextSecrets,
+    save: async (plaintextChoice) => {
+      preferences.plaintextSecrets = plaintextChoice;
+      await writePreferences(launch.preferencesFile, preferences);
+    },
+    // Nobody answers in a test run.
+    notices: launch.showNotices && !smokeTest,
   });
   const server = await startDesktopServer(config, preferences.port, {
     secrets: secrets.store,
@@ -102,6 +128,18 @@ async function start(launch: Launch): Promise<Started> {
   preferences.port = server.port;
   await writePreferences(launch.preferencesFile, preferences);
   return { config, server, secrets };
+}
+
+/** Has the shell show `notice` and waits for the button the player chose. */
+async function ask(notice: SecretsNotice, next: NextLine): Promise<NoticeAction> {
+  print(noticeLine(notice));
+  for (let line = await next(); line !== undefined; line = await next()) {
+    const command = parseCommand(line);
+    if (command?.command === 'notice') {
+      return command.action;
+    }
+  }
+  throw new Error('The shell closed before answering');
 }
 
 function encryptorFor(launch: Launch) {
@@ -155,7 +193,9 @@ main().then(
   () => process.exit(0),
   (error: unknown) => {
     // Only the message: nothing here may print the launch message, which holds the secrets.
-    warn(`stopped: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    warn(`stopped: ${message}`);
+    print(fatalLine(message));
     process.exit(1);
   },
 );

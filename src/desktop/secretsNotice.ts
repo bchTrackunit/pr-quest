@@ -1,6 +1,11 @@
-import { ENCRYPTED_SECRETS_FILE, type SecretsStorage } from './keychainSecrets.ts';
+import {
+  type DesktopSecrets,
+  ENCRYPTED_SECRETS_FILE,
+  type SecretsStorage,
+} from './keychainSecrets.ts';
 
-export type NoticeAction = 'continue' | 'retry' | 'keepInMemory' | 'savePlaintext';
+export const NOTICE_ACTIONS = ['continue', 'retry', 'keepInMemory', 'savePlaintext'] as const;
+export type NoticeAction = (typeof NOTICE_ACTIONS)[number];
 
 /** A startup dialog about where saved keys go. The first button is the default. */
 export interface SecretsNotice {
@@ -65,5 +70,46 @@ export function secretsNotice(
       };
     default:
       return undefined;
+  }
+}
+
+export interface OpenWithNoticesOptions {
+  /** Opens the saved keys; `allowPlaintext` is whether they may be saved unencrypted. */
+  open: (allowPlaintext: boolean) => Promise<DesktopSecrets>;
+  /** Shows the notice and resolves the action of the button the player chose. */
+  ask: (notice: SecretsNotice) => Promise<NoticeAction>;
+  /** The player's earlier answer to saving keys unencrypted, if any. */
+  plaintextChoice: boolean | undefined;
+  /** Remembers the player's answer to saving keys unencrypted. */
+  save: (plaintextChoice: boolean) => Promise<void>;
+  /** Whether to tell the player anything; off after a restart, which they already heard about. */
+  notices?: boolean;
+}
+
+/**
+ * Opens the saved keys and tells the player when they can't be encrypted, saved or read, asking
+ * once whether to save them unencrypted without a keychain.
+ */
+export async function openWithNotices(options: OpenWithNoticesOptions): Promise<DesktopSecrets> {
+  let plaintextChoice = options.plaintextChoice;
+  for (;;) {
+    const opened = await options.open(plaintextChoice === true);
+    const notice =
+      options.notices === false ? undefined : secretsNotice(opened.storage, plaintextChoice);
+    if (!notice) {
+      return opened;
+    }
+    const action = await options.ask(notice);
+    if (action === 'retry') {
+      continue;
+    }
+    if (action === 'keepInMemory' || action === 'savePlaintext') {
+      plaintextChoice = action === 'savePlaintext';
+      await options.save(plaintextChoice);
+      if (plaintextChoice) {
+        continue;
+      }
+    }
+    return opened;
   }
 }
