@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { ReviewRun } from '@pr-quest/contract/api';
 import { EventHub } from '../platform/events.ts';
-import { GameService, StateStore } from '../features/game/index.ts';
+import { GameService, FileStateStore } from '../features/game/index.ts';
 import { GitHubApiError, NotSignedInError } from '../platform/githubApi.ts';
 import {
   type GitHubClient,
@@ -19,6 +19,7 @@ import {
 import { createHandlers, type AppServices } from './handlers.ts';
 import { ReviewRunService } from '../features/reviews/index.ts';
 import { createRouter } from '../platform/router.ts';
+import { LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import { reviewRequests } from '../features/quests/test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
@@ -107,7 +108,7 @@ async function finishedRun(): Promise<ReviewRun> {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-handlers-'));
-  const store = await StateStore.open(dir);
+  const store = await FileStateStore.open(dir);
   const events = new EventHub();
   // A Friday afternoon, two days after the oldest fixture PR opened: no time-based unlocks.
   const game = new GameService(store, events, { now: () => new Date(2026, 9, 30, 15) });
@@ -138,11 +139,7 @@ beforeEach(async () => {
   });
   services = { quests, runs, game, github, events };
 
-  server = createServer(
-    createRouter(
-      createHandlers({ host: '127.0.0.1', port: 0, uiPort: 0, stateDir: dir }, services),
-    ),
-  );
+  server = createServer(createRouter(createHandlers({ ...LOCAL_CONFIG, stateDir: dir }, services)));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   port = typeof address === 'object' && address ? address.port : 0;
@@ -751,8 +748,6 @@ describe('GET /api/events', () => {
 
 describe('without services', () => {
   test('only health is implemented', () => {
-    expect(
-      Object.keys(createHandlers({ host: '127.0.0.1', port: 0, uiPort: 0, stateDir: dir })),
-    ).toEqual(['health']);
+    expect(Object.keys(createHandlers({ ...LOCAL_CONFIG, stateDir: dir }))).toEqual(['health']);
   });
 });

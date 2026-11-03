@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { GameService } from './game.ts';
 import { initialGameState } from './gamification.ts';
-import { backfillLedger, StateStore, type StoredRun } from './store.ts';
+import { backfillLedger, FileStateStore, type StoredRun } from './store.ts';
 
 let dir: string;
 
@@ -55,30 +55,30 @@ const storedRun: StoredRun = {
   },
 };
 
-describe('StateStore', () => {
+describe('FileStateStore', () => {
   test('tightens an existing state directory to owner-only access', async () => {
     await chmod(dir, 0o755);
 
-    await StateStore.open(dir);
+    await FileStateStore.open(dir);
 
     expect((await stat(dir)).mode & 0o777).toBe(0o700);
   });
 
   test('starts from an empty game when there is no state file', async () => {
-    const store = await StateStore.open(join(dir, 'nested'));
+    const store = await FileStateStore.open(join(dir, 'nested'));
 
     expect(store.state).toEqual({ version: 2, game: initialGameState(), runs: [] });
   });
 
   test('persists updates so a reopened store reads them back', async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     await store.update((state) => ({
       ...state,
       game: { ...state.game, xp: 42 },
       runs: [storedRun],
     }));
-    const reopened = await StateStore.open(dir);
+    const reopened = await FileStateStore.open(dir);
 
     expect(reopened.state.game.xp).toBe(42);
     expect(reopened.state.runs).toEqual([storedRun]);
@@ -95,7 +95,7 @@ describe('StateStore', () => {
       }),
     );
 
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     expect(store.state.runs[0]?.run.quest).toEqual(storedRun.run.quest);
   });
@@ -111,7 +111,7 @@ describe('StateStore', () => {
       }),
     );
 
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     expect(store.state.runs[0]?.run.provider).toBe('cursor');
   });
@@ -131,10 +131,10 @@ describe('StateStore', () => {
         },
       },
     };
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
     await store.update((state) => ({ ...state, runs: [claudeRun] }));
 
-    expect((await StateStore.open(dir)).state.runs).toEqual([claudeRun]);
+    expect((await FileStateStore.open(dir)).state.runs).toEqual([claudeRun]);
   });
 
   test('keeps the selected findings of a run', async () => {
@@ -142,10 +142,10 @@ describe('StateStore', () => {
       ...storedRun,
       run: { ...storedRun.run, selectedFindings: [0, 2] },
     };
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
     await store.update((state) => ({ ...state, runs: [selected] }));
 
-    expect((await StateStore.open(dir)).state.runs).toEqual([selected]);
+    expect((await FileStateStore.open(dir)).state.runs).toEqual([selected]);
   });
 
   test('drops an unreadable selection instead of the whole state file', async () => {
@@ -158,7 +158,7 @@ describe('StateStore', () => {
       }),
     );
 
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     expect(store.state.game.xp).toBe(42);
     expect(store.state.runs[0]?.run).toEqual(storedRun.run);
@@ -182,7 +182,7 @@ describe('StateStore', () => {
       }),
     );
 
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     expect(store.state.runs[0]?.run).toEqual({ ...storedRun.run, selectedFindings: [0, 3] });
   });
@@ -197,13 +197,13 @@ describe('StateStore', () => {
       }),
     );
 
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     expect(store.state.runs[0]?.run).toEqual(storedRun.run);
   });
 
   test('writes through a temporary file and leaves only state.json behind', async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     await store.update((state) => ({ ...state, game: { ...state.game, xp: 1 } }));
 
@@ -214,18 +214,18 @@ describe('StateStore', () => {
   });
 
   test('applies concurrent updates one after another', async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
     const addXp = () =>
       store.update((state) => ({ ...state, game: { ...state.game, xp: state.game.xp + 1 } }));
 
     await Promise.all([addXp(), addXp(), addXp()]);
 
     expect(store.state.game.xp).toBe(3);
-    expect((await StateStore.open(dir)).state.game.xp).toBe(3);
+    expect((await FileStateStore.open(dir)).state.game.xp).toBe(3);
   });
 
   test('keeps the previous state when an update throws', async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
     await store.update((state) => ({ ...state, game: { ...state.game, xp: 5 } }));
 
     await expect(
@@ -239,7 +239,7 @@ describe('StateStore', () => {
   });
 
   test('does not write when an update returns the state unchanged', async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
 
     await store.update((state) => state);
 
@@ -250,7 +250,7 @@ describe('StateStore', () => {
     await writeFile(join(dir, 'state.json'), '{"version":1,"game":"nope"}');
     const onWarning = vi.fn();
 
-    const store = await StateStore.open(dir, { onWarning });
+    const store = await FileStateStore.open(dir, { onWarning });
 
     expect(store.state.game).toEqual(initialGameState());
     expect((await readdir(dir)).some((name) => name.startsWith('state.json.corrupt-'))).toBe(true);
@@ -261,7 +261,7 @@ describe('StateStore', () => {
     const newer = JSON.stringify({ version: 3, game: {}, runs: [] });
     await writeFile(join(dir, 'state.json'), newer);
 
-    await expect(StateStore.open(dir)).rejects.toThrow(/newer version of PR Quest/);
+    await expect(FileStateStore.open(dir)).rejects.toThrow(/newer version of PR Quest/);
     expect(await readFile(join(dir, 'state.json'), 'utf8')).toBe(newer);
     expect(await readdir(dir)).toEqual(['state.json']);
   });
@@ -282,7 +282,7 @@ describe('migrating version 1 state', () => {
   });
 
   const openGame = async () => {
-    const store = await StateStore.open(dir);
+    const store = await FileStateStore.open(dir);
     return {
       store,
       game: new GameService(store, { broadcast: () => undefined }, { now: () => NOW }),
@@ -379,7 +379,7 @@ describe('migrating version 1 state', () => {
     expect(written.game.ledger.highSeverityReviews).toBe(1);
     expect(await readFile(join(dir, 'state.json.v1.bak'), 'utf8')).toBe(original);
     expect((await stat(join(dir, 'state.json.v1.bak'))).mode & 0o777).toBe(0o600);
-    const reopened = await StateStore.open(dir);
+    const reopened = await FileStateStore.open(dir);
     expect(reopened.state.game.xp).toBe(165);
     expect(reopened.state.game.ledger).toEqual(written.game.ledger);
   });
@@ -387,7 +387,7 @@ describe('migrating version 1 state', () => {
   test('never overwrites the first version 1 copy', async () => {
     await writeFile(join(dir, 'state.json.v1.bak'), 'first copy');
 
-    await StateStore.open(dir);
+    await FileStateStore.open(dir);
 
     expect(await readFile(join(dir, 'state.json.v1.bak'), 'utf8')).toBe('first copy');
   });

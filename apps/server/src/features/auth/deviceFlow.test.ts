@@ -51,6 +51,11 @@ function setup(pollReplies: Array<unknown>, clientId: string | null = 'Iv1.clien
 }
 
 describe('DeviceFlow', () => {
+  test('is configured only with a client ID', () => {
+    expect(setup([]).flow.isConfigured()).toBe(true);
+    expect(setup([], null).flow.isConfigured()).toBe(false);
+  });
+
   test('starts with the code GitHub returned and never exposes the device code', async () => {
     const { flow, fetchMock } = setup([]);
 

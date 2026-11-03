@@ -14,8 +14,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { z } from 'zod';
 
-import { GameService, StateStore } from '../features/game/index.ts';
-import { QuestCache } from '../features/quests/index.ts';
+import { GameService, FileStateStore } from '../features/game/index.ts';
+import { FileQuestCache } from '../features/quests/index.ts';
 import { migrateLegacyState, userStateDir } from './userState.ts';
 
 const LEGACY_STATE = JSON.stringify({ version: 1, game: { xp: 0, counters: { agentReviews: 3 } } });
@@ -280,7 +280,7 @@ describe('migrating a real legacy state folder', () => {
     await migrateLegacyState(dir, 'BrianChristensen', { now: () => NOW });
 
     const userDir = join(dir, 'users', 'brianchristensen');
-    const store = await StateStore.open(userDir);
+    const store = await FileStateStore.open(userDir);
     const player = new GameService(
       store,
       { broadcast: () => undefined },
@@ -308,7 +308,7 @@ describe('migrating a real legacy state folder', () => {
     expect(store.state.runs.map(({ run }) => [run.id, run.provider, run.status])).toEqual(
       (await legacyRuns()).map((run) => [run.id, 'cursor', 'finished']),
     );
-    expect((await new QuestCache(userDir).load()).snapshot?.quests).toHaveLength(2);
+    expect((await new FileQuestCache(userDir).load()).snapshot?.quests).toHaveLength(2);
   });
 
   test('keeps byte-identical timestamped backups and changes nothing when run again', async () => {

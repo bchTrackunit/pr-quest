@@ -6,8 +6,9 @@
   "description": "PR Quest's local API: GitHub and Linear polling, game state and review runs",
   "exports": {},
   "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts",
+    "dev": "tsx watch src/app/dev.ts",
+    "start": "node dist/main.js",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "esbuild": "0.28.2",
     "tsx": "4.23.13",
     "typescript": "catalog:",
     "vitest": "catalog:"

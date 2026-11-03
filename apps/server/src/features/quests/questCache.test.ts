@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { Quest } from '@pr-quest/contract/api';
-import { QuestCache, type CachedQuestState } from './questCache.ts';
+import { FileQuestCache, type CachedQuestState } from './questCache.ts';
 
 const QUEST: Quest = {
   id: 'Trackunit/manager#7',
@@ -54,16 +54,16 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe('QuestCache', () => {
+describe('FileQuestCache', () => {
   test('round-trips the snapshot and backoff through quests.json', async () => {
-    await new QuestCache(dir).save(STATE);
+    await new FileQuestCache(dir).save(STATE);
 
-    await expect(new QuestCache(dir).load()).resolves.toEqual(STATE);
+    await expect(new FileQuestCache(dir).load()).resolves.toEqual(STATE);
     expect((await stat(join(dir, 'quests.json'))).mode & 0o777).toBe(0o600);
   });
 
   test('loads nothing when the file is missing', async () => {
-    await expect(new QuestCache(join(dir, 'missing')).load()).resolves.toEqual({});
+    await expect(new FileQuestCache(join(dir, 'missing')).load()).resolves.toEqual({});
   });
 
   test.each([
@@ -80,16 +80,16 @@ describe('QuestCache', () => {
     await writeFile(join(dir, 'quests.json'), text);
     const onWarning = vi.fn();
 
-    await expect(new QuestCache(dir, { onWarning }).load()).resolves.toEqual({});
+    await expect(new FileQuestCache(dir, { onWarning }).load()).resolves.toEqual({});
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
   });
 
   test('drops the server-only activeRunId from saved quests', async () => {
-    await new QuestCache(dir).save({
+    await new FileQuestCache(dir).save({
       snapshot: { ...SNAPSHOT, quests: [{ ...QUEST, activeRunId: 'run-1' }] },
     });
 
-    const loaded = await new QuestCache(dir).load();
+    const loaded = await new FileQuestCache(dir).load();
 
     expect(loaded.snapshot?.quests[0]).not.toHaveProperty('activeRunId');
     expect(await readFile(join(dir, 'quests.json'), 'utf8')).toContain('"version":1');

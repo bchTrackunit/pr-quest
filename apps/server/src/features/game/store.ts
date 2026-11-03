@@ -187,12 +187,22 @@ const PersistedStateV1Schema = z.object({
   runs: z.array(StoredRunSchema),
 });
 
+/**
+ * One player's XP, achievements and review runs. `state` is read synchronously, so an
+ * implementation loads it on open; `update` must apply changes one at a time, in order.
+ */
+export interface StateStore {
+  readonly state: PersistedState;
+  /** Applies `mutate` after any pending update and stores the result before resolving. */
+  update: (mutate: (state: PersistedState) => PersistedState) => Promise<PersistedState>;
+}
+
 export interface StateStoreOptions {
   onWarning?: (message: string) => void;
 }
 
 /** XP, achievements and review runs in `<stateDir>/state.json`. Writes are serialized and atomic. */
-export class StateStore {
+export class FileStateStore implements StateStore {
   private current: PersistedState;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly file: string;
@@ -206,12 +216,15 @@ export class StateStore {
     return this.current;
   }
 
-  public static async open(stateDir: string, options: StateStoreOptions = {}): Promise<StateStore> {
+  public static async open(
+    stateDir: string,
+    options: StateStoreOptions = {},
+  ): Promise<FileStateStore> {
     await mkdir(stateDir, { recursive: true, mode: 0o700 });
     // `mkdir` leaves an existing directory's mode alone; the state holds review history.
     await chmod(stateDir, 0o700);
     const file = join(stateDir, STATE_FILE);
-    return new StateStore(file, await readState(file, options.onWarning ?? (() => undefined)));
+    return new FileStateStore(file, await readState(file, options.onWarning ?? (() => undefined)));
   }
 
   /**

@@ -1,14 +1,35 @@
 import { copyFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer, request, type Server } from 'node:http';
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  request,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 
-import { createApp, type App } from './app.ts';
+import { createApp, type App, type AppOptions, type UserServices } from './app.ts';
+import type { AppSettings, SettingsStore } from '../features/settings/index.ts';
+import { NotSignedInError } from '../platform/githubApi.ts';
+import type { SecretName, SecretStore } from '../platform/secrets.ts';
+import type { IdentityFactory } from './identity.ts';
+import type { Session } from './sessions.ts';
+import {
+  type AppStorage,
+  createFileStorage,
+  MACHINE_SCOPE,
+  scopeKey,
+  type StorageScope,
+  userScope,
+} from './storage.ts';
 import type { CreateMessage } from '../features/reviews/index.ts';
-import type { AppConfig } from '../platform/config.ts';
+import type { AppConfig, HostedConfig } from '../platform/config.ts';
 import { createRouter } from '../platform/router.ts';
+import { HOSTED_CONFIG, LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import { SOURCE_DIFF, toolMessage } from '../features/reviews/test-utils/claude.ts';
 import { fixture } from '../features/quests/test-utils/fixtures.ts';
 
@@ -56,14 +77,12 @@ const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Respons
 });
 
 const config = (): AppConfig => ({
-  host: '127.0.0.1',
-  port: 0,
-  uiPort: 0,
+  ...LOCAL_CONFIG,
   stateDir: dir,
   githubClientId: 'Iv1.test',
 });
 
-async function start(): Promise<void> {
+async function start(overrides: Partial<AppOptions> = {}): Promise<void> {
   app = await createApp({
     config: config(),
     ghToken: async () => ghToken,
@@ -71,8 +90,9 @@ async function start(): Promise<void> {
     createMessage: (...args) => createMessage(...args),
     info: (message) => logs.push(message),
     warn: (message) => logs.push(message),
+    ...overrides,
   });
-  server = createServer(createRouter(app.handlers));
+  server = createServer(createRouter(app.handlers, { routes: app.routes }));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   port = typeof address === 'object' && address ? address.port : 0;
@@ -82,7 +102,8 @@ function send(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; body: unknown; text: string }> {
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: unknown; text: string; headers: IncomingHttpHeaders }> {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = request(
@@ -93,6 +114,7 @@ function send(
         path,
         headers: {
           'Content-Type': 'application/json',
+          ...headers,
           ...(payload === undefined
             ? {}
             : { 'Content-Length': String(Buffer.byteLength(payload)) }),
@@ -102,7 +124,14 @@ function send(
         let text = '';
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => (text += chunk));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), text }));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            body: text ? JSON.parse(text) : undefined,
+            text,
+            headers: res.headers,
+          }),
+        );
       },
     );
     req.on('error', reject);
@@ -164,10 +193,17 @@ afterEach(async () => {
   app = undefined;
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   server = undefined;
-  await rm(dir, { recursive: true, force: true });
+  // A quest cache write already under way when the app closed can still land in a user folder.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe('createApp', () => {
+  test('refuses a local config that trusts more than loopback', async () => {
+    const wide: AppConfig = Object.assign(config(), { allowedHosts: ['evil.example'] });
+
+    await expect(start({ config: wide })).rejects.toThrow(/loopback Host names/);
+  });
+
   test("opens the gh token owner's game from the migrated legacy state", async () => {
     await copyFile(join(FIXTURES, 'state.json'), join(dir, 'state.json'));
     await copyFile(join(FIXTURES, 'quests.json'), join(dir, 'quests.json'));
@@ -392,5 +428,352 @@ describe('createApp', () => {
       status: 400,
       body: { error: { code: 'missingConfig', provider: 'claude' } },
     });
+  });
+});
+
+/**
+ * A stand-in for a hosted sign-in: the `X-Test-Token` header names the GitHub token, and every
+ * login keeps its own session open at the same time. It names the session in an `X-Test-Session`
+ * response header, as a hosted resolver would set its cookie, and releases a player who signs out.
+ */
+const headerIdentity: IdentityFactory<UserServices> = async ({
+  openUser,
+  fetchViewer,
+  releaseUser,
+}) => {
+  const open = new Map<string, Promise<Session<UserServices>>>();
+  const sessionOf = async (req: IncomingMessage, res: ServerResponse) => {
+    const token = req.headers['x-test-token'];
+    if (typeof token !== 'string') {
+      return undefined;
+    }
+    const { login } = await fetchViewer(token);
+    const key = login.toLowerCase();
+    let session = open.get(key);
+    if (!session) {
+      session = openUser({ login: key, token: async () => token }).then((services) => ({
+        account: { login, tokenSource: 'oauth' as const },
+        services,
+      }));
+      open.set(key, session);
+    }
+    res.setHeader('X-Test-Session', key);
+    return session;
+  };
+  return {
+    resolve: sessionOf,
+    scope: async (req, res) => {
+      const session = await sessionOf(req, res);
+      if (!session) {
+        throw new NotSignedInError();
+      }
+      return userScope(session.account.login);
+    },
+    scopeFor: userScope,
+    signOut: async (req, res) => {
+      const session = await sessionOf(req, res);
+      if (!session) {
+        return undefined;
+      }
+      const key = session.account.login.toLowerCase();
+      res.removeHeader('X-Test-Session');
+      open.delete(key);
+      session.services.stop();
+      releaseUser(key);
+      return session.account;
+    },
+    rejected: () => undefined,
+    warmUp: async () => undefined,
+    close: () => {
+      for (const session of open.values()) {
+        void session.then(
+          ({ services }) => services.stop(),
+          () => undefined,
+        );
+      }
+    },
+    routes: [
+      {
+        method: 'GET',
+        path: '/auth/test',
+        handle: (_req, res) => {
+          res.writeHead(302, { Location: '/' }).end();
+        },
+      },
+    ],
+  };
+};
+
+function memorySettings(): SettingsStore {
+  let current: AppSettings = { reviewProvider: 'cursor', models: {} };
+  return {
+    get: () => current,
+    update: async (patch) => {
+      current = { ...current, reviewProvider: patch.reviewProvider ?? current.reviewProvider };
+      return current;
+    },
+  };
+}
+
+function memorySecrets(): SecretStore {
+  const saved = new Map<SecretName, string>();
+  return {
+    get: (name) => saved.get(name),
+    set: async (name, value) => {
+      saved.set(name, value);
+    },
+    delete: async (name) => {
+      saved.delete(name);
+    },
+  };
+}
+
+/** The file storage for games, with keys and settings kept per scope in memory as a hosted store would. */
+function perUserStorage(): AppStorage {
+  const files = createFileStorage(dir, { info: () => undefined, warn: () => undefined });
+  const settings = new Map<string, SettingsStore>();
+  const secrets = new Map<string, SecretStore>();
+  const scoped =
+    <TStore>(stores: Map<string, TStore>, create: () => TStore) =>
+    async (scope: StorageScope): Promise<TStore> => {
+      const key = scopeKey(scope);
+      const store = stores.get(key) ?? create();
+      stores.set(key, store);
+      return store;
+    };
+  return {
+    ...files,
+    secrets: scoped(secrets, memorySecrets),
+    settings: scoped(settings, memorySettings),
+  };
+}
+
+describe('createApp with an injected identity and storage', () => {
+  const as = (token: string) => ({ 'X-Test-Token': token });
+
+  test('opens each signed-in player their own game, side by side', async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const first = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    const second = await send('GET', '/api/player', undefined, as(OAUTH_TOKEN));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect((await readdir(join(dir, 'users'))).sort()).toEqual([
+      'brianchristensen',
+      'other-player',
+    ]);
+  });
+
+  test("keeps each player's settings apart", async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    await send('PUT', '/api/settings', { reviewProvider: 'claude' }, as(GH_TOKEN));
+
+    expect((await send('GET', '/api/settings', undefined, as(GH_TOKEN))).body).toMatchObject({
+      reviewProvider: 'claude',
+    });
+    expect((await send('GET', '/api/settings', undefined, as(OAUTH_TOKEN))).body).toMatchObject({
+      reviewProvider: 'cursor',
+    });
+  });
+
+  test('answers notSignedIn on settings routes when the identity needs a sign-in', async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const settings = await send('GET', '/api/settings');
+
+    expect(settings).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
+  });
+
+  test('lets the identity write headers on the response, as for a session cookie', async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(player.headers['x-test-session']).toBe('brianchristensen');
+  });
+
+  test("serves the identity's own routes outside the JSON API", async () => {
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const response = await send('GET', '/auth/test');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('/');
+  });
+
+  test('refuses cross-site routes in local mode, whose sign-in needs no callback', async () => {
+    const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      routes: [{ method: 'GET', path: '/auth/cross', crossSite: true, handle: () => undefined }],
+    });
+
+    await expect(start({ identity: crossSiteIdentity, storage: perUserStorage() })).rejects.toThrow(
+      /GET \/auth\/cross.*hosted mode/i,
+    );
+  });
+
+  test("never falls back to the gh CLI's token or offers the device flow (local mode)", async () => {
+    ghToken = GH_TOKEN;
+    await start({ identity: headerIdentity, storage: perUserStorage() });
+
+    const player = await send('GET', '/api/player');
+    const device = await send('POST', '/api/auth/device', {}, as(GH_TOKEN));
+    const status = await send('GET', '/api/auth/status', undefined, as(GH_TOKEN));
+
+    expect(player).toMatchObject({ status: 401, body: { error: { code: 'notSignedIn' } } });
+    expect(device).toMatchObject({ status: 409, body: { error: { code: 'missingConfig' } } });
+    expect(status.body).toMatchObject({
+      clientIdConfigured: false,
+      account: { login: 'BrianChristensen' },
+    });
+  });
+});
+
+const hostedConfig = (): HostedConfig => ({ ...HOSTED_CONFIG, stateDir: dir });
+
+/** `perUserStorage`, noting every scope whose keys or settings were opened. */
+function recordingStorage(): { storage: AppStorage; scopes: Array<string> } {
+  const inner = perUserStorage();
+  const scopes: Array<string> = [];
+  return {
+    scopes,
+    storage: {
+      ...inner,
+      secrets: async (scope) => {
+        scopes.push(scopeKey(scope));
+        return inner.secrets(scope);
+      },
+      settings: async (scope) => {
+        scopes.push(scopeKey(scope));
+        return inner.settings(scope);
+      },
+    },
+  };
+}
+
+describe('createApp in hosted mode', () => {
+  const as = (token: string) => ({ 'X-Test-Token': token });
+
+  test('refuses to start without an identity and storage for many players', async () => {
+    await expect(start({ config: hostedConfig() })).rejects.toThrow(/hosted mode needs/i);
+    await expect(start({ config: hostedConfig(), identity: headerIdentity })).rejects.toThrow(
+      /hosted mode needs/i,
+    );
+  });
+
+  test('refuses API keys in the config, which every player would share', async () => {
+    const withKey: AppConfig = Object.assign(hostedConfig(), { cursorApiKey: 'key_operator' });
+
+    await expect(
+      start({ config: withKey, identity: headerIdentity, storage: perUserStorage() }),
+    ).rejects.toThrow(/API keys/);
+  });
+
+  test("never opens the machine's keys or settings", async () => {
+    const { storage, scopes } = recordingStorage();
+    await start({ config: hostedConfig(), identity: headerIdentity, storage });
+
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+
+    expect(scopes.length).toBeGreaterThan(0);
+    expect(scopes).not.toContain('machine');
+  });
+
+  test('refuses an identity that puts a player on the machine scope', async () => {
+    const { storage, scopes } = recordingStorage();
+    const machineIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      scope: async () => MACHINE_SCOPE,
+      scopeFor: () => MACHINE_SCOPE,
+    });
+    await start({ config: hostedConfig(), identity: machineIdentity, storage });
+
+    const settings = await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+    const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(settings.status).toBe(500);
+    expect(player.status).toBe(500);
+    expect(scopes).not.toContain('machine');
+  });
+
+  test("reopens a released player's game and keys from storage", async () => {
+    const { storage, scopes } = recordingStorage();
+    let gameStates = 0;
+    await start({
+      config: hostedConfig(),
+      identity: headerIdentity,
+      storage: {
+        ...storage,
+        gameState: async (login) => {
+          gameStates += 1;
+          return storage.gameState(login);
+        },
+      },
+    });
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    expect(gameStates).toBe(1);
+
+    await send('POST', '/api/auth/sign-out', {}, as(GH_TOKEN));
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(gameStates).toBe(2);
+    expect(scopes.filter((key) => key === 'user:brianchristensen')).toHaveLength(4);
+  });
+
+  test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
+    const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
+      ...(await headerIdentity(context)),
+      routes: [
+        {
+          method: 'GET',
+          path: '/auth/callback',
+          crossSite: true,
+          handle: (_req, res) => {
+            res.writeHead(302, { Location: '/' }).end();
+          },
+        },
+      ],
+    });
+    await start({ config: hostedConfig(), identity: crossSiteIdentity, storage: perUserStorage() });
+
+    const response = await send('GET', '/auth/callback', undefined, {
+      'Sec-Fetch-Site': 'cross-site',
+    });
+
+    expect(response.status).toBe(302);
+  });
+
+  test('answers a sign-out as signed out, without reopening the session', async () => {
+    let gameStates = 0;
+    const storage = perUserStorage();
+    await start({
+      config: hostedConfig(),
+      identity: headerIdentity,
+      storage: {
+        ...storage,
+        gameState: async (login) => {
+          gameStates += 1;
+          return storage.gameState(login);
+        },
+      },
+    });
+    await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    const signedOut = await send('POST', '/api/auth/sign-out', {}, as(GH_TOKEN));
+
+    expect(signedOut.status).toBe(200);
+    expect(signedOut.body).not.toHaveProperty('account');
+    expect(signedOut.headers['x-test-session']).toBeUndefined();
+    expect(gameStates).toBe(1);
+  });
+
+  test('answers the health check without saying which keys exist', async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: perUserStorage() });
+
+    expect((await send('GET', '/api/health')).body).toEqual({ ok: true });
   });
 });

@@ -28,7 +28,7 @@ export const SignInSetupHelp = () => (
   <div className="notice notice--calm stack">
     <p>
       Sign in with GitHub needs a GitHub OAuth App. Set <code>PR_QUEST_GITHUB_CLIENT_ID</code> to
-      the app&apos;s client ID in <code>.env.local</code>, then restart PR Quest.
+      the app&apos;s client ID in <code>~/.pr-quest/.env</code>, then restart PR Quest.
     </p>
     <p>
       <a href={README_SIGN_IN_URL} rel="noopener noreferrer" target="_blank">

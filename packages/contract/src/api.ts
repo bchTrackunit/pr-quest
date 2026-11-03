@@ -352,7 +352,7 @@ export type ApiKeyName = 'cursor' | 'anthropic' | 'linear';
 
 export const API_KEY_NAMES: ReadonlyArray<ApiKeyName> = ['cursor', 'anthropic', 'linear'];
 
-/** `settings`: saved from the settings popup. `env`: from the environment or `.env.local`, read-only. */
+/** `settings`: saved from the settings popup. `env`: from the environment or an env file, read-only. */
 export type ApiKeySource = 'settings' | 'env';
 
 /** What the UI may know about a key. The value itself never leaves the server. */
@@ -404,8 +404,8 @@ export type ServerEventType = ServerEvent['type'];
 
 export interface HealthResponse {
   ok: true;
-  /** Which credentials are configured. Never carries the secret values. */
-  config: {
+  /** Local mode only: which credentials are configured. Never carries the secret values. */
+  config?: {
     linearApiKey: boolean;
     cursorApiKey: boolean;
     anthropicApiKey: boolean;

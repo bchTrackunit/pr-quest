@@ -1,7 +1,8 @@
 import react from '@vitejs/plugin-react';
 import type { PluginOptions as ReactCompilerOptions } from 'babel-plugin-react-compiler';
 import { existsSync, readFileSync } from 'node:fs';
-import { relative } from 'node:path';
+import { homedir } from 'node:os';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 import { defineConfig, type Logger, type Plugin } from 'vite';
@@ -10,10 +11,20 @@ import { readPorts, SERVER_HOST } from '@pr-quest/contract/ports';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 
-/** The same `.env.local` the server reads, so both agree on the ports; the environment wins. */
-const envFilePath = fileURLToPath(new URL('../../.env.local', import.meta.url));
-const fileEnv = existsSync(envFilePath) ? parseEnv(readFileSync(envFilePath, 'utf8')) : {};
-const ports = readPorts((name) => process.env[name] ?? fileEnv[name]);
+/**
+ * The env files the server reads, in its order, so both agree on the ports: the environment wins,
+ * then `.env` in the state directory, then `.env.local` at the repo root.
+ */
+const legacyEnv = readEnvFile(fileURLToPath(new URL('../../.env.local', import.meta.url)));
+const stateDir =
+  (process.env.PR_QUEST_STATE_DIR ?? legacyEnv.PR_QUEST_STATE_DIR)?.trim() ||
+  join(homedir(), '.pr-quest');
+const stateEnv = readEnvFile(join(stateDir, '.env'));
+const ports = readPorts((name) => process.env[name] ?? stateEnv[name] ?? legacyEnv[name]);
+
+function readEnvFile(path: string): NodeJS.Dict<string> {
+  return existsSync(path) ? parseEnv(readFileSync(path, 'utf8')) : {};
+}
 
 /**
  * React Compiler options, plus a build-only plugin that reports how many components and hooks it

@@ -207,13 +207,28 @@ review is a single request, so a restart during one marks it as failed.
 The API acts as you, so it only accepts browser requests that come from PR Quest's own UI:
 
 - **Host** must be `127.0.0.1` or `localhost`, which stops DNS rebinding.
-- **Origin**, when the browser sends one, must be exactly the UI or API origin. Pages on other
-  localhost ports, such as another dev server, get `403`.
+- **Origin**, when the browser sends one, must be exactly the server's own origin,
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_PORT`. Under `yarn dev` the
+  UI's origin on `PR_QUEST_UI_PORT` is trusted too, because Vite proxies `/api` from there;
+  `yarn start` serves the UI itself and doesn't trust that port. Pages on other localhost ports,
+  such as another dev server, get `403`.
 - **`Sec-Fetch-Site`**, when the browser sends it, must be `same-origin` or `none` on every
   request, including GETs, so an image or script tag on another page can't trigger a call.
 - **Every POST, PUT and DELETE must be `Content-Type: application/json`**, or the server answers
   `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
   never grants.
+
+When `yarn start` serves the built UI, page and asset requests outside `/api` get only the Host
+check, so links and bookmarks still open the page. Only GET and HEAD are served, from `dist/`
+alone: paths with `..`, a backslash or a dotfile segment get `404`. A path without a file
+extension that isn't a file gets `index.html`, so the app's own routes load. Hashed files under
+`assets/` are cached for a year as `immutable`; `index.html` and the rest are `no-cache`, so a new
+build shows up on the next load.
+
+In [hosted mode](development.md#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and
+the Origin must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a
+load balancer can probe it by IP address; its other checks still apply. It answers only
+`{ "ok": true }` there, without the configuration local mode reports.
 
 These checks stop other websites, not other programs. A request without `Origin` or
 `Sec-Fetch-Site`, such as one from `curl`, passes them, and the API has no authentication, so any
@@ -229,7 +244,7 @@ keychain, so backups of your home folder include it.
 
 `secrets.json` and `settings.json` in `~/.pr-quest` are shared; `users/<login>/` belongs to
 whoever the current token is, named by the lower-cased login. Signing in as someone else opens
-their own folder, starting fresh. Keys set in the environment or `.env.local` are never written to
+their own folder, starting fresh. Keys set in the environment or an env file are never written to
 `secrets.json`. Files are written atomically.
 
 When a file can't be used:

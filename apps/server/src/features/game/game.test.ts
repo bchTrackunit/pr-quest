@@ -6,16 +6,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ServerEvent } from '@pr-quest/contract/api';
 import { GameService } from './game.ts';
 import type { ReviewAction } from './gamification.ts';
-import { StateStore } from './store.ts';
+import { FileStateStore } from './store.ts';
 
 let dir: string;
-let store: StateStore;
+let store: FileStateStore;
 let broadcast: ReturnType<typeof vi.fn<(event: ServerEvent) => void>>;
 let game: GameService;
 /** A Friday at noon, so no weekend or time-of-day achievement unlocks by accident. */
 const now = new Date(2026, 9, 30, 12);
 
-function openGame(target: StateStore): GameService {
+function openGame(target: FileStateStore): GameService {
   let eventCount = 0;
   return new GameService(
     target,
@@ -26,7 +26,7 @@ function openGame(target: StateStore): GameService {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-game-'));
-  store = await StateStore.open(dir);
+  store = await FileStateStore.open(dir);
   broadcast = vi.fn<(event: ServerEvent) => void>();
   game = openGame(store);
 });
@@ -52,7 +52,7 @@ describe('GameService', () => {
     expect(outcome.xpGained).toBe(23 + 25 + 50);
     expect(outcome.unlocked.map((entry) => entry.id)).toEqual(['first-blood', 'quick-draw']);
     expect(outcome.player.xp).toBe(98);
-    expect((await StateStore.open(dir)).state.game.xp).toBe(98);
+    expect((await FileStateStore.open(dir)).state.game.xp).toBe(98);
   });
 
   test('broadcasts XP for the action, then each unlock with its XP', async () => {
@@ -119,7 +119,7 @@ describe('GameService', () => {
 
   test('a bonus is never paid twice, also after a restart', async () => {
     await game.recordReviewAction(approval);
-    const reopened = openGame(await StateStore.open(dir));
+    const reopened = openGame(await FileStateStore.open(dir));
     broadcast.mockClear();
 
     const outcome = await reopened.recordReviewAction({ ...approval, questId: 'o/r#2' });

@@ -315,14 +315,14 @@ describe('SettingsDialog', () => {
     expect(api.fetchModels).toHaveBeenCalledTimes(2);
   });
 
-  test('shows env keys as read-only with a hint to edit .env.local', async () => {
+  test('shows env keys as read-only with a hint to edit the env file in the state directory', async () => {
     renderDialog({ section: 'keys' });
 
     const row = await screen.findByRole('listitem', { name: 'Claude (Anthropic)' });
     expect(within(row).getByText('••••Zx9Q')).toBeTruthy();
     expect(within(row).getByText('env')).toBeTruthy();
     expect(within(row).getByText('ANTHROPIC_API_KEY')).toBeTruthy();
-    expect(within(row).getAllByText('.env.local').length).toBeGreaterThan(0);
+    expect(within(row).getAllByText('~/.pr-quest/.env').length).toBeGreaterThan(0);
     expect(within(row).queryByRole('textbox')).toBeNull();
     expect(row.querySelector('input')).toBeNull();
     expect(within(row).queryByRole('button')).toBeNull();

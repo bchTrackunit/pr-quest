@@ -30,19 +30,24 @@ yarn dev
 ```
 
 Open <http://127.0.0.1:4318>. `yarn dev` starts the API on port 4317, restarting it when the
-server code changes, and the UI on port 4318. `yarn start` does the same without the restarts.
-The board checks GitHub every 2 minutes and when you press **Refresh**.
+server code changes, and the UI on port 4318 with hot reload. `yarn start` builds and runs the
+[production build](docs/development.md#production-build) instead, which serves the API and the UI
+together on <http://127.0.0.1:4317>. The board checks GitHub every 2
+minutes and when you press **Refresh**.
 
 ## Configuration
 
 The board, approvals and XP work without any API keys. To send reviewers, add a key for the
 review provider you want, either in **Settings** (open the account chip in the top-right corner)
-or in `.env.local` at the repo root, which git ignores:
+or in the env file `~/.pr-quest/.env`, in the [state directory](#where-state-lives):
 
 ```sh
-cp .env.example .env.local
-chmod 600 .env.local
+mkdir -p -m 700 ~/.pr-quest
+cp .env.example ~/.pr-quest/.env
+chmod 600 ~/.pr-quest/.env
 ```
+
+PR Quest warns at startup when other users may read that file.
 
 | Variable                    | What it's for                                                                                      |
 | --------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -54,10 +59,23 @@ chmod 600 .env.local
 | `PR_QUEST_UI_PORT`          | UI port, default `4318`                                                                            |
 | `PR_QUEST_STATE_DIR`        | Where PR Quest keeps its data, default `~/.pr-quest` (see [Where state lives](#where-state-lives)) |
 
-Environment variables win over `.env.local`, and both win over keys saved in Settings. Setting a
-variable to an empty value ignores both, so the default applies; for an API key that's the key
-saved in Settings, so `CURSOR_API_KEY= yarn start` still uses a saved Cursor key. Keys from the
-environment are read-only in Settings; saved keys apply without a restart. Settings never shows a
+`PR_QUEST_MODE`, `PR_QUEST_HOST`, `PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to
+[hosted mode](docs/development.md#hosted-mode), which isn't usable yet.
+
+PR Quest reads settings from three places, and the first one that sets a value wins:
+
+1. The environment.
+2. The env file in the state directory, `<PR_QUEST_STATE_DIR>/.env`. It can't set
+   `PR_QUEST_STATE_DIR` itself, because it is read from there; PR Quest refuses to start if it
+   tries.
+3. `.env.local` at the repo root (git-ignored), read by `yarn dev` and `yarn start` from a
+   checkout. It was the only env file before, so existing setups keep working, and it may set
+   `PR_QUEST_STATE_DIR`. Move its other values to `~/.pr-quest/.env` when convenient.
+
+All three win over keys saved in Settings. Setting a variable to an empty value ignores the places
+below it, so the default applies; for an API key that's the key saved in Settings, so
+`CURSOR_API_KEY= yarn dev` still uses a saved Cursor key. Keys from the environment or an env file
+are read-only in Settings; saved keys apply without a restart. Settings never shows a
 key, only whether it's set, where it came from and, for keys of 12 characters or more, its last
 four characters. The key inputs ask 1Password, LastPass and Bitwarden not to save them.
 
@@ -85,7 +103,8 @@ callback, but it does need a GitHub OAuth App, which you create once:
    it.
 3. Check **Enable Device Flow**, since without it GitHub refuses to issue codes. Choose **Register
    application** and copy the **Client ID**. Don't generate a client secret.
-4. Put it in `.env.local` as `PR_QUEST_GITHUB_CLIENT_ID=...` and restart PR Quest.
+4. Put it in `~/.pr-quest/.env` (or `.env.local`) as `PR_QUEST_GITHUB_CLIENT_ID=...` and restart
+   PR Quest.
 
 PR Quest asks for the `repo` and `read:org` scopes. OAuth Apps have no read-only scope for
 private repos, so `repo` grants full access to every repo you can access. **Sign out** deletes the
@@ -178,6 +197,7 @@ Everything is under `~/.pr-quest`, or `PR_QUEST_STATE_DIR`. Directories are crea
 
 ```text
 ~/.pr-quest/
+├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved in Settings
 ├── settings.json       the review provider and the model per provider
 └── users/<login>/      one folder per GitHub user
@@ -191,8 +211,8 @@ unreadable or older files.
 
 ## Security
 
-- **Loopback only.** The server listens on `127.0.0.1` and only accepts browser requests from its
-  own UI, so other websites and local dev servers can't use it to act as you. It has no
+- **Loopback only.** In local mode, the default, the server listens on `127.0.0.1` and only
+  accepts browser requests from its own UI, so other websites and local dev servers can't use it to act as you. It has no
   authentication, so any program running on this computer can call it.
 - **Secrets stay in the server.** No route returns a key or the GitHub token. They're stored in
   plain text in `secrets.json`, protected only by its file mode.
@@ -206,6 +226,23 @@ unreadable or older files.
 
 [How it works](docs/how-it-works.md) describes the GitHub calls, the reviewers' safeguards and
 these protections in full.
+
+## Privacy
+
+PR Quest has no server of its own and collects nothing. It sends your data only to the services
+you use it with, under your own accounts and keys:
+
+- **GitHub** gets the API calls described in [How it works](docs/how-it-works.md), made with your
+  token.
+- **Cursor** gets the PR to review when you send a Cursor review agent, under your Cursor API key.
+  The agent reads the repo through your Cursor GitHub integration.
+- **Anthropic** gets the PR's diff, title, branch names and trusted comments when you send a
+  Claude review, under your Anthropic API key.
+- **Linear** gets a request for your pending reviews, under your Linear API key, if you set one.
+
+Nothing goes to the author of PR Quest: there is no telemetry, analytics or crash reporting. Each
+provider's own terms and privacy policy cover what it does with what it receives. Your state,
+settings and saved keys stay in the [state directory](#where-state-lives) on your machine.
 
 ## Known limitations
 
@@ -227,6 +264,8 @@ these protections in full.
 | Command          | What it does                                                     |
 | ---------------- | ---------------------------------------------------------------- |
 | `yarn dev`       | Runs the API (restarting on changes) and the UI                  |
+| `yarn build`     | Builds the UI and bundles the server                             |
+| `yarn start`     | Builds, then runs the production build on port 4317              |
 | `yarn test`      | Runs every package's Vitest suite once                           |
 | `yarn typecheck` | Type-checks each package and its tests with TypeScript 7         |
 | `yarn lint`      | Lints with oxlint, including type-aware rules and project rules  |
@@ -235,5 +274,9 @@ these protections in full.
 
 The repo is a set of Yarn workspaces: the server in `apps/server`, the React UI in `apps/web`,
 and the types and routes they share in `packages/contract`.
-[Development](docs/development.md) covers the tooling, the project structure and its import
-rules, and how to move a branch from the old `src/` layout.
+[Development](docs/development.md) covers the tooling, the production build, the project
+structure and its import rules, and how to move a branch from the old `src/` layout.
+
+## License
+
+PR Quest is released under the [MIT License](LICENSE).

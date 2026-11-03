@@ -36,12 +36,18 @@ const SettingsFileSchema = z.object({
 
 const DEFAULT_SETTINGS: AppSettings = { reviewProvider: 'cursor', models: {} };
 
+/** The review provider and models. `get` is synchronous, so an implementation loads on open. */
+export interface SettingsStore {
+  get: () => AppSettings;
+  update: (patch: SettingsPatch) => Promise<AppSettings>;
+}
+
 export interface SettingsStoreOptions {
   onWarning?: (message: string) => void;
 }
 
 /** `<stateDir>/settings.json`. Writes are serialized and atomic. */
-export class SettingsStore {
+export class FileSettingsStore implements SettingsStore {
   private readonly file: string;
   private readonly writes = new WriteQueue();
   private current: AppSettings;
@@ -54,21 +60,21 @@ export class SettingsStore {
   public static async open(
     stateDir: string,
     options: SettingsStoreOptions = {},
-  ): Promise<SettingsStore> {
+  ): Promise<FileSettingsStore> {
     await ensurePrivateDir(stateDir);
     const file = join(stateDir, SETTINGS_FILE);
     const text = await readIfExists(file);
     if (text === undefined) {
-      return new SettingsStore(file, DEFAULT_SETTINGS);
+      return new FileSettingsStore(file, DEFAULT_SETTINGS);
     }
     const json = safeJson(text);
     refuseNewerVersion(json, 1, file);
     const parsed = SettingsFileSchema.safeParse(json);
     if (!parsed.success) {
       options.onWarning?.('The settings file was unreadable; using the defaults');
-      return new SettingsStore(file, DEFAULT_SETTINGS);
+      return new FileSettingsStore(file, DEFAULT_SETTINGS);
     }
-    return new SettingsStore(file, {
+    return new FileSettingsStore(file, {
       reviewProvider: parsed.data.reviewProvider,
       models: parsed.data.models,
     });

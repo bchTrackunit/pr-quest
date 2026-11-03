@@ -129,8 +129,9 @@ export const ApiKeyRow = ({
 
       {isEnv ? (
         <p className="muted">
-          Set by <code>{meta.envName}</code> in the environment or <code>.env.local</code>, so it is
-          read-only here. Edit <code>.env.local</code> and restart PR Quest to change it.
+          Set by <code>{meta.envName}</code> in the environment or an env file, so it is read-only
+          here. Edit <code>~/.pr-quest/.env</code> (or <code>.env.local</code> in a checkout) and
+          restart PR Quest to change it.
         </p>
       ) : (
         <form className="key-row__form" onSubmit={handleSubmit}>

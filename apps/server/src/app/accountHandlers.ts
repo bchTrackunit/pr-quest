@@ -8,7 +8,7 @@ import {
 } from '@pr-quest/contract/api';
 import type { ApiKeys, ModelCatalog, SettingsStore } from '../features/settings/index.ts';
 import type { DeviceFlow } from '../features/auth/index.ts';
-import type { RouteHandlers } from '../platform/router.ts';
+import { ApiError, type RouteHandlers } from '../platform/router.ts';
 import { ModelIdSchema, parseBody, parseOrReject } from '../platform/validation.ts';
 
 const MAX_KEY_LENGTH = 1000;
@@ -38,13 +38,32 @@ const KeyNameSchema = z.enum(API_KEY_NAMES, {
 
 const EmptyBodySchema = z.strictObject({}, { error: 'This route takes no body' });
 
-export interface AccountServices {
+/** Stands in where sign-in works another way: always idle, and starting it is refused. */
+const NO_DEVICE_FLOW: NonNullable<AuthServices['deviceFlow']> = {
+  start: async () => {
+    throw new ApiError(409, 'missingConfig', "This server doesn't sign in with a device code");
+  },
+  status: () => ({ state: 'idle' }),
+  cancel: () => undefined,
+  acknowledgeComplete: () => undefined,
+  isConfigured: () => false,
+};
+
+/** What the settings, API key and model routes act on: one storage scope's. */
+export interface SettingsServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
   settings: Pick<SettingsStore, 'get' | 'update'>;
   models: Pick<ModelCatalog, 'list'>;
-  deviceFlow: Pick<DeviceFlow, 'start' | 'status' | 'cancel' | 'acknowledgeComplete'>;
+}
+
+/** What the sign-in routes act on. */
+export interface AuthServices {
+  /** Only local mode signs in by device code; without it, those routes say it isn't set up. */
+  deviceFlow?: Pick<
+    DeviceFlow,
+    'start' | 'status' | 'cancel' | 'acknowledgeComplete' | 'isConfigured'
+  >;
   auth: {
-    clientIdConfigured: boolean;
     /** The token owner, or why the token didn't resolve to one. */
     current: () => Promise<{ account?: GitHubAccount; error?: string }>;
     /** Forgets the OAuth token and the cached identity; names the OAuth account it signed out of. */
@@ -52,18 +71,17 @@ export interface AccountServices {
   };
 }
 
+export interface AccountServices extends SettingsServices, AuthServices {}
+
 /** Sign-in, settings, API key and model routes. None of them return or log a secret. */
 export function createAccountHandlers(services: AccountServices): RouteHandlers {
-  const { apiKeys, settings, models, deviceFlow, auth } = services;
+  return { ...createAuthHandlers(services), ...createSettingsHandlers(services) };
+}
 
-  const settingsResponse = (): SettingsResponse => {
-    const current = settings.get();
-    return {
-      reviewProvider: current.reviewProvider,
-      models: current.models,
-      keys: apiKeys.statuses(),
-    };
-  };
+/** The sign-in routes: who is signed in, the device flow and signing out. */
+export function createAuthHandlers(services: AuthServices): RouteHandlers {
+  const { auth } = services;
+  const deviceFlow = services.deviceFlow ?? NO_DEVICE_FLOW;
 
   const authStatus = async (): Promise<AuthStatusResponse> => {
     const { account, error } = await auth.current();
@@ -72,7 +90,7 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
       deviceFlow.acknowledgeComplete();
     }
     return {
-      clientIdConfigured: auth.clientIdConfigured,
+      clientIdConfigured: deviceFlow.isConfigured(),
       ...(account ? { account } : {}),
       ...(error ? { error } : {}),
       device,
@@ -109,7 +127,23 @@ export function createAccountHandlers(services: AccountServices): RouteHandlers 
       }
       return status;
     },
+  };
+}
 
+/** The settings, API key and model routes. */
+export function createSettingsHandlers(services: SettingsServices): RouteHandlers {
+  const { apiKeys, settings, models } = services;
+
+  const settingsResponse = (): SettingsResponse => {
+    const current = settings.get();
+    return {
+      reviewProvider: current.reviewProvider,
+      models: current.models,
+      keys: apiKeys.statuses(),
+    };
+  };
+
+  return {
     getSettings: settingsResponse,
 
     updateSettings: async ({ body }) => {

@@ -2,20 +2,53 @@
 
 ## Checks
 
-| Command             | What it does                                                             |
-| ------------------- | ------------------------------------------------------------------------ |
-| `yarn typecheck`    | Type-checks each package and its tests                                   |
-| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
-| `yarn lint:fix`     | Applies oxlint's safe fixes                                              |
-| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
-| `yarn format:check` | Fails if a file isn't formatted                                          |
-| `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open) |
-| `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/`                    |
+| Command             | What it does                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `yarn typecheck`    | Type-checks each package and its tests                                                        |
+| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware                       |
+| `yarn lint:fix`     | Applies oxlint's safe fixes                                                                   |
+| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)                      |
+| `yarn format:check` | Fails if a file isn't formatted                                                               |
+| `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
+| `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
+| `yarn start`        | Builds, then runs the [production build](#production-build)                                   |
 
 Each package also has its own `test` and `typecheck` scripts, and the two apps a `dev` script,
-for example `yarn workspace @pr-quest/server test`. With [just](https://just.systems) installed,
-`just check` runs the type check, lint, format check, tests and build, as CI does on every pull
-request and every push to `main`.
+for example `yarn workspace @pr-quest/server test`. `yarn workspace @pr-quest/server build`
+bundles only the server. With [just](https://just.systems) installed, `just check` runs the type
+check, lint, format check, tests and build, as CI does on every pull request and every push to
+`main`.
+
+## Production build
+
+```sh
+yarn start
+```
+
+`yarn start` runs `yarn build` first, which type-checks, builds the UI into `apps/web/dist/` and
+bundles the server into `apps/server/dist/` with [esbuild](https://esbuild.github.io). It then
+runs `node apps/server/dist/main.js`, which serves the API and the built UI together on
+<http://127.0.0.1:4317>; there is no separate UI port. To run an existing build without
+rebuilding, use `yarn workspace @pr-quest/server start`. Without an `apps/web/dist/` build the
+server serves only the API and says so. The bundle leaves
+`@cursor/sdk` and `@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
+
+### Hosted mode
+
+`PR_QUEST_MODE` is `local` by default: one player on their own machine, listening on `127.0.0.1`
+only. Local mode refuses a `PR_QUEST_HOST` other than `127.0.0.1`, and refuses the hosted-only
+settings, so a typo can't expose the server.
+
+`PR_QUEST_MODE=hosted` is groundwork for serving many players from one address. It needs
+`PR_QUEST_PUBLIC_ORIGIN`, the origin browsers load PR Quest from (for example
+`https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `::`, every interface) and
+accepts the Host names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's
+host name). Every player brings their own keys, so hosted mode refuses to start with
+`CURSOR_API_KEY`, `ANTHROPIC_API_KEY` or `LINEAR_API_KEY` set, and the server warns when the
+public origin is plain `http:` to anything but loopback. Hosted mode also needs a sign-in that
+tells players apart and storage for each of them, which don't exist yet, so `yarn start` refuses
+to start in hosted mode. Code that embeds the server supplies them through `startServer` in
+[`apps/server/src/app/server.ts`](../apps/server/src/app/server.ts).
 
 ## Tooling notes
 
@@ -46,10 +79,14 @@ they share code only through `@pr-quest/contract`. Tests sit next to the code th
 
 ```text
 apps/
-  server/         @pr-quest/server, the local API (Node, run with tsx)
+  server/         @pr-quest/server, the API (Node: tsx in development, an esbuild bundle in
+                  production)
     src/
-      main.ts     entry point
-      app/        composition root: the HTTP route tables, per-user sessions and state dirs
+      main.ts     entry point of the production build
+      app/        composition root: dev.ts (dev entry), server.ts (startServer, for embedding),
+                  app.ts, the HTTP route tables, identity.ts (who a request acts as), storage.ts
+                  (where secrets, settings and player state live), per-user sessions and state
+                  dirs
       features/   one folder per feature, listed below
       platform/   router and security guards, config, SSE events, GitHub API wrapper, rate
                   limits, private files and secrets

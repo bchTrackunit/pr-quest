@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "dev": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"yarn workspace @pr-quest/server dev\" \"yarn workspace @pr-quest/web dev\"",
-    "start": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"yarn workspace @pr-quest/server start\" \"yarn workspace @pr-quest/web dev\"",
+    "start": "yarn build && yarn workspace @pr-quest/server start",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint",
@@ -27,7 +27,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && yarn workspaces foreach --all --exclude pr-quest run typecheck",
-    "build": "yarn typecheck && yarn workspace @pr-quest/web build"
+    "build": "yarn typecheck && yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build"
   },
   "devDependencies": {
     "@types/node": "catalog:",
