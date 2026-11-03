@@ -21,7 +21,7 @@ check, lint, format check, tests and build, as CI does on every pull request and
 
 The Postgres storage tests run on [PGlite](https://pglite.dev), Postgres compiled to WebAssembly,
 in-process, so `yarn test` needs no database. `just test-postgres` runs the whole suite against a
-throwaway `postgres:17` container in Docker instead, as CI's `test-postgres` job does with a
+throwaway, digest-pinned `postgres:17-alpine` container in Docker instead, as CI's `test-postgres` job does with a
 service container. To use a server of your own, set `PR_QUEST_TEST_DATABASE_URL`; each test file
 works in its own schema and drops it afterwards.
 

@@ -167,6 +167,71 @@ describe('game state', () => {
     expect(store.state.game.ledger).toBeDefined();
   });
 
+  test('turns finding decisions from before selections into the accepted findings, and saves those', async () => {
+    const quest = {
+      title: 'T',
+      repo: { owner: 'o', name: 'r' },
+      number: 1,
+      githubUrl: 'https://github.com/o/r/pull/1',
+    };
+    const run = {
+      id: 'run-1',
+      questId: 'o/r#1',
+      quest,
+      provider: 'cursor',
+      agentId: 'bc-1',
+      runId: 'run-abc',
+      status: 'finished',
+      disposition: 'pending',
+      startedAt: '2026-10-30T10:00:00.000Z',
+      finishedAt: '2026-10-30T10:05:00.000Z',
+      result: { summary: 'Fine.', verdict: 'comment', findings: [] },
+    };
+    const { game } = (await (await open()).gameState(BOB)).state;
+    await db.query('INSERT INTO users (github_id, login) VALUES ($1, $2)', [
+      OCTOCAT.id,
+      OCTOCAT.login,
+    ]);
+    await db.query(
+      "INSERT INTO user_documents (github_id, kind, body, revision) VALUES ($1, 'game', $2::jsonb, 1)",
+      [
+        OCTOCAT.id,
+        JSON.stringify({
+          version: 2,
+          game,
+          runs: [
+            {
+              run: { ...run, findingDecisions: ['accepted', 'rejected', 'undecided', 'accepted'] },
+              quest: {
+                ...quest,
+                id: 'o/r#1',
+                sourceBranch: 'feature',
+                targetBranch: 'main',
+                headSha: 'abc',
+                difficulty: 'Normal',
+                requestKind: 'team',
+                requestedAt: '2026-10-30T09:00:00.000Z',
+              },
+            },
+          ],
+        }),
+      ],
+    );
+
+    const store = await (await open()).gameState(OCTOCAT);
+    expect(store.state.runs[0]?.run).toEqual({ ...run, selectedFindings: [0, 3] });
+    await store.update((state) => ({ ...state, game: { ...state.game, xp: 1 } }));
+
+    const [saved] = (
+      await db.query("SELECT body->'runs'->0->'run' AS run FROM user_documents WHERE kind = 'game'")
+    ).rows;
+    expect(saved).toEqual({ run: expect.objectContaining({ selectedFindings: [0, 3] }) });
+    expect(saved).not.toHaveProperty('run.findingDecisions');
+    expect((await (await open()).gameState(OCTOCAT)).state.runs[0]?.run.selectedFindings).toEqual([
+      0, 3,
+    ]);
+  });
+
   test('refuses a login that is not a GitHub login', async () => {
     await expect((await open()).gameState({ id: 1, login: '../escape' })).rejects.toThrow(
       /Not a GitHub login/,
