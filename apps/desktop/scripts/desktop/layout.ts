@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep, win32 } from 'node:path';
 import { z } from 'zod';
 
 import { BUILD_DIR, DESKTOP_DIR, REPO_ROOT, SRC_TAURI, WEB_DIST } from './paths.ts';
@@ -189,19 +189,35 @@ function installNode({ node, nodeBinary, os }: Target): string {
     rmSync(cached, { force: true });
     throw new Error(`${node.archive} has SHA-256 ${actual}, not the pinned ${node.sha256}`);
   }
-  const zip = node.archive.endsWith('.zip');
   const extracted = join(CACHE, node.archive.replace(/\.(tar\.gz|zip)$/, ''));
   rmSync(extracted, { recursive: true, force: true });
-  if (zip && process.platform === 'linux') {
-    execFileSync('unzip', ['-q', cached, '-d', CACHE]);
-  } else {
-    // bsdtar, which macOS and Windows have as tar, reads zip files too.
-    execFileSync('tar', ['-xf', cached, '-C', CACHE]);
-  }
+  const [command, args] = extractCommand(cached, CACHE, process.platform, process.env);
+  execFileSync(command, args);
   mkdirSync(dirname(target), { recursive: true });
   cpSync(join(extracted, os === 'windows' ? 'node.exe' : join('bin', 'node')), target);
   chmodSync(target, 0o755);
   return target;
+}
+
+/**
+ * What unpacks `archive` into `dest`: unzip for Linux's zip files, else tar. On Windows that is
+ * its own bsdtar, which reads zip files too: a Git Bash GNU tar earlier on PATH takes `D:` in
+ * a path for a remote host and can't read zip.
+ */
+export function extractCommand(
+  archive: string,
+  dest: string,
+  platform: NodeJS.Platform,
+  env: Readonly<Record<string, string | undefined>>,
+): [string, Array<string>] {
+  if (platform === 'win32') {
+    const tar = win32.join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+    return [tar, ['-xf', archive, '-C', dest]];
+  }
+  if (platform === 'linux' && archive.endsWith('.zip')) {
+    return ['unzip', ['-q', archive, '-d', dest]];
+  }
+  return ['tar', ['-xf', archive, '-C', dest]];
 }
 
 function hash(file: string): string {
