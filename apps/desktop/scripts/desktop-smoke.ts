@@ -24,6 +24,7 @@ import {
   type ArtifactKind,
   debBinaries,
   defaultArtifact,
+  nsisSilent,
   sidecarBinaryProblem,
 } from './desktop/artifacts.ts';
 import { bundleDir as bundleDirFor } from './desktop/paths.ts';
@@ -105,12 +106,16 @@ function prepare(path: string): string {
     }
     case 'nsis': {
       const dir = join(temporaryDir('pr-quest-nsis-'), 'PR Quest');
-      // /D must come last and unquoted, spaces and all.
-      execFileSync(path, ['/S', `/D=${dir}`], { stdio: 'inherit' });
+      const [installer, args, options] = nsisSilent(path, '/D=', dir);
+      execFileSync(installer, args, { ...options, stdio: 'inherit' });
       cleanups.push(() => {
-        const uninstaller = join(dir, 'uninstall.exe');
+        const [uninstaller, uninstallArgs, uninstallOptions] = nsisSilent(
+          join(dir, 'uninstall.exe'),
+          '_?=',
+          dir,
+        );
         if (existsSync(uninstaller)) {
-          execFileSync(uninstaller, ['/S'], { stdio: 'inherit' });
+          execFileSync(uninstaller, uninstallArgs, { ...uninstallOptions, stdio: 'inherit' });
         }
       });
       return join(dir, 'pr-quest.exe');

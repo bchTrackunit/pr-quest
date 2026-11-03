@@ -1,7 +1,13 @@
 import { basename } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { artifactKind, debBinaries, defaultArtifact, sidecarBinaryProblem } from './artifacts.ts';
+import {
+  artifactKind,
+  debBinaries,
+  defaultArtifact,
+  nsisSilent,
+  sidecarBinaryProblem,
+} from './artifacts.ts';
 import { targetFor } from './targets.ts';
 
 describe('artifactKind', () => {
@@ -93,5 +99,26 @@ describe('debBinaries', () => {
       '-rw-r--r-- 0/0          985430 2026-11-03 10:13 usr/lib/PR Quest/sidecar/main.mjs',
     ].join('\n');
     expect(debBinaries(listing)).toEqual(['pr-quest', 'pr-quest-node']);
+  });
+});
+
+describe('nsisSilent', () => {
+  const installer = 'D:\\a\\bundle\\nsis\\PR Quest_0.0.0_x64-setup.exe';
+  const dir = 'C:\\Temp\\pr-quest-nsis-x\\PR Quest';
+
+  it('ends the command line with /D= raw, spaces and all, as NSIS reads it to the end', () => {
+    const [file, args, options] = nsisSilent(installer, '/D=', dir);
+    expect(file).toBe(installer);
+    expect(args).toEqual(['/S', `/D=${dir}`]);
+    expect(options.windowsVerbatimArguments).toBe(true);
+  });
+
+  it('quotes only the executable, which Node then no longer does', () => {
+    expect(nsisSilent(installer, '/D=', dir)[2].argv0).toBe(`"${installer}"`);
+  });
+
+  it('keeps the uninstaller in place with _?=, so it finishes before returning', () => {
+    const uninstaller = `${dir}\\uninstall.exe`;
+    expect(nsisSilent(uninstaller, '_?=', dir)[1]).toEqual(['/S', `_?=${dir}`]);
   });
 });

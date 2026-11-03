@@ -69,3 +69,17 @@ export function debBinaries(listing: string): Array<string> {
     .map((line) => /\s(?:\.\/)?usr\/bin\/([^/]+)$/.exec(line)?.[1])
     .filter((name) => name !== undefined);
 }
+
+/**
+ * How to run an NSIS installer (`/D=`) or uninstaller (`_?=`, which also keeps it from copying
+ * itself away and returning at once) silently for `dir`. NSIS reads either raw to the end of its
+ * command line, so it must come last and unquoted, spaces and all, where Node would quote it: the
+ * command line goes verbatim, with only the executable quoted.
+ */
+export function nsisSilent(
+  exe: string,
+  dirFlag: '/D=' | '_?=',
+  dir: string,
+): [string, Array<string>, { argv0: string; windowsVerbatimArguments: true }] {
+  return [exe, ['/S', `${dirFlag}${dir}`], { argv0: `"${exe}"`, windowsVerbatimArguments: true }];
+}
