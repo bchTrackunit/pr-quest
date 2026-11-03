@@ -67,6 +67,11 @@ struct Fatal {
 }
 
 #[derive(Deserialize)]
+struct SmokeDone {
+    ok: bool,
+}
+
+#[derive(Deserialize)]
 struct Bootstrap {
     code: String,
 }
@@ -275,7 +280,7 @@ fn parse_line(line: &str) -> Result<Option<Event>, serde_json::Error> {
         return serde_json::from_str::<Fatal>(fatal).map(|fatal| Some(Event::Fatal(fatal.message)));
     }
     if let Some(done) = line.strip_prefix(SMOKE_DONE_PREFIX) {
-        return Ok(Some(Event::SmokeDone(done.contains("\"ok\":true"))));
+        return serde_json::from_str::<SmokeDone>(done).map(|done| Some(Event::SmokeDone(done.ok)));
     }
     if line.starts_with(SMOKE_LINE_PREFIX) {
         return Ok(Some(Event::SmokeLine(line.to_owned())));
@@ -363,6 +368,15 @@ mod tests {
             panic!("not a ready line");
         };
         assert_eq!((ready.port, ready.storage.as_str()), (4317, "keychain"));
+    }
+
+    #[test]
+    fn reads_whether_the_sidecar_checks_passed() {
+        let passed = parse_line(r#"PRQUEST_SMOKE_DONE {"ok":true}"#);
+        assert!(matches!(passed, Ok(Some(Event::SmokeDone(true)))));
+        let failed = parse_line(r#"PRQUEST_SMOKE_DONE {"ok":false,"note":"\"ok\":true"}"#);
+        assert!(matches!(failed, Ok(Some(Event::SmokeDone(false)))));
+        assert!(parse_line(r#"PRQUEST_SMOKE_DONE {"ok":"yes"}"#).is_err());
     }
 
     #[test]
