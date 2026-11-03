@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { type Encryptor, openDesktopSecrets } from './keychainSecrets.ts';
+import { type Encryptor, openDesktopSecrets, setAsideEncryptedSecrets } from './keychainSecrets.ts';
 
 let dir: string;
 
@@ -15,15 +15,20 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** Stands in for the keychain's data key: reversible, and never stores the plain text. */
-const fakeKeychain = (): Encryptor => ({
-  encryptString: (text) => Buffer.from(Buffer.from(`enc:${text}`).map((byte) => byte ^ 0x5a)),
-  decryptString: (data) => {
+/**
+ * Stands in for the keychain's data key: reversible, tied to the secret's name like the real one,
+ * and never stores the plain text.
+ */
+const fakeKeychain = (keyId = 'fake-key'): Encryptor => ({
+  keyId,
+  encryptString: (text, name) =>
+    Buffer.from(Buffer.from(`enc:${name}:${text}`).map((byte) => byte ^ 0x5a)),
+  decryptString: (data, name) => {
     const text = Buffer.from(data.map((byte) => byte ^ 0x5a)).toString('utf8');
-    if (!text.startsWith('enc:')) {
+    if (!text.startsWith(`enc:${name}:`)) {
       throw new Error('Unsupported state or unable to authenticate data');
     }
-    return text.slice('enc:'.length);
+    return text.slice(`enc:${name}:`.length);
   },
 });
 
@@ -69,7 +74,11 @@ describe('openDesktopSecrets with the OS keychain', () => {
 
     const text = await readFile(encryptedFile(), 'utf8');
     expect(text).not.toContain('key_cursor_secret');
-    expect(JSON.parse(text)).toEqual({ version: 1, secrets: { cursor: expect.any(String) } });
+    expect(JSON.parse(text)).toEqual({
+      version: 2,
+      keyId: 'fake-key',
+      secrets: { cursor: expect.any(String) },
+    });
     expect(await modeOf(encryptedFile())).toBe(0o600);
     expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
     expect((await open(fakeKeychain())).store.get('cursor')).toBe('key_cursor_secret');
@@ -136,10 +145,10 @@ describe('openDesktopSecrets with the OS keychain', () => {
     const plain = await readFile(plainFile(), 'utf8');
     const forgetful: Encryptor = {
       ...fakeKeychain(),
-      decryptString: (data) =>
-        fakeKeychain().decryptString(data) === 'gho_cli'
+      decryptString: (data, name) =>
+        fakeKeychain().decryptString(data, name) === 'gho_cli'
           ? 'garbled'
-          : fakeKeychain().decryptString(data),
+          : fakeKeychain().decryptString(data, name),
     };
 
     const { storage } = await open(forgetful);
@@ -216,6 +225,65 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect((await open(fakeKeychain())).store.get('linear')).toBe('lin_new');
   });
 
+  test('reads a file from before key ids and writes it with one on the next save', async () => {
+    const value = fakeKeychain().encryptString('gho_old', 'github').toString('base64');
+    await writeFile(encryptedFile(), JSON.stringify({ version: 1, secrets: { github: value } }));
+
+    const { store, storage } = await open(fakeKeychain());
+    await store.set('linear', 'lin_new');
+
+    expect(storage).toBe('keychain');
+    expect(store.get('github')).toBe('gho_old');
+    expect(JSON.parse(await readFile(encryptedFile(), 'utf8'))).toMatchObject({
+      version: 2,
+      keyId: 'fake-key',
+    });
+  });
+
+  test("won't read a value moved to another secret's name", async () => {
+    const { store } = await open(fakeKeychain());
+    await store.set('github', 'gho_x');
+    const file = JSON.parse(await readFile(encryptedFile(), 'utf8'));
+    await writeFile(
+      encryptedFile(),
+      JSON.stringify({ ...file, secrets: { linear: file.secrets.github } }),
+    );
+
+    expect((await open(fakeKeychain())).storage).toBe('undecryptable');
+  });
+
+  test('keeps a file encrypted with another data key, and new keys only in memory', async () => {
+    await (await open(fakeKeychain('old-key'))).store.set('github', 'gho_old');
+    const original = await readFile(encryptedFile(), 'utf8');
+    const logger = log();
+
+    const { store, storage } = await open(fakeKeychain('new-key'), logger);
+    await store.set('cursor', 'key_session');
+
+    expect(storage).toBe('wrongKey');
+    expect(store.get('github')).toBeUndefined();
+    expect(store.get('cursor')).toBe('key_session');
+    expect(await readFile(encryptedFile(), 'utf8')).toBe(original);
+    expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/data key/));
+    expect((await open(fakeKeychain('old-key'))).store.get('github')).toBe('gho_old');
+  });
+
+  test('starts over by moving the encrypted file aside, so its keys can still be restored', async () => {
+    await (await open(fakeKeychain('old-key'))).store.set('github', 'gho_old');
+    const original = await readFile(encryptedFile(), 'utf8');
+
+    const asideName = await setAsideEncryptedSecrets(dir);
+    const { store, storage } = await open(fakeKeychain('new-key'));
+    await store.set('cursor', 'key_new');
+
+    expect(storage).toBe('keychain');
+    expect(asideName).toMatch(/^secrets\.encrypted\.old-key\.\d+\.json$/);
+    expect(await readFile(join(dir, asideName ?? ''), 'utf8')).toBe(original);
+    expect(await modeOf(join(dir, asideName ?? ''))).toBe(0o600);
+    expect((await open(fakeKeychain('new-key'))).store.get('cursor')).toBe('key_new');
+  });
+
   test.each([
     ['not JSON', '{ not json'],
     ['not a secrets file', JSON.stringify({ version: 1, secrets: { cursor: 5 } })],
@@ -235,7 +303,7 @@ describe('openDesktopSecrets with the OS keychain', () => {
   });
 
   test('refuses a file from a newer PR Quest instead of dropping its keys', async () => {
-    const text = JSON.stringify({ version: 2, secrets: {} });
+    const text = JSON.stringify({ version: 3, keyId: 'fake-key', secrets: {} });
     await writeFile(encryptedFile(), text);
 
     await expect(open(fakeKeychain())).rejects.toThrow(/newer version of PR Quest/);

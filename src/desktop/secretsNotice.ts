@@ -4,7 +4,13 @@ import {
   type SecretsStorage,
 } from './keychainSecrets.ts';
 
-export const NOTICE_ACTIONS = ['continue', 'retry', 'keepInMemory', 'savePlaintext'] as const;
+export const NOTICE_ACTIONS = [
+  'continue',
+  'retry',
+  'keepInMemory',
+  'savePlaintext',
+  'startOver',
+] as const;
 export type NoticeAction = (typeof NOTICE_ACTIONS)[number];
 
 /** A startup dialog about where saved keys go. The first button is the default. */
@@ -55,6 +61,16 @@ export function secretsNotice(
           "This happens when keychain access was denied, or the keys were saved on another computer or account. Try again to allow access. If you continue, PR Quest starts without saved keys, and saving a key replaces the ones it couldn't decrypt.",
         buttons: RETRY_OR_CONTINUE,
       };
+    case 'wrongKey':
+      return {
+        message: 'Your saved keys were encrypted with a data key the OS keychain no longer has',
+        detail: `The keychain entry com.prquest.desktop was deleted or replaced, as resetting the keychain or copying the state folder from another computer does. Restore that entry and restart PR Quest to get your keys back. If you continue, PR Quest leaves ${ENCRYPTED_SECRETS_FILE} alone, and keys you save last only until you quit. Start Over moves it aside in the state folder and saves keys with the current data key.`,
+        // Closing the dialog chooses the last button, which leaves the file alone.
+        buttons: [
+          { label: 'Start Over', action: 'startOver' },
+          { label: 'Continue Without Saved Keys', action: 'continue' },
+        ],
+      };
     case 'corrupt':
       return {
         message: 'The file with your saved keys is damaged',
@@ -82,6 +98,8 @@ export interface OpenWithNoticesOptions {
   plaintextChoice: boolean | undefined;
   /** Remembers the player's answer to saving keys unencrypted. */
   save: (plaintextChoice: boolean) => Promise<void>;
+  /** Moves aside the encrypted keys the keychain's data key can't read, for Start Over. */
+  startOver: () => Promise<void>;
   /** Whether to tell the player anything; off after a restart, which they already heard about. */
   notices?: boolean;
 }
@@ -101,6 +119,10 @@ export async function openWithNotices(options: OpenWithNoticesOptions): Promise<
     }
     const action = await options.ask(notice);
     if (action === 'retry') {
+      continue;
+    }
+    if (action === 'startOver') {
+      await options.startOver();
       continue;
     }
     if (action === 'keepInMemory' || action === 'savePlaintext') {

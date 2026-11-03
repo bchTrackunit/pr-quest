@@ -1,4 +1,4 @@
-import { rm, stat } from 'node:fs/promises';
+import { rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -23,11 +23,13 @@ const PLAIN_SECRETS_FILE = 'secrets.json';
 
 /**
  * Encrypts saved keys with a key the OS keychain holds (see sidecar/dataKeyEncryptor.ts), so tests
- * can stand in for it.
+ * can stand in for it. Each value is bound to its secret's `name`.
  */
 export interface Encryptor {
-  encryptString: (plainText: string) => Buffer;
-  decryptString: (encrypted: Buffer) => string;
+  /** Names the key without giving it away, so a file encrypted with another key is told apart. */
+  keyId: string;
+  encryptString: (plainText: string, name: SecretName) => Buffer;
+  decryptString: (encrypted: Buffer, name: SecretName) => string;
 }
 
 export interface DesktopSecretsOptions {
@@ -49,6 +51,10 @@ export interface DesktopSecretsOptions {
  *   new ones in memory and leaves both files alone.
  * - `undecryptable`: the keychain couldn't read the encrypted file. The app starts without saved
  *   keys and leaves the file alone until a key is saved, which replaces it.
+ * - `wrongKey`: the encrypted file names another data key than the keychain's, as when the
+ *   keychain entry was deleted and a new one made. The app starts without saved keys, keeps new
+ *   ones in memory and leaves the file alone, unless the player chooses to start over (see
+ *   `setAsideEncryptedSecrets`).
  * - `corrupt`: the encrypted file isn't valid, and is handled as `undecryptable` is.
  * - `importFailed`: the encrypted copy of `secrets.json` didn't check out, so the app starts
  *   without saved keys, keeps new ones in memory and leaves both files alone.
@@ -59,6 +65,7 @@ export type SecretsStorage =
   | 'memory'
   | 'locked'
   | 'undecryptable'
+  | 'wrongKey'
   | 'corrupt'
   | 'importFailed';
 
@@ -67,11 +74,29 @@ export interface DesktopSecrets {
   storage: SecretsStorage;
 }
 
-/** Each value is the base64 of its `Encryptor` ciphertext. */
-const EncryptedFileSchema = z.object({
-  version: z.literal(1),
-  secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
-});
+const FILE_VERSION = 2;
+
+/**
+ * Each value is the base64 of its `Encryptor` ciphertext. Version 1, which is still read, didn't
+ * name its key.
+ */
+const EncryptedFileSchema = z.discriminatedUnion('version', [
+  z.object({
+    version: z.literal(1),
+    secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
+  }),
+  z.object({
+    version: z.literal(FILE_VERSION),
+    keyId: z.string().min(1),
+    secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
+  }),
+]);
+
+interface EncryptedFile {
+  version: typeof FILE_VERSION;
+  keyId: string;
+  secrets: Record<string, string>;
+}
 
 type Secrets = Partial<Record<SecretName, string>>;
 
@@ -92,6 +117,12 @@ export async function openDesktopSecrets(
   let encryptedSavedAt: number | undefined;
   if (encryptedText !== undefined) {
     const decrypted = decrypt(encryptedFile, encryptedText, options.encryptor);
+    if (decrypted === 'wrongKey') {
+      options.warn(
+        `Your saved keys in ${encryptedFile} were encrypted with a data key the OS keychain no longer has, so PR Quest starts without them, keeps keys you save now only until it quits, and leaves that file alone.`,
+      );
+      return { store: new MemorySecretStore({}), storage: 'wrongKey' };
+    }
     if (decrypted !== 'corrupt' && decrypted !== 'undecryptable') {
       secrets = decrypted;
     } else {
@@ -123,6 +154,27 @@ export async function openDesktopSecrets(
     }
   }
   return { store, storage: 'keychain' };
+}
+
+/**
+ * Moves `secrets.encrypted.json` aside, named for the key it needs, so the player can start over
+ * with the keychain's current data key and still restore the old keys if that key turns up.
+ * Returns the new name, or `undefined` when there was no file.
+ */
+export async function setAsideEncryptedSecrets(stateDir: string): Promise<string | undefined> {
+  const file = join(stateDir, ENCRYPTED_SECRETS_FILE);
+  const text = await readIfExists(file);
+  if (text === undefined) {
+    return undefined;
+  }
+  const parsed = EncryptedFileSchema.safeParse(safeJson(text));
+  const keyId =
+    parsed.success && parsed.data.version === FILE_VERSION && /^[\w-]+$/.test(parsed.data.keyId)
+      ? parsed.data.keyId
+      : 'unknown-key';
+  const name = `secrets.encrypted.${keyId}.${Date.now()}.json`;
+  await rename(file, join(stateDir, name));
+  return name;
 }
 
 /** The keychain's copy of the keys in `secrets.json` didn't read back the same. */
@@ -252,12 +304,15 @@ class KeychainSecretStore implements SecretStore {
     await writePrivateJson(this.file, this.encrypt(secrets));
   }
 
-  private encrypt(secrets: Secrets): { version: 1; secrets: Record<string, string> } {
+  private encrypt(secrets: Secrets): EncryptedFile {
     const encrypted: Record<string, string> = {};
-    for (const [name, value] of Object.entries(secrets)) {
-      encrypted[name] = this.encryptor.encryptString(value).toString('base64');
+    for (const name of SECRET_NAMES) {
+      const value = secrets[name];
+      if (value !== undefined) {
+        encrypted[name] = this.encryptor.encryptString(value, name).toString('base64');
+      }
     }
-    return { version: 1, secrets: encrypted };
+    return { version: FILE_VERSION, keyId: this.encryptor.keyId, secrets: encrypted };
   }
 }
 
@@ -298,19 +353,22 @@ function decrypt(
   file: string,
   text: string,
   encryptor: Encryptor,
-): Secrets | 'corrupt' | 'undecryptable' {
+): Secrets | 'corrupt' | 'undecryptable' | 'wrongKey' {
   const json = safeJson(text);
-  refuseNewerVersion(json, 1, file);
+  refuseNewerVersion(json, FILE_VERSION, file);
   const parsed = EncryptedFileSchema.safeParse(json);
   if (!parsed.success) {
     return 'corrupt';
+  }
+  if (parsed.data.version === FILE_VERSION && parsed.data.keyId !== encryptor.keyId) {
+    return 'wrongKey';
   }
   const secrets: Secrets = {};
   try {
     for (const name of SECRET_NAMES) {
       const value = parsed.data.secrets[name];
       if (value !== undefined) {
-        secrets[name] = encryptor.decryptString(Buffer.from(value, 'base64'));
+        secrets[name] = encryptor.decryptString(Buffer.from(value, 'base64'), name);
       }
     }
   } catch {

@@ -42,6 +42,15 @@ describe('secretsNotice', () => {
     expect(actions(notice)).toEqual(['retry', 'continue']);
   });
 
+  test('offers to start over, keeping the file, when the keys were encrypted with another data key', () => {
+    const notice = secretsNotice('wrongKey', undefined);
+
+    expect(notice?.message).toMatch(/data key/);
+    expect(notice?.detail).toMatch(/leaves secrets\.encrypted\.json alone/);
+    expect(notice?.detail).toMatch(/Start Over moves it aside/);
+    expect(actions(notice)).toEqual(['startOver', 'continue']);
+  });
+
   test("offers to try again when the keys from secrets.json didn't check out in the keychain", () => {
     const notice = secretsNotice('importFailed', undefined);
 
@@ -71,7 +80,13 @@ describe('openWithNotices', () => {
     const open = opening('keychain');
     const ask = answering();
 
-    const opened = await openWithNotices({ open, ask, plaintextChoice: undefined, save: vi.fn() });
+    const opened = await openWithNotices({
+      open,
+      ask,
+      plaintextChoice: undefined,
+      startOver: vi.fn(),
+      save: vi.fn(),
+    });
 
     expect(opened.storage).toBe('keychain');
     expect(open).toHaveBeenCalledTimes(1);
@@ -82,7 +97,13 @@ describe('openWithNotices', () => {
     const open = opening('undecryptable', 'undecryptable', 'keychain');
     const ask = answering('retry', 'retry');
 
-    const opened = await openWithNotices({ open, ask, plaintextChoice: undefined, save: vi.fn() });
+    const opened = await openWithNotices({
+      open,
+      ask,
+      plaintextChoice: undefined,
+      startOver: vi.fn(),
+      save: vi.fn(),
+    });
 
     expect(opened.storage).toBe('keychain');
     expect(ask).toHaveBeenCalledTimes(2);
@@ -95,11 +116,29 @@ describe('openWithNotices', () => {
       open: opening('corrupt'),
       ask: answering('continue'),
       plaintextChoice: undefined,
+      startOver: vi.fn(),
       save,
     });
 
     expect(opened.storage).toBe('corrupt');
     expect(save).not.toHaveBeenCalled();
+  });
+
+  test('moves the unreadable file aside for Start Over, then opens again', async () => {
+    const open = opening('wrongKey', 'keychain');
+    const startOver = vi.fn(() => Promise.resolve());
+
+    const opened = await openWithNotices({
+      open,
+      ask: answering('startOver'),
+      plaintextChoice: undefined,
+      startOver,
+      save: vi.fn(),
+    });
+
+    expect(opened.storage).toBe('keychain');
+    expect(startOver).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(2);
   });
 
   test('remembers keeping keys in memory and asks no more', async () => {
@@ -110,6 +149,7 @@ describe('openWithNotices', () => {
       open,
       ask: answering('keepInMemory'),
       plaintextChoice: undefined,
+      startOver: vi.fn(),
       save,
     });
 
@@ -126,6 +166,7 @@ describe('openWithNotices', () => {
       open,
       ask: answering('savePlaintext'),
       plaintextChoice: undefined,
+      startOver: vi.fn(),
       save,
     });
 
@@ -137,7 +178,13 @@ describe('openWithNotices', () => {
   test('opens with the earlier answer to saving keys unencrypted', async () => {
     const open = opening('plaintext');
 
-    await openWithNotices({ open, ask: answering(), plaintextChoice: true, save: vi.fn() });
+    await openWithNotices({
+      open,
+      ask: answering(),
+      plaintextChoice: true,
+      startOver: vi.fn(),
+      save: vi.fn(),
+    });
 
     expect(open).toHaveBeenCalledWith(true);
   });
@@ -149,6 +196,7 @@ describe('openWithNotices', () => {
       open: opening('locked'),
       ask,
       plaintextChoice: undefined,
+      startOver: vi.fn(),
       save: vi.fn(),
       notices: false,
     });

@@ -404,9 +404,14 @@ Deleting a key, as **Sign out** does, removes it from `secrets.json` too, so it 
 on the next start. Choosing **Save Them Unencrypted** there, and confirming it, writes
 `secrets.json` from then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the keychain isn't
 available, the app starts without saved keys and never writes `secrets.json`, so the encrypted
-file stays the only copy. If the keychain can't decrypt the file, for example after the keychain
-entry was deleted, or the file is damaged, the app says which and offers to try again or to
-continue without saved keys; the file is left in place until you save a key, which replaces it.
+file stays the only copy. Each value is bound to its key's name, and the file names the data key
+it was encrypted with by a short hash. If that isn't the keychain's data key, as after the
+keychain entry was deleted and the app made a new one, the app says so, starts without saved
+keys, keeps new ones in memory and leaves the file alone; **Start Over** moves it aside as
+`secrets.encrypted.<key id>.<time>.json` and saves keys with the new data key. If the keychain
+can't decrypt the file otherwise, as when access was denied, or the file is damaged, the app says
+which and offers to try again or to continue without saved keys; the file is left in place until
+you save a key, which replaces it.
 
 ### Updates
 

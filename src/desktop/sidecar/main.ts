@@ -19,6 +19,7 @@ import {
   type DesktopSecrets,
   ENCRYPTED_SECRETS_FILE,
   openDesktopSecrets,
+  setAsideEncryptedSecrets,
 } from '../keychainSecrets.ts';
 import { readPreferences, writePreferences } from '../preferences.ts';
 import { type NoticeAction, openWithNotices, type SecretsNotice } from '../secretsNotice.ts';
@@ -113,6 +114,12 @@ async function start(launch: Launch, next: NextLine): Promise<Started> {
     save: async (plaintextChoice) => {
       preferences.plaintextSecrets = plaintextChoice;
       await writePreferences(launch.preferencesFile, preferences);
+    },
+    startOver: async () => {
+      const name = await setAsideEncryptedSecrets(config.stateDir);
+      if (name !== undefined) {
+        info(`Moved the keys the keychain's data key can't read aside to ${name}`);
+      }
     },
     // Nobody answers in a test run.
     notices: launch.showNotices && !smokeTest,

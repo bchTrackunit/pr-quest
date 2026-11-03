@@ -1,14 +1,28 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
+import type { SecretName } from '../../platform/server/secrets.ts';
 import type { Encryptor } from '../keychainSecrets.ts';
 
 /** The per-install AES-256 key the Tauri shell keeps in the OS keychain and hands over on stdin. */
 export const DATA_KEY_BYTES = 32;
-const FORMAT_VERSION = 1;
+/** Values from before they were bound to their secret's name, which are still read. */
+const V1 = 1;
+const V2 = 2;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
-/** Ties each value to this use of the key, so ciphertext made with it elsewhere doesn't decrypt. */
-const ASSOCIATED_DATA = Buffer.from('pr-quest secrets.encrypted.json v1');
+const HEADER_BYTES = 1 + NONCE_BYTES + TAG_BYTES;
+
+/**
+ * Ties each value to this use of the key and, from v2, to its secret, so ciphertext made with the
+ * key elsewhere, or moved to another secret's name, doesn't decrypt.
+ */
+function associatedData(version: number, name: SecretName): Buffer {
+  return Buffer.from(
+    version === V1
+      ? 'pr-quest secrets.encrypted.json v1'
+      : `pr-quest secrets.encrypted.json v2 ${name}`,
+  );
+}
 
 /**
  * Encrypts saved keys with AES-256-GCM under `key`, as the `Encryptor` that
@@ -19,23 +33,29 @@ export function dataKeyEncryptor(key: Buffer): Encryptor {
     throw new Error(`The data key must be ${DATA_KEY_BYTES} bytes`);
   }
   return {
-    encryptString: (plainText) => {
+    keyId: createHash('sha256')
+      .update('pr-quest data key id\0')
+      .update(key)
+      .digest('hex')
+      .slice(0, 16),
+    encryptString: (plainText, name) => {
       const nonce = randomBytes(NONCE_BYTES);
-      const cipher = createCipheriv('aes-256-gcm', key, nonce).setAAD(ASSOCIATED_DATA);
+      const cipher = createCipheriv('aes-256-gcm', key, nonce).setAAD(associatedData(V2, name));
       const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
-      return Buffer.concat([Buffer.of(FORMAT_VERSION), nonce, cipher.getAuthTag(), encrypted]);
+      return Buffer.concat([Buffer.of(V2), nonce, cipher.getAuthTag(), encrypted]);
     },
-    decryptString: (encrypted) => {
-      if (encrypted[0] !== FORMAT_VERSION || encrypted.length < 1 + NONCE_BYTES + TAG_BYTES) {
+    decryptString: (encrypted, name) => {
+      const version = encrypted[0] ?? 0;
+      if ((version !== V1 && version !== V2) || encrypted.length < HEADER_BYTES) {
         throw new Error('Not a value in the data key format');
       }
       const nonce = encrypted.subarray(1, 1 + NONCE_BYTES);
-      const tag = encrypted.subarray(1 + NONCE_BYTES, 1 + NONCE_BYTES + TAG_BYTES);
+      const tag = encrypted.subarray(1 + NONCE_BYTES, HEADER_BYTES);
       const decipher = createDecipheriv('aes-256-gcm', key, nonce)
-        .setAAD(ASSOCIATED_DATA)
+        .setAAD(associatedData(version, name))
         .setAuthTag(tag);
       return Buffer.concat([
-        decipher.update(encrypted.subarray(1 + NONCE_BYTES + TAG_BYTES)),
+        decipher.update(encrypted.subarray(HEADER_BYTES)),
         decipher.final(),
       ]).toString('utf8');
     },
