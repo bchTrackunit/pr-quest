@@ -1,7 +1,7 @@
 /*
  * Runs a packaged desktop app in smoke-test mode (see src/desktop/smoke.ts) with a throwaway state
- * directory, and exits with its result. Without an argument it runs the build for this machine in
- * release/; pass the path of another executable, such as one inside a mounted dmg, to check that.
+ * directory, and exits with its result. Without an argument it runs the macOS app `tauri build`
+ * made; pass the path of another executable, such as one inside a mounted dmg, to check that.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -10,27 +10,19 @@ import { join } from 'node:path';
 
 const TIMEOUT_MS = 120_000;
 
-/** Where electron-builder puts the unpacked app for each platform and architecture. */
+/** Where `tauri build` puts the macOS app. */
 function defaultExecutable(): string {
-  const { platform, arch } = process;
-  if (platform === 'darwin') {
-    return join(
-      'release',
-      arch === 'arm64' ? 'mac-arm64' : 'mac',
-      'PR Quest.app',
-      'Contents',
-      'MacOS',
-      'PR Quest',
-    );
-  }
-  if (platform === 'win32') {
-    return join(
-      'release',
-      arch === 'arm64' ? 'win-arm64-unpacked' : 'win-unpacked',
-      'PR Quest.exe',
-    );
-  }
-  return join('release', arch === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked', 'pr-quest');
+  return join(
+    'src-tauri',
+    'target',
+    'release',
+    'bundle',
+    'macos',
+    'PR Quest.app',
+    'Contents',
+    'MacOS',
+    'pr-quest',
+  );
 }
 
 const executable = process.argv[2] ?? defaultExecutable();

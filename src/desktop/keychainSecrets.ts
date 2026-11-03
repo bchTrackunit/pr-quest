@@ -20,32 +20,14 @@ import {
 /** The encrypted secrets, next to the plain `secrets.json` that the CLI uses. */
 export const ENCRYPTED_SECRETS_FILE = 'secrets.encrypted.json';
 const PLAIN_SECRETS_FILE = 'secrets.json';
-/** The plain copy earlier desktop builds kept after moving it into the keychain. */
-const LEGACY_BACKUP_FILE = 'secrets.json.bak';
 
-/** The part of Electron's `safeStorage` this needs, so tests can stand in for the OS keychain. */
+/**
+ * Encrypts saved keys with a key the OS keychain holds (see sidecar/dataKeyEncryptor.ts), so tests
+ * can stand in for it.
+ */
 export interface Encryptor {
   encryptString: (plainText: string) => Buffer;
   decryptString: (encrypted: Buffer) => string;
-}
-
-/**
- * Whether safeStorage protects anything here. Without a keyring, Linux "encrypts" with a fixed
- * built-in password (`basic_text`), which is no safer than the plain file.
- */
-export function keychainUsable(options: {
-  platform: NodeJS.Platform;
-  isAvailable: boolean;
-  /** `safeStorage.getSelectedStorageBackend()`, which only Linux has. */
-  backend?: string;
-}): boolean {
-  if (!options.isAvailable) {
-    return false;
-  }
-  return (
-    options.platform !== 'linux' ||
-    (options.backend !== 'basic_text' && options.backend !== 'unknown')
-  );
 }
 
 export interface DesktopSecretsOptions {
@@ -85,7 +67,7 @@ export interface DesktopSecrets {
   storage: SecretsStorage;
 }
 
-/** Each value is the base64 of its `safeStorage` ciphertext. */
+/** Each value is the base64 of its `Encryptor` ciphertext. */
 const EncryptedFileSchema = z.object({
   version: z.literal(1),
   secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
@@ -126,7 +108,6 @@ export async function openDesktopSecrets(
       };
     }
     encryptedSavedAt = (await stat(encryptedFile)).mtimeMs;
-    await removeLegacyBackup(stateDir, options.info);
   }
 
   const store = new KeychainSecretStore(encryptedFile, options.encryptor, secrets);
@@ -351,15 +332,4 @@ function valuesOf(store: SecretStore): Secrets {
 
 function sameSecrets(a: Secrets, b: Secrets): boolean {
   return SECRET_NAMES.every((name) => a[name] === b[name]);
-}
-
-async function removeLegacyBackup(
-  stateDir: string,
-  info: (message: string) => void,
-): Promise<void> {
-  const backup = join(stateDir, LEGACY_BACKUP_FILE);
-  if ((await readIfExists(backup)) !== undefined) {
-    await rm(backup, { force: true });
-    info(`Deleted ${backup}, the unencrypted copy an earlier PR Quest kept of your saved keys`);
-  }
 }

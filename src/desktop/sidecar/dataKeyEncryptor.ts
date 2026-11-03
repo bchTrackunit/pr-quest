@@ -12,8 +12,7 @@ const ASSOCIATED_DATA = Buffer.from('pr-quest secrets.encrypted.json v1');
 
 /**
  * Encrypts saved keys with AES-256-GCM under `key`, as the `Encryptor` that
- * `openDesktopSecrets` takes in place of Electron's `safeStorage`. Each value is
- * `version (1 byte) | nonce (12) | tag (16) | ciphertext`.
+ * `openDesktopSecrets` takes. Each value is `version (1 byte) | nonce (12) | tag (16) | ciphertext`.
  */
 export function dataKeyEncryptor(key: Buffer): Encryptor {
   if (key.length !== DATA_KEY_BYTES) {

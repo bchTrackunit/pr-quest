@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { type Encryptor, keychainUsable, openDesktopSecrets } from './keychainSecrets.ts';
+import { type Encryptor, openDesktopSecrets } from './keychainSecrets.ts';
 
 let dir: string;
 
@@ -15,13 +15,13 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** Stands in for Electron's safeStorage: reversible, and never stores the plain text. */
+/** Stands in for the keychain's data key: reversible, and never stores the plain text. */
 const fakeKeychain = (): Encryptor => ({
   encryptString: (text) => Buffer.from(Buffer.from(`enc:${text}`).map((byte) => byte ^ 0x5a)),
   decryptString: (data) => {
     const text = Buffer.from(data.map((byte) => byte ^ 0x5a)).toString('utf8');
     if (!text.startsWith('enc:')) {
-      throw new Error('Error while decrypting the ciphertext provided to safeStorage');
+      throw new Error('Unsupported state or unable to authenticate data');
     }
     return text.slice('enc:'.length);
   },
@@ -197,18 +197,6 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
   });
 
-  test('deletes the secrets.json.bak an earlier build kept, once the encrypted file decrypts', async () => {
-    const { store } = await open(fakeKeychain());
-    await store.set('cursor', 'key_cursor');
-    await writeFile(join(dir, 'secrets.json.bak'), JSON.stringify({ version: 1, secrets: {} }));
-    const logger = log();
-
-    await open(fakeKeychain(), logger);
-
-    expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('secrets.json.bak'));
-  });
-
   test("leaves a file the keychain can't decrypt in place and saves nothing until a key is set", async () => {
     await writeForeignEncrypted();
     const original = await readFile(encryptedFile(), 'utf8');
@@ -312,25 +300,4 @@ describe('openDesktopSecrets without the OS keychain', () => {
     expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
     expect(await readFile(encryptedFile(), 'utf8')).toBe(original);
   });
-});
-
-describe('keychainUsable', () => {
-  test('uses the keychain wherever safeStorage can encrypt', () => {
-    expect(keychainUsable({ platform: 'darwin', isAvailable: true })).toBe(true);
-    expect(keychainUsable({ platform: 'win32', isAvailable: true })).toBe(true);
-    expect(
-      keychainUsable({ platform: 'linux', isAvailable: true, backend: 'gnome_libsecret' }),
-    ).toBe(true);
-  });
-
-  test('not when safeStorage cannot encrypt', () => {
-    expect(keychainUsable({ platform: 'darwin', isAvailable: false })).toBe(false);
-  });
-
-  test.each(['basic_text', 'unknown'])(
-    'not on Linux with the %s backend, whose fixed password protects nothing',
-    (backend) => {
-      expect(keychainUsable({ platform: 'linux', isAvailable: true, backend })).toBe(false);
-    },
-  );
 });

@@ -13,8 +13,8 @@
   "ignorePatterns": [
     "dist/**",
     "dist-server/**",
-    "dist-desktop/**",
-    "release/**",
+    "build-tauri/**",
+    "src-tauri/**",
     "coverage/**",
     ".yarn/**"
   ],

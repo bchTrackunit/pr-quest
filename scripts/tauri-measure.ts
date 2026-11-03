@@ -1,10 +1,9 @@
 /*
- * Spike, macOS only: compares the packaged Electron and Tauri apps. Starts one with a throwaway
- * state directory, lets it idle, and prints the memory footprint of all its processes, the way
- * Activity Monitor counts it. For Tauri it then checks that quitting, a crashed shell and a
- * crashed sidecar each leave no process behind.
+ * macOS only: starts the packaged app with a throwaway state directory, lets it idle, and prints
+ * the memory footprint of all its processes, the way Activity Monitor counts it. Then checks that
+ * quitting, a crashed shell and a crashed sidecar each leave no process behind.
  *
- *   node scripts/tauri-measure.ts electron|tauri [executable]
+ *   node scripts/tauri-measure.ts [executable]
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -14,27 +13,20 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const IDLE_MS = 25_000;
 const EXIT_WAIT_MS = 10_000;
-const DEFAULTS = {
-  electron: join('release', 'mac-arm64', 'PR Quest.app', 'Contents', 'MacOS', 'PR Quest'),
-  tauri: join(
-    'src-tauri',
-    'target',
-    'release',
-    'bundle',
-    'macos',
-    'PR Quest.app',
-    'Contents',
-    'MacOS',
-    'pr-quest',
-  ),
-};
+const DEFAULT_EXECUTABLE = join(
+  'src-tauri',
+  'target',
+  'release',
+  'bundle',
+  'macos',
+  'PR Quest.app',
+  'Contents',
+  'MacOS',
+  'pr-quest',
+);
 
-const kind = process.argv[2];
-if (kind !== 'electron' && kind !== 'tauri') {
-  throw new Error('Usage: node scripts/tauri-measure.ts electron|tauri [executable]');
-}
 // AppleScript finds an app by its absolute path; anything else it takes for a name.
-const executable = resolve(process.argv[3] ?? DEFAULTS[kind]);
+const executable = resolve(process.argv[2] ?? DEFAULT_EXECUTABLE);
 if (!existsSync(executable)) {
   throw new Error(`No packaged app at ${executable}`);
 }
@@ -111,20 +103,15 @@ function launch(): Running {
       .map((proc) => proc.pid),
   );
   const { CURSOR_API_KEY: _c, ANTHROPIC_API_KEY: _a, LINEAR_API_KEY: _l, ...env } = process.env;
-  const child = spawn(
-    executable,
-    // The Electron build's own smoke test uses a mock keychain too, so nothing prompts.
-    kind === 'electron' ? ['--use-mock-keychain', '--password-store=basic'] : [],
-    {
-      stdio: 'ignore',
-      env: {
-        ...env,
-        PR_QUEST_STATE_DIR: stateDir,
-        PR_QUEST_DISABLE_UPDATES: '1',
-        ...(kind === 'tauri' ? { PR_QUEST_SMOKE_TEST: 'idle' } : {}),
-      },
+  const child = spawn(executable, [], {
+    stdio: 'ignore',
+    env: {
+      ...env,
+      PR_QUEST_STATE_DIR: stateDir,
+      PR_QUEST_DISABLE_UPDATES: '1',
+      PR_QUEST_SMOKE_TEST: 'idle',
     },
-  );
+  });
   if (child.pid === undefined) {
     throw new Error(`Couldn't start ${executable}`);
   }
@@ -137,8 +124,7 @@ function tree({ pid, webKitBefore }: Running): Array<Proc> {
   const all = processes();
   const own = all.find((proc) => proc.pid === pid);
   const children = descendants(pid, all);
-  const webKit =
-    kind === 'tauri' ? all.filter((proc) => isWebKit(proc) && !webKitBefore.has(proc.pid)) : [];
+  const webKit = all.filter((proc) => isWebKit(proc) && !webKitBefore.has(proc.pid));
   return [...(own ? [own] : []), ...children, ...webKit];
 }
 
@@ -153,7 +139,7 @@ async function measure(): Promise<void> {
     process.stdout.write(`${mib.toFixed(1).padStart(8)} MiB  ${proc.pid}  ${proc.command}\n`);
   }
   process.stdout.write(
-    `${total.toFixed(1).padStart(8)} MiB  total for ${kind} after ${IDLE_MS / 1000} s idle\n`,
+    `${total.toFixed(1).padStart(8)} MiB  total after ${IDLE_MS / 1000} s idle\n`,
   );
   await stop(running, procs);
 }
@@ -227,6 +213,4 @@ async function lifecycle(): Promise<void> {
 }
 
 await measure();
-if (kind === 'tauri') {
-  await lifecycle();
-}
+await lifecycle();

@@ -40,33 +40,21 @@ format-check:
 typecheck:
     yarn typecheck
 
-# Type-check, then build the UI into dist/, the server into dist-server/ and the desktop app into dist-desktop/
+# Type-check, then build the UI into dist/ and the server into dist-server/
 build:
     yarn build
-
-# Build the UI and the desktop app, then open it in Electron
-desktop-dev:
-    yarn desktop:dev
-
-# Build the desktop installers for this machine into release/; `just desktop-package --dir` skips the installers
-desktop-package *args:
-    yarn desktop:package {{ args }}
-
-# Check the packaged desktop app in release/, or the executable given: its UI, both SDKs and their native parts
-desktop-smoke executable="":
-    yarn desktop:smoke {{ if executable == "" { "" } else { quote(executable) } }}
 
 # Spike: build the Tauri app and dmg for this Mac into src-tauri/target/release/bundle/ (needs Rust)
 tauri-package *args:
     yarn tauri:package {{ args }}
 
-# Spike: check the packaged Tauri app, or the executable given, as desktop-smoke does the Electron one
+# Spike: check the packaged Tauri app, or the executable given
 tauri-smoke executable="src-tauri/target/release/bundle/macos/PR Quest.app/Contents/MacOS/pr-quest":
     yarn desktop:smoke {{ quote(executable) }}
 
-# Spike: idle memory of the packaged electron or tauri app; for tauri also what quitting and crashes stop
-tauri-measure kind="tauri" executable="":
-    node scripts/tauri-measure.ts {{ kind }} {{ if executable == "" { "" } else { quote(executable) } }}
+# Spike: idle memory of the packaged Tauri app, and what quitting and crashes stop
+tauri-measure executable="":
+    node scripts/tauri-measure.ts {{ if executable == "" { "" } else { quote(executable) } }}
 
 # Run every check CI runs
 check: typecheck lint format-check test build

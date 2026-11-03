@@ -1,8 +1,11 @@
-import type { BrowserWindow } from 'electron';
+/*
+ * The checks of a packaged build that run in the sidecar: the server answers, both SDKs load with
+ * their native parts, and a call with a bogus key reaches the provider and fails authentication
+ * rather than failing to load. The shell checks the window itself; see src-tauri/src/smoke.rs.
+ */
 import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, sep } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { dirname, join } from 'node:path';
 
 export interface Check {
   name: string;
@@ -10,55 +13,7 @@ export interface Check {
 }
 
 const BOGUS_KEY = 'pr-quest-smoke-test-invalid-key';
-const UI_RENDER_WAIT_MS = 10_000;
-const UI_POLL_MS = 250;
 const CHECK_TIMEOUT_MS = 30_000;
-
-/**
- * Checks a packaged build: the UI renders from the bundled files, both SDKs load with their native
- * parts, and a call with a bogus key reaches the provider and fails authentication rather than
- * failing to load. Prints one line per check and resolves whether every check passed.
- */
-export async function runSmokeTest(
-  window: BrowserWindow,
-  url: string,
-  cspViolations: ReadonlyArray<string>,
-): Promise<boolean> {
-  return runChecks([
-    ...serverChecks(url),
-    {
-      name: 'ui',
-      run: async () => {
-        for (let waited = 0; waited < UI_RENDER_WAIT_MS; waited += UI_POLL_MS) {
-          const children: unknown = await window.webContents.executeJavaScript(
-            `document.getElementById('root')?.childElementCount ?? 0`,
-          );
-          if (typeof children === 'number' && children > 0) {
-            return `"${window.webContents.getTitle()}" rendered`;
-          }
-          await delay(UI_POLL_MS);
-        }
-        throw new Error(`the UI root rendered nothing in ${UI_RENDER_WAIT_MS} ms`);
-      },
-    },
-    {
-      name: 'csp',
-      run: async () => {
-        const fonts: unknown = await window.webContents.executeJavaScript(
-          `document.fonts.ready.then(() => [...document.fonts].filter((font) => font.status === 'loaded').length)`,
-        );
-        if (cspViolations.length > 0) {
-          throw new Error(`the page's policy blocked: ${cspViolations.join(' | ')}`);
-        }
-        if (typeof fonts !== 'number' || fonts === 0) {
-          throw new Error('no font loaded');
-        }
-        return `nothing blocked; ${fonts} font(s) loaded`;
-      },
-    },
-    ...sdkChecks(),
-  ]);
-}
 
 /** The server answers its health check, and nothing else without the request secret. */
 export function serverChecks(url: string): Array<Check> {
@@ -128,10 +83,8 @@ export function sdkChecks(): Array<Check> {
           'bin',
           process.platform === 'win32' ? 'cursorsandbox.exe' : 'cursorsandbox',
         );
-        // A program inside app.asar can't be started, so it has to be in the unpacked copy.
-        const unpacked = sandbox.replace(`${sep}app.asar${sep}`, `${sep}app.asar.unpacked${sep}`);
-        accessSync(unpacked, constants.X_OK);
-        return 'tree-sitter binding loaded; cursorsandbox is unpacked and executable';
+        accessSync(sandbox, constants.X_OK);
+        return 'tree-sitter binding loaded; cursorsandbox is executable';
       },
     },
     {
