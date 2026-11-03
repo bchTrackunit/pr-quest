@@ -12,7 +12,7 @@
  *
  * Bundles land in $CARGO_TARGET_DIR (default src-tauri/target)/<triple>/release/bundle/.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
@@ -70,7 +70,9 @@ if (problems.length > 0) {
   throw new Error(problems.join('\n'));
 }
 if (!values['skip-build']) {
-  run('yarn', ['build'], { cwd: REPO_ROOT, shell: process.platform === 'win32' });
+  // A command line, not yarn with arguments: Windows runs yarn.cmd only through a shell, which
+  // would concatenate the arguments unescaped (DEP0190).
+  execSync('yarn build', { cwd: REPO_ROOT, stdio: 'inherit' });
 }
 const node = await layOut(target);
 log(`laid out ${relative('.', SIDECAR_DIR)} and ${relative('.', node)} for ${target.triple}`);
