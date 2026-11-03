@@ -1,7 +1,8 @@
 /*
  * What a package build adds to tauri.conf.json from its environment, passed to `tauri build
  * --config`. Without any of these variables a build is a local one: no updater artifacts and
- * nothing signed but what Tauri does by default.
+ * nothing signed but what Tauri does by default. A release build must be signed on macOS and
+ * Windows.
  */
 import { join } from 'node:path';
 
@@ -31,6 +32,14 @@ export function configOverlay(
       );
     } else {
       plugins.updater = { pubkey };
+    }
+    // Players install a release, so it must be signed where the OS checks.
+    const identity = env.APPLE_SIGNING_IDENTITY ?? '';
+    if (target.os === 'macos' && (identity === '' || identity === '-')) {
+      problems.push('A macOS release build needs APPLE_SIGNING_IDENTITY, a Developer ID identity');
+    }
+    if (target.os === 'windows' && (env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '') === '') {
+      problems.push('A Windows release build needs PR_QUEST_WINDOWS_SIGN_COMMAND');
     }
   }
   if (target.os === 'windows' && (env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '') !== '') {

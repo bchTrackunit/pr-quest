@@ -23,9 +23,12 @@ const SMOKE_LINE_PREFIX: &str = "[smoke] ";
 /// How long stopping waits for the server to close before it kills the process.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Kept for the sidecar: other `NODE_*` variables, `NODE_OPTIONS` above all, could make it load
-/// code that isn't the app's.
-const KEPT_NODE_VARIABLES: [&str; 1] = ["NODE_EXTRA_CA_CERTS"];
+/// Variables that could make the sidecar run code that isn't the app's: `NODE_OPTIONS` and the
+/// other `NODE_*` ones, and the dynamic loaders' `DYLD_*` (macOS) and `LD_*` (Linux), such as
+/// `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD`.
+const DROPPED_PREFIXES: [&str; 3] = ["NODE_", "DYLD_", "LD_"];
+/// Kept for the sidecar: a corporate proxy's CA, which only adds trust.
+const KEPT_VARIABLES: [&str; 1] = ["NODE_EXTRA_CA_CERTS"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -233,9 +236,15 @@ fn parse_line(line: &str) -> Result<Option<Event>, serde_json::Error> {
     Ok(None)
 }
 
+/// Windows reads variable names in any case, so these match in any case too.
 fn is_dropped_variable(name: &OsString) -> bool {
-    name.to_str()
-        .is_some_and(|name| name.starts_with("NODE_") && !KEPT_NODE_VARIABLES.contains(&name))
+    name.to_str().is_some_and(|name| {
+        let name = name.to_ascii_uppercase();
+        DROPPED_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            && !KEPT_VARIABLES.contains(&name.as_str())
+    })
 }
 
 /// One job object for the app's lifetime, which every sidecar and the programs it starts join.
@@ -340,5 +349,28 @@ mod tests {
         assert!(is_dropped_variable(&OsString::from("NODE_PATH")));
         assert!(!is_dropped_variable(&OsString::from("NODE_EXTRA_CA_CERTS")));
         assert!(!is_dropped_variable(&OsString::from("PATH")));
+    }
+
+    #[test]
+    fn drops_loader_variables_that_could_inject_libraries() {
+        for name in [
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+        ] {
+            assert!(is_dropped_variable(&OsString::from(name)), "{name}");
+        }
+        assert!(!is_dropped_variable(&OsString::from("LANG")));
+        assert!(!is_dropped_variable(&OsString::from("HOME")));
+    }
+
+    #[test]
+    fn drops_them_in_any_case_as_windows_reads_them() {
+        assert!(is_dropped_variable(&OsString::from("node_options")));
+        assert!(is_dropped_variable(&OsString::from("Node_Options")));
+        assert!(!is_dropped_variable(&OsString::from("node_extra_ca_certs")));
     }
 }

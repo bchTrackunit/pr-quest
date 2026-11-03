@@ -21,7 +21,13 @@ import { stripAppImage } from './desktop/appimage.ts';
 import { debBinaries, sidecarBinaryProblem } from './desktop/artifacts.ts';
 import { configOverlay } from './desktop/config.ts';
 import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
-import { signMacCode, signWindowsCode } from './desktop/sign.ts';
+import {
+  adHocSignNode,
+  entitlementsOf,
+  nodeEntitlementsProblem,
+  signMacCode,
+  signWindowsCode,
+} from './desktop/sign.ts';
 import { hostTriple, targetFor, type Target } from './desktop/targets.ts';
 
 const TAURI_CLI = join('node_modules', '@tauri-apps', 'cli', 'tauri.js');
@@ -90,7 +96,10 @@ for (const artifact of artifacts(bundleDir)) {
 function sign({ os }: Target, nodeBinary: string): void {
   const identity = process.env.APPLE_SIGNING_IDENTITY ?? '';
   if (os === 'macos' && identity !== '') {
-    log(`signed ${signMacCode(identity, SIDECAR_DIR, nodeBinary)} Mach-O files`);
+    log(`signed ${signMacCode(identity, SIDECAR_DIR)} Mach-O files`);
+  } else if (os === 'macos') {
+    adHocSignNode(nodeBinary);
+    log(`signed ${nodeBinary} ad hoc, without the official binary's entitlements`);
   }
   const template = process.env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '';
   if (os === 'windows' && template !== '') {
@@ -144,12 +153,23 @@ function stripLibraries(): void {
   );
 }
 
-/** The app and the deb have the sidecar under its own name, and no `node` (see targets.ts). */
+/**
+ * The app and the deb have the sidecar under its own name, and no `node` (see targets.ts), and
+ * the app's Node has only the entitlements it needs.
+ */
 function checkBinaries(): void {
   const listings: Array<[string, Array<string>]> = [];
   const macos = join(bundleDir, 'macos', 'PR Quest.app', 'Contents', 'MacOS');
   if (target.os === 'macos' && existsSync(macos)) {
     listings.push([macos, readdirSync(macos)]);
+    const bundledNode = join(macos, 'pr-quest-node');
+    const signed = (process.env.APPLE_SIGNING_IDENTITY ?? '') !== '';
+    const problem = existsSync(bundledNode)
+      ? nodeEntitlementsProblem(entitlementsOf(bundledNode), signed)
+      : undefined;
+    if (problem !== undefined) {
+      throw new Error(`${bundledNode}: ${problem}`);
+    }
   }
   const debDir = join(bundleDir, 'deb');
   for (const deb of bundles.includes('deb') ? readdirSync(debDir) : []) {

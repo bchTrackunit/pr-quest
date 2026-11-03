@@ -5,7 +5,12 @@
  * macOS (APPLE_SIGNING_IDENTITY): Tauri signs the app and the Node externalBin, but not the
  * native code among the resources: the Cursor SDK's tree-sitter bindings, cursorsandbox and rg.
  * Notarization rejects an app with any unsigned Mach-O inside, so they're signed here first.
- * Node is re-signed too: the official binary carries get-task-allow, which notarization refuses.
+ * Tauri signs Node with the app's entitlements (src-tauri/entitlements.plist), which replaces the
+ * official binary's debugging ones.
+ *
+ * macOS without an identity: Tauri signs nothing, so Node would keep the official binary's
+ * entitlements, get-task-allow and disable-library-validation among them. It is signed ad hoc
+ * without any instead; without the hardened runtime V8 needs none.
  *
  * Windows (PR_QUEST_WINDOWS_SIGN_COMMAND): Tauri's signCommand covers the shell, the installer
  * and resources ending in .exe or .dll; the SDK's .node files are signed here.
@@ -17,10 +22,10 @@ import { extname, join } from 'node:path';
 import { signCommandArgs } from './config.ts';
 import { isMachO } from './targets.ts';
 
-/** The app's entitlements, which Node needs: V8 compiles JavaScript at run time. */
-const ENTITLEMENTS = join('src-tauri', 'entitlements.plist');
+/** What a signed app's Node may have: V8 compiles JavaScript at run time. */
+const SIGNED_NODE_ENTITLEMENTS = ['com.apple.security.cs.allow-jit'];
 
-export function signMacCode(identity: string, sidecarDir: string, node: string): number {
+export function signMacCode(identity: string, sidecarDir: string): number {
   if (identity === '-') {
     // Library validation needs Node and the modules it loads to share a Team ID; ad-hoc code has none.
     throw new Error(
@@ -30,25 +35,37 @@ export function signMacCode(identity: string, sidecarDir: string, node: string):
   }
   const files = filesUnder(sidecarDir).filter((file) => isMachO(head(file)));
   for (const file of files) {
-    codesign(identity, file, []);
+    execFileSync(
+      'codesign',
+      ['--force', '--options', 'runtime', '--timestamp', '--sign', identity, file],
+      { stdio: 'inherit' },
+    );
   }
-  codesign(identity, node, ['--entitlements', ENTITLEMENTS]);
-  const entitlements = execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', node], {
+  return files.length;
+}
+
+/** Replaces the official Node binary's signature and entitlements with an ad-hoc one. */
+export function adHocSignNode(node: string): void {
+  execFileSync('codesign', ['--force', '--sign', '-', node], { stdio: 'inherit' });
+}
+
+/** The entitlements of a signed file, as codesign prints them in XML; empty when it has none. */
+export function entitlementsOf(file: string): string {
+  return execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', file], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
-  if (entitlements.includes('get-task-allow')) {
-    throw new Error(`${node} still has get-task-allow after signing`);
-  }
-  return files.length + 1;
 }
 
-function codesign(identity: string, file: string, extra: ReadonlyArray<string>): void {
-  execFileSync(
-    'codesign',
-    ['--force', '--options', 'runtime', '--timestamp', ...extra, '--sign', identity, file],
-    { stdio: 'inherit' },
-  );
+/** What's wrong with the bundled Node's entitlements, if anything. */
+export function nodeEntitlementsProblem(xml: string, signed: boolean): string | undefined {
+  const allowed = signed ? SIGNED_NODE_ENTITLEMENTS : [];
+  const extra = [...xml.matchAll(/<key>([^<]+)<\/key>/g)]
+    .map((match) => match[1] ?? '')
+    .filter((key) => !allowed.includes(key));
+  return extra.length === 0
+    ? undefined
+    : `the bundled Node has entitlements it must not have: ${extra.join(', ')}`;
 }
 
 export function signWindowsCode(template: string, sidecarDir: string): number {

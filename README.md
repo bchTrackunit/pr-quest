@@ -421,7 +421,8 @@ other build, including a plain `just desktop-package`, never checks for updates.
 A release build is one packaged with `PR_QUEST_RELEASE_BUILD=1`, `PR_QUEST_RELEASE_REPO` set to
 the GitHub `owner/name` it checks and that **Help** opens, and `PR_QUEST_UPDATER_PUBKEY` set to
 the updater's public key. It stops if the repository is still the `CHANGE-ME` placeholder (in any
-case) or the key is missing. With `TAURI_SIGNING_PRIVATE_KEY` (and
+case) or the key is missing, and on macOS and Windows if it wouldn't be signed (see
+[Signing](#signing)). With `TAURI_SIGNING_PRIVATE_KEY` (and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one) it also writes the update files next to the
 bundles: `PR Quest.app.tar.gz`, the AppImage and the `-setup.exe`, each with a `.sig`.
 `just desktop-verify-updater <file>` checks a `.sig` against the key. Make a key pair with
@@ -430,14 +431,16 @@ files and a `latest.json` that lists them.
 
 ### Signing
 
-Signing is off unless these are set in the environment of `just desktop-package`:
+Signing is off unless these are set in the environment of `just desktop-package`. Without an
+identity on macOS, the bundled Node is signed ad hoc without entitlements, replacing the official
+binary's debugging ones such as `get-task-allow`; the package step checks the result.
 
-| Variable                                                  | What it does                                                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APPLE_SIGNING_IDENTITY`                                  | The Developer ID Application identity, already imported into a keychain. Every Mach-O file in the sidecar and Node are signed with the hardened runtime first (Node with JIT allowed and no `get-task-allow`), then Tauri signs the app. Ad-hoc (`-`) is refused, because library validation would stop Node from loading the SDK's native parts. |
-| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | Notarize with an App Store Connect API key.                                                                                                                                                                                                                                                                                                       |
-| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`             | Or notarize with an Apple ID and an app-specific password.                                                                                                                                                                                                                                                                                        |
-| `PR_QUEST_WINDOWS_SIGN_COMMAND`                           | A command with `%1` for the file, such as `trusted-signing-cli -e <endpoint> -a <account> -c <profile> %1` or `signtool sign /fd SHA256 /tr <url> /td SHA256 /sha1 <thumbprint> %1`. It signs the sidecar's `.node`, `.exe` and `.dll` files, then Tauri uses it for the app and the installer.                                                   |
+| Variable                                                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_SIGNING_IDENTITY`                                  | The Developer ID Application identity, already imported into a keychain. Every Mach-O file in the sidecar is signed with the hardened runtime first, then Tauri signs the app and Node with `src-tauri/entitlements.plist`, which allows only JIT; the package step refuses a Node with any other entitlement. Ad-hoc (`-`) is refused, because library validation would stop Node from loading the SDK's native parts. |
+| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | Notarize with an App Store Connect API key.                                                                                                                                                                                                                                                                                                                                                                             |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`             | Or notarize with an Apple ID and an app-specific password.                                                                                                                                                                                                                                                                                                                                                              |
+| `PR_QUEST_WINDOWS_SIGN_COMMAND`                           | A command with `%1` for the file, such as `trusted-signing-cli -e <endpoint> -a <account> -c <profile> %1` or `signtool sign /fd SHA256 /tr <url> /td SHA256 /sha1 <thumbprint> %1`. It signs the sidecar's `.node`, `.exe` and `.dll` files, then Tauri uses it for the app and the installer.                                                                                                                         |
 
 ## Checks
 

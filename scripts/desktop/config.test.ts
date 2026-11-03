@@ -5,6 +5,8 @@ import { targetFor } from './targets.ts';
 
 const mac = targetFor('aarch64-apple-darwin');
 const windows = targetFor('x86_64-pc-windows-msvc');
+const linux = targetFor('x86_64-unknown-linux-gnu');
+const IDENTITY = 'Developer ID Application: Octo Cat (ABCDE12345)';
 const PUBKEY = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IFJFQUwK';
 
 describe('configOverlay', () => {
@@ -15,7 +17,7 @@ describe('configOverlay', () => {
   it('makes signed updater artifacts with the release key for a release build', () => {
     const { overlay, problems } = configOverlay(
       { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: PUBKEY },
-      mac,
+      linux,
       '/repo',
     );
     expect(problems).toEqual([]);
@@ -26,9 +28,41 @@ describe('configOverlay', () => {
   });
 
   it('refuses a release build without its own updater key', () => {
-    expect(configOverlay({ PR_QUEST_RELEASE_BUILD: '1' }, mac, '/repo').problems).toEqual([
+    expect(configOverlay({ PR_QUEST_RELEASE_BUILD: '1' }, linux, '/repo').problems).toEqual([
       expect.stringMatching(/PR_QUEST_UPDATER_PUBKEY/),
     ]);
+  });
+
+  it('refuses an unsigned macOS release build', () => {
+    const release = { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: PUBKEY };
+    for (const identity of [undefined, '', '-']) {
+      expect(
+        configOverlay({ ...release, APPLE_SIGNING_IDENTITY: identity }, mac, '/repo').problems,
+      ).toEqual([expect.stringMatching(/APPLE_SIGNING_IDENTITY/)]);
+    }
+    expect(
+      configOverlay({ ...release, APPLE_SIGNING_IDENTITY: IDENTITY }, mac, '/repo').problems,
+    ).toEqual([]);
+  });
+
+  it('refuses an unsigned Windows release build', () => {
+    const release = { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: PUBKEY };
+    expect(configOverlay(release, windows, '/repo').problems).toEqual([
+      expect.stringMatching(/PR_QUEST_WINDOWS_SIGN_COMMAND/),
+    ]);
+    expect(
+      configOverlay(
+        { ...release, PR_QUEST_WINDOWS_SIGN_COMMAND: 'signtool sign %1' },
+        windows,
+        '/repo',
+      ).problems,
+    ).toEqual([]);
+  });
+
+  it('signs nothing on Linux, release or not', () => {
+    expect(configOverlay({ APPLE_SIGNING_IDENTITY: IDENTITY }, linux, '/repo').problems).toEqual(
+      [],
+    );
   });
 
   it('signs Windows binaries through the sign script when a sign command is set', () => {
