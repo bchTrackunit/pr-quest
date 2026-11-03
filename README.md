@@ -275,7 +275,8 @@ just desktop-check      # Rust format check, Clippy and unit tests
 just cargo-deny         # audit the Rust crates (needs `cargo install cargo-deny --locked`)
 ```
 
-Building needs [Rust](https://rustup.rs) (stable) as well as Node and Yarn, and on Linux the
+Building needs [rustup](https://rustup.rs), which installs the Rust that `rust-toolchain.toml`
+pins, as well as Node and Yarn, and on Linux the
 WebKitGTK development packages; on Debian and Ubuntu:
 
 ```sh

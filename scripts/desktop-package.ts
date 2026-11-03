@@ -31,6 +31,8 @@ import {
 import { hostTriple, targetFor, type Target } from './desktop/targets.ts';
 
 const TAURI_CLI = join('node_modules', '@tauri-apps', 'cli', 'tauri.js');
+/** Builds with the crate versions in Cargo.lock, which cargo-deny audited, or fails. */
+const LOCKED = ['--', '--locked'];
 const DMG_ATTEMPTS = 3;
 
 const { values } = parseArgs({
@@ -80,10 +82,18 @@ const bundleDir = join(
 );
 if (target.os === 'macos') {
   // `tauri bundle` deletes the bundles it isn't asked for, so the app and dmg go together.
-  tauri(['build', '--target', target.triple, '--no-bundle', ...configArgs]);
+  tauri(['build', '--target', target.triple, '--no-bundle', ...configArgs, ...LOCKED]);
   bundleMac(configArgs);
 } else {
-  tauri(['build', '--target', target.triple, '--bundles', bundles.join(','), ...configArgs]);
+  tauri([
+    'build',
+    '--target',
+    target.triple,
+    '--bundles',
+    bundles.join(','),
+    ...configArgs,
+    ...LOCKED,
+  ]);
 }
 if (bundles.includes('appimage')) {
   stripLibraries();
