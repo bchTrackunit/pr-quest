@@ -9,6 +9,16 @@ import { DATA_KEY_BYTES, dataKeyEncryptor } from './dataKeyEncryptor.ts';
 
 const quiet = { info: () => undefined, warn: () => undefined };
 
+/** A value as version 1 wrote it, before values were bound to their secret's name. */
+function v1Value(key: Buffer, plainText: string): Buffer {
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce).setAAD(
+    Buffer.from('pr-quest secrets.encrypted.json v1'),
+  );
+  const body = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+  return Buffer.concat([Buffer.of(1), nonce, cipher.getAuthTag(), body]);
+}
+
 describe('dataKeyEncryptor', () => {
   test('decrypts what it encrypted, with a fresh nonce each time', () => {
     const encryptor = dataKeyEncryptor(randomBytes(DATA_KEY_BYTES));
@@ -16,7 +26,7 @@ describe('dataKeyEncryptor', () => {
     const first = encryptor.encryptString('crsr_secret', 'cursor');
     const second = encryptor.encryptString('crsr_secret', 'cursor');
 
-    expect(encryptor.decryptString(first, 'cursor')).toBe('crsr_secret');
+    expect(encryptor.decryptString(first, 'cursor', false)).toBe('crsr_secret');
     expect(first.equals(second)).toBe(false);
     expect(first.toString('latin1')).not.toContain('crsr_secret');
   });
@@ -26,19 +36,15 @@ describe('dataKeyEncryptor', () => {
 
     const encrypted = encryptor.encryptString('crsr_secret', 'cursor');
 
-    expect(() => encryptor.decryptString(encrypted, 'linear')).toThrow();
+    expect(() => encryptor.decryptString(encrypted, 'linear', false)).toThrow();
   });
 
-  test('reads values from before they were bound to a name', () => {
+  test('reads values from before they were bound to a name only when asked to', () => {
     const key = randomBytes(DATA_KEY_BYTES);
-    const nonce = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', key, nonce).setAAD(
-      Buffer.from('pr-quest secrets.encrypted.json v1'),
-    );
-    const body = Buffer.concat([cipher.update('crsr_old', 'utf8'), cipher.final()]);
-    const v1 = Buffer.concat([Buffer.of(1), nonce, cipher.getAuthTag(), body]);
+    const v1 = v1Value(key, 'crsr_old');
 
-    expect(dataKeyEncryptor(key).decryptString(v1, 'cursor')).toBe('crsr_old');
+    expect(dataKeyEncryptor(key).decryptString(v1, 'cursor', true)).toBe('crsr_old');
+    expect(() => dataKeyEncryptor(key).decryptString(v1, 'cursor', false)).toThrow(/version 1/);
   });
 
   test('names its key with an id that tells keys apart without giving one away', () => {
@@ -60,10 +66,10 @@ describe('dataKeyEncryptor', () => {
     unknownFormat[0] = 9;
 
     expect(() =>
-      dataKeyEncryptor(randomBytes(DATA_KEY_BYTES)).decryptString(encrypted, 'cursor'),
+      dataKeyEncryptor(randomBytes(DATA_KEY_BYTES)).decryptString(encrypted, 'cursor', false),
     ).toThrow();
-    expect(() => encryptor.decryptString(tampered, 'cursor')).toThrow();
-    expect(() => encryptor.decryptString(unknownFormat, 'cursor')).toThrow(/format/);
+    expect(() => encryptor.decryptString(tampered, 'cursor', false)).toThrow();
+    expect(() => encryptor.decryptString(unknownFormat, 'cursor', false)).toThrow(/format/);
   });
 
   test('needs a 256-bit key', () => {
@@ -122,5 +128,38 @@ describe('the desktop secrets with a data key', () => {
 
     expect(other.storage).toBe('wrongKey');
     expect(other.store.get('cursor')).toBeUndefined();
+  });
+
+  const openWith = (key: Buffer) =>
+    openDesktopSecrets(stateDir, {
+      encryptor: dataKeyEncryptor(key),
+      allowPlaintext: false,
+      ...quiet,
+    });
+  const writeEncrypted = (file: object) =>
+    writeFile(join(stateDir, ENCRYPTED_SECRETS_FILE), JSON.stringify(file));
+
+  test('read a version 1 file with its version 1 values', async () => {
+    const key = randomBytes(DATA_KEY_BYTES);
+    await writeEncrypted({
+      version: 1,
+      secrets: { cursor: v1Value(key, 'crsr_old').toString('base64') },
+    });
+
+    expect((await openWith(key)).store.get('cursor')).toBe('crsr_old');
+  });
+
+  test("refuse a version 1 value in a version 2 file, which isn't bound to its name", async () => {
+    const key = randomBytes(DATA_KEY_BYTES);
+    await writeEncrypted({
+      version: 2,
+      keyId: dataKeyEncryptor(key).keyId,
+      secrets: { cursor: v1Value(key, 'crsr_moved').toString('base64') },
+    });
+
+    const opened = await openWith(key);
+
+    expect(opened.storage).toBe('undecryptable');
+    expect(opened.store.get('cursor')).toBeUndefined();
   });
 });

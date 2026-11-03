@@ -29,7 +29,8 @@ export interface Encryptor {
   /** Names the key without giving it away, so a file encrypted with another key is told apart. */
   keyId: string;
   encryptString: (plainText: string, name: SecretName) => Buffer;
-  decryptString: (encrypted: Buffer, name: SecretName) => string;
+  /** `acceptV1`: whether to read values from before they were bound to a name, as in v1 files. */
+  decryptString: (encrypted: Buffer, name: SecretName, acceptV1: boolean) => string;
 }
 
 export interface DesktopSecretsOptions {
@@ -368,7 +369,11 @@ function decrypt(
     for (const name of SECRET_NAMES) {
       const value = parsed.data.secrets[name];
       if (value !== undefined) {
-        secrets[name] = encryptor.decryptString(Buffer.from(value, 'base64'), name);
+        secrets[name] = encryptor.decryptString(
+          Buffer.from(value, 'base64'),
+          name,
+          parsed.data.version === 1,
+        );
       }
     }
   } catch {

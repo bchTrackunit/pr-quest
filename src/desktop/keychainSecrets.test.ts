@@ -146,9 +146,9 @@ describe('openDesktopSecrets with the OS keychain', () => {
     const forgetful: Encryptor = {
       ...fakeKeychain(),
       decryptString: (data, name) =>
-        fakeKeychain().decryptString(data, name) === 'gho_cli'
+        fakeKeychain().decryptString(data, name, false) === 'gho_cli'
           ? 'garbled'
-          : fakeKeychain().decryptString(data, name),
+          : fakeKeychain().decryptString(data, name, false),
     };
 
     const { storage } = await open(forgetful);

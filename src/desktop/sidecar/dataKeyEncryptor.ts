@@ -44,10 +44,15 @@ export function dataKeyEncryptor(key: Buffer): Encryptor {
       const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
       return Buffer.concat([Buffer.of(V2), nonce, cipher.getAuthTag(), encrypted]);
     },
-    decryptString: (encrypted, name) => {
+    decryptString: (encrypted, name, acceptV1) => {
       const version = encrypted[0] ?? 0;
       if ((version !== V1 && version !== V2) || encrypted.length < HEADER_BYTES) {
         throw new Error('Not a value in the data key format');
+      }
+      if (version === V1 && !acceptV1) {
+        throw new Error(
+          "A version 1 value, which isn't bound to its secret, where only version 2 belongs",
+        );
       }
       const nonce = encrypted.subarray(1, 1 + NONCE_BYTES);
       const tag = encrypted.subarray(1 + NONCE_BYTES, HEADER_BYTES);
