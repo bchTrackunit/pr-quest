@@ -323,7 +323,7 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
       const keychain = /security create-keychain -p \S+ (\S+)/.exec(result.calls)?.[1] ?? '';
       expect(keychain).toMatch(/signing\.keychain-db$/);
       expect(result.calls).toContain(
-        `security import ${keychain.replace('signing.keychain-db', 'certificate.p12')} -k ${keychain}`,
+        `security import ${keychain.replace('signing.keychain-db', 'certificate.p12')} -k ${keychain} -f pkcs12 -x `,
       );
       expect(result.calls).toContain(
         `security list-keychains -d user -s ${keychain} /Users/runner/Library/Keychains/login.keychain-db`,

@@ -169,7 +169,8 @@ mac_keychain() {
   security set-keychain-settings -lut 21600 "$keychain"
   security unlock-keychain -p "$password" "$keychain"
   (umask 077 && printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$work/certificate.p12")
-  security import "$work/certificate.p12" -k "$keychain" -f pkcs12 \
+  # -x: the key can't be exported from the keychain again, only used.
+  security import "$work/certificate.p12" -k "$keychain" -f pkcs12 -x \
     -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
   rm -f "$work/certificate.p12"
   # Lets codesign use the key without a prompt nobody could answer.
