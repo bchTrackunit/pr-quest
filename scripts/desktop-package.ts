@@ -7,46 +7,24 @@
  * 2. Signs the native code Tauri doesn't (scripts/desktop/sign.ts), when signing is configured.
  * 3. `tauri build` with what the environment adds to the config (scripts/desktop/config.ts).
  *    macOS bundles separately, retrying when hdiutil finds the dmg's volume busy.
- * 5. Linux: takes libwayland-client out of the AppImage (tauri-apps/tauri#15665).
+ * 4. Linux: makes sure the AppImage has no libwayland-client (scripts/desktop/appimage.ts).
  *
  * Bundles land in $CARGO_TARGET_DIR (default src-tauri/target)/<triple>/release/bundle/.
  */
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 
+import { stripAppImage } from './desktop/appimage.ts';
 import { configOverlay } from './desktop/config.ts';
 import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
 import { signMacCode, signWindowsCode } from './desktop/sign.ts';
-import { appImageLibrariesToStrip, hostTriple, targetFor, type Target } from './desktop/targets.ts';
+import { hostTriple, targetFor, type Target } from './desktop/targets.ts';
 
 const TAURI_CLI = join('node_modules', '@tauri-apps', 'cli', 'tauri.js');
 const DMG_ATTEMPTS = 3;
-/** From https://github.com/AppImage/appimagetool/releases/tag/1.9.1. */
-const APPIMAGETOOL: Record<string, { url: string; sha256: string }> = {
-  x86_64: {
-    url: 'https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage',
-    sha256: 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0',
-  },
-  aarch64: {
-    url: 'https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage',
-    sha256: 'f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158',
-  },
-};
 
 const { values } = parseArgs({
   options: {
@@ -101,7 +79,7 @@ if (target.os === 'macos') {
   tauri(['build', '--target', target.triple, '--bundles', bundles.join(','), ...configArgs]);
 }
 if (bundles.includes('appimage')) {
-  stripAppImage();
+  stripLibraries();
 }
 for (const artifact of artifacts(bundleDir)) {
   log(`${artifact.path} (${(artifact.bytes / 1024 / 1024).toFixed(1)} MB)`);
@@ -147,58 +125,21 @@ function bundleMac(extraArgs: ReadonlyArray<string>): void {
   }
 }
 
-function stripAppImage(): void {
+function stripLibraries(): void {
   const dir = join(bundleDir, 'appimage');
   const name = readdirSync(dir).find((file) => file.endsWith('.AppImage'));
   if (name === undefined) {
     throw new Error(`No AppImage in ${dir}`);
   }
-  const appImage = resolve(dir, name);
-  const work = mkdtempSync(join(tmpdir(), 'pr-quest-appimage-'));
-  try {
-    run(appImage, ['--appimage-extract'], { cwd: work, stdio: 'ignore' });
-    const root = join(work, 'squashfs-root');
-    const lib = join(root, 'usr', 'lib');
-    const strip = appImageLibrariesToStrip(readdirSync(lib));
-    if (strip.length === 0) {
-      log('the AppImage has no libwayland-client to take out');
-      return;
-    }
-    for (const file of strip) {
-      rmSync(join(lib, file));
-    }
-    const arch = target.triple.split('-')[0] ?? '';
-    run(appImageTool(arch), ['--no-appstream', root, appImage], {
-      env: { ...process.env, ARCH: arch, APPIMAGE_EXTRACT_AND_RUN: '1' },
-    });
-    log(`took ${strip.join(', ')} out of ${name}`);
-    // The updater's signature was for the AppImage as Tauri made it. The app requires the
-    // version it was signed for, as Tauri's own signatures have it.
-    if (existsSync(`${appImage}.sig`)) {
-      rmSync(`${appImage}.sig`);
-      tauri(['signer', 'sign', '--app-version', appVersion(), appImage]);
-    }
-  } finally {
-    rmSync(work, { recursive: true, force: true });
-  }
-}
-
-function appImageTool(arch: string): string {
-  const tool = APPIMAGETOOL[arch];
-  if (tool === undefined) {
-    throw new Error(`No appimagetool for ${arch}`);
-  }
-  const file = resolve('build-tauri', 'cache', `appimagetool-${arch}-1.9.1.AppImage`);
-  mkdirSync(resolve('build-tauri', 'cache'), { recursive: true });
-  if (!existsSync(file) || sha256(file) !== tool.sha256) {
-    run('curl', ['--fail', '--location', '--silent', '--show-error', '--output', file, tool.url]);
-  }
-  if (sha256(file) !== tool.sha256) {
-    rmSync(file, { force: true });
-    throw new Error(`appimagetool doesn't have the pinned SHA-256 ${tool.sha256}`);
-  }
-  chmodSync(file, 0o755);
-  return file;
+  // The app requires the version it was signed for, as Tauri's own signatures have it.
+  const strip = stripAppImage(join(dir, name), target.triple.split('-')[0] ?? '', (file) => {
+    tauri(['signer', 'sign', '--app-version', appVersion(), file]);
+  });
+  log(
+    strip.length === 0
+      ? 'the AppImage has no libwayland-client to take out'
+      : `took ${strip.join(', ')} out of ${name}`,
+  );
 }
 
 function appVersion(): string {
@@ -228,10 +169,6 @@ function size(path: string): number {
     return stat.size;
   }
   return readdirSync(path).reduce((total, name) => total + size(join(path, name)), 0);
-}
-
-function sha256(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
 function tauri(args: ReadonlyArray<string>): void {
