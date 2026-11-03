@@ -11,7 +11,7 @@
 | `yarn format:check` | Fails if a file isn't formatted                                                               |
 | `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
 | `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
-| `yarn start`        | Runs the [production build](#production-build)                                                |
+| `yarn start`        | Builds, then runs the [production build](#production-build)                                   |
 
 Each package also has its own `test` and `typecheck` scripts, and the two apps a `dev` script,
 for example `yarn workspace @pr-quest/server test`. `yarn workspace @pr-quest/server build`
@@ -22,14 +22,15 @@ check, lint, format check, tests and build, as CI does on every pull request and
 ## Production build
 
 ```sh
-yarn build
 yarn start
 ```
 
-`yarn build` builds the UI into `apps/web/dist/` and bundles the server into `apps/server/dist/`
-with [esbuild](https://esbuild.github.io). `yarn start` runs `node apps/server/dist/main.js`, which
-serves the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port.
-Without an `apps/web/dist/` build it serves only the API and says so. The bundle leaves
+`yarn start` runs `yarn build` first, which type-checks, builds the UI into `apps/web/dist/` and
+bundles the server into `apps/server/dist/` with [esbuild](https://esbuild.github.io). It then
+runs `node apps/server/dist/main.js`, which serves the API and the built UI together on
+<http://127.0.0.1:4317>; there is no separate UI port. To run an existing build without
+rebuilding, use `yarn workspace @pr-quest/server start`. Without an `apps/web/dist/` build the
+server serves only the API and says so. The bundle leaves
 `@cursor/sdk` and `@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
 
 ### Hosted mode

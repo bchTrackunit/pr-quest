@@ -30,9 +30,9 @@ yarn dev
 ```
 
 Open <http://127.0.0.1:4318>. `yarn dev` starts the API on port 4317, restarting it when the
-server code changes, and the UI on port 4318 with hot reload. `yarn build` followed by
-`yarn start` runs the [production build](docs/development.md#production-build) instead, which
-serves the API and the UI together on <http://127.0.0.1:4317>. The board checks GitHub every 2
+server code changes, and the UI on port 4318 with hot reload. `yarn start` builds and runs the
+[production build](docs/development.md#production-build) instead, which serves the API and the UI
+together on <http://127.0.0.1:4317>. The board checks GitHub every 2
 minutes and when you press **Refresh**.
 
 ## Configuration
@@ -265,7 +265,7 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 | ---------------- | ---------------------------------------------------------------- |
 | `yarn dev`       | Runs the API (restarting on changes) and the UI                  |
 | `yarn build`     | Builds the UI and bundles the server                             |
-| `yarn start`     | Runs the production build on port 4317                           |
+| `yarn start`     | Builds, then runs the production build on port 4317              |
 | `yarn test`      | Runs every package's Vitest suite once                           |
 | `yarn typecheck` | Type-checks each package and its tests with TypeScript 7         |
 | `yarn lint`      | Lints with oxlint, including type-aware rules and project rules  |
