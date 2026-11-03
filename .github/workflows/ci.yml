@@ -42,6 +42,36 @@ jobs:
       - name: Build
         run: yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build
 
+  # The workflows and every shell script the repository keeps.
+  lint-ci:
+    name: Lint the workflows and shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Checks the download against the SHA-256 in its own manifest.
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: shellcheck@0.11.0
+
+      # actionlint runs the shellcheck above on every run: step too.
+      - name: Install actionlint
+        run: |
+          url=https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          curl --fail --location --silent --show-error --retry 3 --output "$RUNNER_TEMP/actionlint.tgz" "$url"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tgz" |
+            sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+      - name: ShellCheck
+        run: git ls-files -z '*.sh' | xargs -0 --no-run-if-empty shellcheck
+
   # The desktop jobs take a while, so a pull request that changes only documentation skips them.
   # Everything else can change the app: the sidecar bundles the whole server and UI.
   changes:
@@ -62,13 +92,14 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
             desktop=false
             # A pull request is checked out as its merge into the base branch, whose first parent
-            # is the base.
+            # is the base. Captured first, so a failing git diff fails the step under -e.
+            files="$(git diff --name-only HEAD^1 HEAD)"
             while IFS= read -r file; do
               case "$file" in
-                *.md | docs/* | LICENSE | .vscode/*) ;;
+                '' | *.md | docs/* | LICENSE | .vscode/*) ;;
                 *) desktop=true ;;
               esac
-            done < <(git diff --name-only HEAD^1 HEAD)
+            done <<<"$files"
           fi
           echo "desktop=$desktop" >>"$GITHUB_OUTPUT"
           echo "Desktop jobs: $desktop"
