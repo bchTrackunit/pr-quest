@@ -29,7 +29,6 @@ import {
   cargoTargetDir,
   DESKTOP_DIR,
   REPO_ROOT,
-  SRC_TAURI,
 } from './desktop/paths.ts';
 import {
   entitlementsOf,
@@ -199,11 +198,11 @@ function checkBinaries(): void {
   }
 }
 
+/** tauri.conf.json takes its version from apps/desktop/package.json, as the app reports it. */
 function appVersion(): string {
-  const config = z
+  return z
     .object({ version: z.string() })
-    .parse(JSON.parse(readFileSync(join(SRC_TAURI, 'tauri.conf.json'), 'utf8')));
-  return config.version;
+    .parse(JSON.parse(readFileSync(join(DESKTOP_DIR, 'package.json'), 'utf8'))).version;
 }
 
 function artifacts(dir: string): Array<{ path: string; bytes: number }> {

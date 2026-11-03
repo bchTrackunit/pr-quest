@@ -85,12 +85,17 @@ jobs:
             echo "::error title=Bad version::package.json has version $version. Use major.minor.patch, with an optional prerelease part such as 1.2.0-beta.1."
             exit 1
           fi
-          # The app reports tauri.conf.json's version to its updater. If it differed from the
-          # release's, every install would see the release as new and update to it forever.
+          # The app reports its version to the updater, which Tauri takes from package.json. If it
+          # differed from the release's, every install would see the release as new and update to
+          # it forever.
           tauri="$(jq -r .version src-tauri/tauri.conf.json)"
+          if [[ "$tauri" != ../package.json ]]; then
+            echo "::error title=Version mismatch::src-tauri/tauri.conf.json has version $tauri. Set it to \"../package.json\", so the app's version is the release's."
+            exit 1
+          fi
           cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
-          if [[ "$tauri" != "$version" || "$cargo" != "$version" ]]; then
-            echo "::error title=Version mismatch::package.json has version $version, src-tauri/tauri.conf.json $tauri and src-tauri/Cargo.toml $cargo. Set all three, then update Cargo.lock."
+          if [[ "$cargo" != "$version" ]]; then
+            echo "::error title=Version mismatch::package.json has version $version, but src-tauri/Cargo.toml $cargo. Set both, then update Cargo.lock."
             exit 1
           fi
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
