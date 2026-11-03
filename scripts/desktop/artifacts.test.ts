@@ -74,6 +74,17 @@ describe('debBinaries', () => {
     expect(debBinaries(listing)).toEqual(['pr-quest', 'pr-quest-node']);
   });
 
+  it('names a symlink by its own name, so a node link is caught', () => {
+    const listing = [
+      '-rwxr-xr-x 0/0         7412376 2026-11-03 10:13 usr/bin/pr-quest',
+      'lrwxrwxrwx 0/0               0 2026-11-03 10:13 usr/bin/node -> pr-quest-node',
+      'lrwxrwxrwx 0/0               0 2026-11-03 10:13 ./usr/bin/npx -> ../lib/node/bin/npx',
+    ].join('\n');
+
+    expect(debBinaries(listing)).toEqual(['pr-quest', 'node', 'npx']);
+    expect(sidecarBinaryProblem('linux', debBinaries(listing))).toMatch(/shadow/);
+  });
+
   it("reads tauri's listing, whose paths have no ./", () => {
     const listing = [
       'drwxr-xr-x 0/0               0 2026-11-03 10:13 usr/bin',

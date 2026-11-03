@@ -58,10 +58,14 @@ export function sidecarBinaryProblem(os: Os, files: ReadonlyArray<string>): stri
   return undefined;
 }
 
-/** The files a deb installs into /usr/bin, from `dpkg-deb -c`, whose paths may start with `./`. */
+/**
+ * The files a deb installs into /usr/bin, from `dpkg-deb -c`, whose paths may start with `./`. A
+ * symlink is listed as `path -> target` and counts by its own name.
+ */
 export function debBinaries(listing: string): Array<string> {
   return listing
     .split('\n')
-    .map((line) => /\s(?:\.\/)?usr\/bin\/([^/]+)$/.exec(line.trim())?.[1])
+    .map((line) => line.trim().replace(/ -> .*$/, ''))
+    .map((line) => /\s(?:\.\/)?usr\/bin\/([^/]+)$/.exec(line)?.[1])
     .filter((name) => name !== undefined);
 }
