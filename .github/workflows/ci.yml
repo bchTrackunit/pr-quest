@@ -12,24 +12,20 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: package.json
-
-      - name: Enable Yarn from packageManager
-        run: corepack enable
-
-      - name: Install
-        run: yarn install --immutable
+      - uses: ./.github/actions/setup-yarn
 
       - name: Typecheck
         run: yarn typecheck
@@ -45,3 +41,100 @@ jobs:
 
       - name: Build
         run: yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build
+
+  # The desktop jobs take a while, so a pull request that changes only documentation skips them.
+  # Everything else can change the app: the sidecar bundles the whole server and UI.
+  changes:
+    name: Find what changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      desktop: ${{ steps.desktop.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - id: desktop
+        run: |
+          desktop=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            desktop=false
+            # A pull request is checked out as its merge into the base branch, whose first parent
+            # is the base.
+            while IFS= read -r file; do
+              case "$file" in
+                *.md | docs/* | LICENSE | .vscode/*) ;;
+                *) desktop=true ;;
+              esac
+            done < <(git diff --name-only HEAD^1 HEAD)
+          fi
+          echo "desktop=$desktop" >>"$GITHUB_OUTPUT"
+          echo "Desktop jobs: $desktop"
+
+  desktop-check:
+    name: Desktop shell checks
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    # The oldest Ubuntu the release builds on, for the same WebKitGTK.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-yarn
+
+      - uses: ./.github/actions/setup-desktop
+        with:
+          cache: 'true'
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Format check, Clippy and tests of the Rust shell
+        run: just desktop-check
+
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Audit the Rust crates
+        run: just cargo-deny
+
+  # Unsigned local builds, without the release flag: every pull request shows that the app still
+  # packages and starts on each operating system. The release workflow builds every target.
+  desktop:
+    name: Desktop ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS arm64, runner: macos-15, target: aarch64-apple-darwin }
+          - { name: Windows x64, runner: windows-2025, target: x86_64-pc-windows-msvc }
+          - { name: Linux x64, runner: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-yarn
+
+      - uses: ./.github/actions/setup-desktop
+        with:
+          cache: 'true'
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          cache-key: ${{ matrix.target }}
+          linux-smoke: 'true'
+
+      - name: Package
+        run: just desktop-package --target "$TARGET"
+
+      - name: Smoke test
+        run: bash scripts/ci/smoke.sh "$TARGET"
