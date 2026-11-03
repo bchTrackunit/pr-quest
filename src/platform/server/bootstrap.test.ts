@@ -94,6 +94,21 @@ describe('bootstrap route', () => {
     expect((await open(port)).status).toBe(403);
   });
 
+  test('a reissued code works once, for its own time, and the one before it no longer does', async () => {
+    let now = 1000;
+    const route = bootstrapRoute({ code: CODE, requestSecret: SECRET, now: () => now });
+    const port = await serve(route);
+    const next = 'n'.repeat(43);
+    expect((await open(port)).status).toBe(303);
+    now += BOOTSTRAP_TTL_MS + 1;
+
+    route.reissue(next);
+
+    expect((await open(port)).status).toBe(403);
+    expect((await open(port, next)).status).toBe(303);
+    expect((await open(port, next)).status).toBe(403);
+  });
+
   test('refuses a wrong, partial or missing code without using up the real one', async () => {
     const port = await serve(bootstrapRoute({ code: CODE, requestSecret: SECRET }));
 
@@ -120,6 +135,9 @@ describe('bootstrap route', () => {
     expect(() => bootstrapRoute({ code: CODE, requestSecret: 'short' })).toThrow(/secret/);
     expect(() => bootstrapRoute({ code: CODE, requestSecret: `${SECRET}; Path=/x` })).toThrow(
       /secret/,
+    );
+    expect(() => bootstrapRoute({ code: CODE, requestSecret: SECRET }).reissue('short')).toThrow(
+      /code/,
     );
   });
 });

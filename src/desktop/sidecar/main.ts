@@ -26,6 +26,7 @@ import { type NoticeAction, openWithNotices, type SecretsNotice } from '../secre
 import { type Check, runChecks, sdkChecks, serverChecks } from '../smoke.ts';
 import { dataKeyEncryptor } from './dataKeyEncryptor.ts';
 import {
+  bootstrapLine,
   fatalLine,
   type Launch,
   noticeLine,
@@ -82,7 +83,12 @@ async function main(): Promise<void> {
     print(readyLine({ port: started.server.port, storage: started.secrets.storage }));
     // Ends when stdin closes, which is how the shell stops the sidecar, and what happens if it dies.
     for (let line = await next(); line !== undefined; line = await next()) {
-      if (smokeTest && parseCommand(line)?.command === 'smoke') {
+      const command = parseCommand(line)?.command;
+      const code = command === 'rebootstrap' ? started.server.issueBootstrapCode?.() : undefined;
+      if (code !== undefined) {
+        print(bootstrapLine(code));
+      }
+      if (smokeTest && command === 'smoke') {
         const ok = await runChecks(
           [...serverChecks(started.server.url), ...sidecarChecks(started, launch), ...sdkChecks()],
           print,

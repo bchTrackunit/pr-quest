@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -10,10 +11,9 @@ import {
   assertSafeConfig,
   LOOPBACK_HOSTNAMES,
 } from '../../platform/server/config.ts';
-import { bootstrapRoute } from '../../platform/server/bootstrap.ts';
+import { type BootstrapRoute, bootstrapRoute } from '../../platform/server/bootstrap.ts';
 import {
   createRouter,
-  type RawRoute,
   type RequestListener,
   trustedRequests,
 } from '../../platform/server/router.ts';
@@ -90,6 +90,11 @@ export interface RunningServer {
   port: number;
   /** Stops polling and background work, then closes every connection. */
   close: () => Promise<void>;
+  /**
+   * With a `bootstrapCode`: makes a new one-time code for `BOOTSTRAP_PATH`, which replaces the last
+   * one, and returns it, so the app's window can get the cookie again.
+   */
+  issueBootstrapCode?: () => string;
 }
 
 const defaultInfo = (message: string): void => {
@@ -168,6 +173,13 @@ export async function startServer(
   return {
     url,
     port,
+    issueBootstrapCode: bootstrap
+      ? () => {
+          const code = randomBytes(32).toString('base64url');
+          bootstrap.reissue(code);
+          return code;
+        }
+      : undefined,
     close: () =>
       new Promise<void>((resolve) => {
         app.close();
@@ -187,7 +199,10 @@ function isPlainHttpOrigin(origin: string): boolean {
   );
 }
 
-function bootstrapRouteFor(config: AppConfig, overrides: ServerOverrides): RawRoute | undefined {
+function bootstrapRouteFor(
+  config: AppConfig,
+  overrides: ServerOverrides,
+): BootstrapRoute | undefined {
   const { bootstrapCode, requestSecret } = overrides;
   if (bootstrapCode === undefined) {
     return undefined;

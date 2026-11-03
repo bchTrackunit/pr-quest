@@ -41,6 +41,8 @@ const BOOTSTRAP_PATH: &str = "/__bootstrap";
 /// Starting the server takes about a second; this much longer means it's stuck.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(100);
+const SMOKE_COMMAND: &str = r#"{"command":"smoke"}"#;
+const REBOOTSTRAP_COMMAND: &str = r#"{"command":"rebootstrap"}"#;
 /// A server that crashed is started again this often, then the app gives up.
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
@@ -130,7 +132,13 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Shell::default())
         .menu(menu::build)
-        .on_menu_event(|app, event| menu::on_event(app, &event))
+        .on_menu_event(|app, event| {
+            if event.id() == menu::RELOAD {
+                reload(app);
+            } else {
+                menu::on_event(app, &event);
+            }
+        })
         .setup(move |app| {
             if let Err(error) = start(app.handle(), mode) {
                 let app = app.handle().clone();
@@ -389,6 +397,7 @@ impl Session<'_> {
     fn run(&self, events: &Receiver<Event>, smoke: &mut Option<Smoke>) -> Outcome {
         let mut ready = false;
         let mut fatal = None;
+        let mut reloaded = false;
         loop {
             let event = if ready {
                 events.recv().map_err(|_| RecvTimeoutError::Disconnected)
@@ -412,12 +421,22 @@ impl Session<'_> {
                             .warn(&format!("couldn't answer the server's notice: {error}"));
                     }
                 }
+                Ok(Event::Bootstrap(code)) => self.reopen(&code),
                 Ok(Event::Fatal(message)) => fatal = Some(message),
                 Ok(Event::WindowReport(report)) => {
                     if let Some(smoke) = smoke.as_mut() {
-                        smoke.window(&report);
-                        smoke.check("updater", updates::smoke_check(self.app));
-                        if let Err(error) = self.sidecar.send(r#"{"command":"smoke"}"#) {
+                        // The first report is the window's start; it then reloads, as Reload in
+                        // the menu does, and reports again.
+                        let command = if reloaded {
+                            smoke.check("reload", smoke::reload_check(&report));
+                            SMOKE_COMMAND
+                        } else {
+                            smoke.window(&report);
+                            smoke.check("updater", updates::smoke_check(self.app));
+                            reloaded = true;
+                            REBOOTSTRAP_COMMAND
+                        };
+                        if let Err(error) = self.sidecar.send(command) {
                             smoke.check("sidecar", Err(error.to_string()));
                             self.app.exit(smoke.finish(false));
                             return Outcome::Stopped;
@@ -466,9 +485,7 @@ impl Session<'_> {
     fn show(&self, port: u16) {
         let origin =
             Url::parse(&format!("http://127.0.0.1:{port}/")).expect("a loopback URL parses");
-        let mut url = origin.join(BOOTSTRAP_PATH).expect("a path joins");
-        url.query_pairs_mut()
-            .append_pair("code", self.bootstrap_code);
+        let url = bootstrap_url(&origin, self.bootstrap_code);
         if let Ok(mut current) = self.app.state::<Shell>().origin.lock() {
             *current = Some(origin);
         }
@@ -492,6 +509,53 @@ impl Session<'_> {
                 });
             }
         });
+    }
+
+    /// Points the window at a new start-up link the server issued, for Reload.
+    fn reopen(&self, code: &str) {
+        let origin = self
+            .app
+            .state::<Shell>()
+            .origin
+            .lock()
+            .ok()
+            .and_then(|origin| origin.clone());
+        let Some(origin) = origin else { return };
+        let url = bootstrap_url(&origin, code);
+        let app = self.app.clone();
+        let log = self.log.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            if let Some(window) = app.get_webview_window(WINDOW) {
+                if let Err(error) = window.navigate(url) {
+                    log.warn(&format!("couldn't reload the window: {error}"));
+                }
+            }
+        });
+    }
+}
+
+fn bootstrap_url(origin: &Url, code: &str) -> Url {
+    let mut url = origin.join(BOOTSTRAP_PATH).expect("a path joins");
+    url.query_pairs_mut().append_pair("code", code);
+    url
+}
+
+/// Reload in the menu. Asks the server for a new start-up link, which the window then opens
+/// (see `Session::reopen`), so a page that lost its cookie gets it back. Nothing happens while the
+/// server is starting, which then opens the window anyway.
+fn reload(app: &AppHandle) {
+    let sidecar = app
+        .state::<Shell>()
+        .sidecar
+        .lock()
+        .ok()
+        .and_then(|sidecar| sidecar.clone());
+    if let (Some(sidecar), Some(log)) = (sidecar, app.try_state::<Log>()) {
+        if let Err(error) = sidecar.send(REBOOTSTRAP_COMMAND) {
+            log.warn(&format!(
+                "couldn't ask the server to reload the window: {error}"
+            ));
+        }
     }
 }
 
@@ -665,6 +729,16 @@ mod tests {
         assert_ne!(first.bootstrap_code, restarted.bootstrap_code);
         assert_ne!(first.request_secret, first.bootstrap_code);
         assert!(first.show_notices && !restarted.show_notices);
+    }
+
+    #[test]
+    fn the_start_up_link_is_on_the_server() {
+        let origin = Url::parse("http://127.0.0.1:4317/").unwrap();
+
+        let url = bootstrap_url(&origin, "a-b_c");
+
+        assert_eq!(url.as_str(), "http://127.0.0.1:4317/__bootstrap?code=a-b_c");
+        assert!(policy::is_app_url(&url, &origin));
     }
 
     #[test]

@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 
 import {
+  BOOTSTRAP_PREFIX,
+  bootstrapLine,
   FATAL_PREFIX,
   fatalLine,
   NOTICE_PREFIX,
@@ -44,6 +46,7 @@ describe('parseLaunch', () => {
 describe('parseCommand', () => {
   test('knows the smoke test command', () => {
     expect(parseCommand('{"command":"smoke"}')).toEqual({ command: 'smoke' });
+    expect(parseCommand('{"command":"rebootstrap"}')).toEqual({ command: 'rebootstrap' });
     expect(parseCommand('{"command":"exit"}')).toBeUndefined();
   });
 
@@ -73,6 +76,10 @@ test('noticeLine asks the shell to show a notice, as one prefixed JSON line', ()
 
 test('fatalLine says why the server could not start, on one line', () => {
   expect(fatalLine('Port\nin use')).toBe(`${FATAL_PREFIX}{"message":"Port\\nin use"}`);
+});
+
+test('bootstrapLine hands the shell a new start-up code, as one prefixed JSON line', () => {
+  expect(bootstrapLine('c'.repeat(43))).toBe(`${BOOTSTRAP_PREFIX}{"code":"${'c'.repeat(43)}"}`);
 });
 
 test('readyLine is one prefixed JSON line', () => {

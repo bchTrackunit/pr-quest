@@ -17,29 +17,44 @@ export interface BootstrapOptions {
   now?: () => number;
 }
 
+export interface BootstrapRoute extends RawRoute {
+  /**
+   * Replaces the code with a new one, which works once within `BOOTSTRAP_TTL_MS` from now, so the
+   * window can get the cookie again, such as when the player reloads it.
+   */
+  reissue: (code: string) => void;
+}
+
 /**
  * Hands the request secret's cookie to the window of an app that can't set cookies in its webview
- * itself, such as Tauri. The code works once and only for `BOOTSTRAP_TTL_MS` after the server
- * starts, so a program that later finds it, say in the webview's history, gets nothing. The route
- * is exempt from the request secret check but not from the Host, Origin and `Sec-Fetch-Site` ones.
+ * itself, such as Tauri. The code works once and only for `BOOTSTRAP_TTL_MS` after it was issued,
+ * so a program that later finds it, say in the webview's history, gets nothing. The route is
+ * exempt from the request secret check but not from the Host, Origin and `Sec-Fetch-Site` ones.
  */
 export function bootstrapRoute({
   code,
   requestSecret,
   now = Date.now,
-}: BootstrapOptions): RawRoute {
-  if (code.length < MIN_LENGTH) {
-    throw new Error(`The bootstrap code must be at least ${MIN_LENGTH} characters`);
-  }
+}: BootstrapOptions): BootstrapRoute {
   if (requestSecret.length < MIN_LENGTH || !COOKIE_SAFE.test(requestSecret)) {
     throw new Error(
       `The request secret must be at least ${MIN_LENGTH} base64url characters, which a cookie carries as they are`,
     );
   }
-  const expected = digest(code);
-  const expiresAt = now() + BOOTSTRAP_TTL_MS;
-  let used = false;
+  let expected: Buffer;
+  let expiresAt: number;
+  let used: boolean;
+  const reissue = (next: string): void => {
+    if (next.length < MIN_LENGTH) {
+      throw new Error(`The bootstrap code must be at least ${MIN_LENGTH} characters`);
+    }
+    expected = digest(next);
+    expiresAt = now() + BOOTSTRAP_TTL_MS;
+    used = false;
+  };
+  reissue(code);
   return {
+    reissue,
     method: 'GET',
     path: BOOTSTRAP_PATH,
     skipsRequestSecret: true,

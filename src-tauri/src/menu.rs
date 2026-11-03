@@ -1,5 +1,5 @@
 //! The app menu: About, the Edit menu (without it, copy and paste shortcuts don't work on macOS),
-//! the Window menu, Help and Quit. Nothing in it opens the developer tools, which release builds
+//! View with Reload, the Window menu, Help and Quit. Nothing in it opens the developer tools, which release builds
 //! don't have. Help links to the release repository only once it is a real one.
 
 use tauri::menu::{
@@ -11,6 +11,8 @@ use tauri_plugin_opener::OpenerExt;
 use crate::release::Repo;
 use crate::updates::release_repo;
 
+/// Handled in main.rs, which has the server: see `reload` there.
+pub const RELOAD: &str = "reload";
 const DOWNLOAD_LATEST: &str = "download-latest";
 const PROJECT_PAGE: &str = "project-page";
 
@@ -56,6 +58,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&MenuItem::with_id(
+            app,
+            RELOAD,
+            "Reload",
+            true,
+            Some("CmdOrCtrl+R"),
+        )?],
+    )?;
     let window = Submenu::with_items(
         app,
         "Window",
@@ -92,7 +106,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 &quit,
             ],
         )?;
-        let menu = Menu::with_items(app, &[&app_menu, &edit, &window])?;
+        let menu = Menu::with_items(app, &[&app_menu, &edit, &view, &window])?;
         if !links.is_empty() {
             let items: Vec<&dyn IsMenuItem<R>> = links
                 .iter()
@@ -112,7 +126,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         }
         items.push(&about);
         let help = Submenu::with_items(app, "Help", true, &items)?;
-        Menu::with_items(app, &[&file, &edit, &window, &help])
+        Menu::with_items(app, &[&file, &edit, &view, &window, &help])
     }
 }
 

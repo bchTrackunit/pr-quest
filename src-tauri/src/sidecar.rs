@@ -19,6 +19,7 @@ const READY_PREFIX: &str = "PRQUEST_READY ";
 const NOTICE_PREFIX: &str = "PRQUEST_NOTICE ";
 const FATAL_PREFIX: &str = "PRQUEST_FATAL ";
 const SMOKE_DONE_PREFIX: &str = "PRQUEST_SMOKE_DONE ";
+const BOOTSTRAP_PREFIX: &str = "PRQUEST_BOOTSTRAP ";
 const SMOKE_LINE_PREFIX: &str = "[smoke] ";
 /// How long stopping waits for the server to close before it kills the process.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -65,9 +66,16 @@ struct Fatal {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct Bootstrap {
+    code: String,
+}
+
 pub enum Event {
     Ready(Ready),
     Notice(Notice),
+    /// A new one-time code for the start-up link, which the shell asked for with `rebootstrap`.
+    Bootstrap(String),
     /// Why the server couldn't start.
     Fatal(String),
     SmokeLine(String),
@@ -259,6 +267,10 @@ fn parse_line(line: &str) -> Result<Option<Event>, serde_json::Error> {
     if let Some(notice) = line.strip_prefix(NOTICE_PREFIX) {
         return serde_json::from_str(notice).map(|notice| Some(Event::Notice(notice)));
     }
+    if let Some(bootstrap) = line.strip_prefix(BOOTSTRAP_PREFIX) {
+        return serde_json::from_str::<Bootstrap>(bootstrap)
+            .map(|bootstrap| Some(Event::Bootstrap(bootstrap.code)));
+    }
     if let Some(fatal) = line.strip_prefix(FATAL_PREFIX) {
         return serde_json::from_str::<Fatal>(fatal).map(|fatal| Some(Event::Fatal(fatal.message)));
     }
@@ -351,6 +363,12 @@ mod tests {
             panic!("not a ready line");
         };
         assert_eq!((ready.port, ready.storage.as_str()), (4317, "keychain"));
+    }
+
+    #[test]
+    fn reads_a_new_start_up_code() {
+        let line = r#"PRQUEST_BOOTSTRAP {"code":"abc"}"#;
+        assert!(matches!(parse_line(line), Ok(Some(Event::Bootstrap(code))) if code == "abc"));
     }
 
     #[test]

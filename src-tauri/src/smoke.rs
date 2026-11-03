@@ -1,7 +1,7 @@
 //! `PR_QUEST_SMOKE_TEST=1` checks a packaged build, prints one `[smoke]` line per check and exits
 //! with whether all passed; scripts/desktop-smoke.ts runs it. The shell checks the keychain, the
-//! window and the updater, then asks the sidecar for its checks: the server, both SDKs and their
-//! native parts.
+//! window, Reload and the updater, then asks the sidecar for its checks: the server, both SDKs
+//! and their native parts.
 
 use serde_json::Value;
 use tauri::Url;
@@ -190,6 +190,22 @@ fn cookie_check(report: &Value) -> Result<String, String> {
     }
 }
 
+/// Whether the window's report after Reload shows the UI again, which it reached through a new
+/// start-up link: a code the server refused would leave the window on that link's 403.
+pub fn reload_check(report: &str) -> Result<String, String> {
+    let report: Value =
+        serde_json::from_str(report).map_err(|error| format!("unreadable report: {error}"))?;
+    let path = report["path"].as_str().unwrap_or("");
+    let api = &report["api"];
+    if path == "/" && api.as_u64() == Some(200) && report["children"].as_u64().unwrap_or(0) > 0 {
+        Ok("Reload opened a new start-up link, and the UI renders and reads the API again".into())
+    } else {
+        Err(format!(
+            "after Reload the window is on {path:?} and fetch got {api}"
+        ))
+    }
+}
+
 /// Whether the page was refused when it called the shell, or had no way to.
 fn ipc_check(report: &Value) -> Result<String, String> {
     match report["ipc"].as_str() {
@@ -237,6 +253,15 @@ mod tests {
         assert!(cookie_check(&report).is_err());
         let report = json!({ "api": 403, "events": "open", "cookieVisible": false });
         assert!(cookie_check(&report).is_err());
+    }
+
+    #[test]
+    fn reload_lands_on_the_ui_through_a_new_link() {
+        let back = json!({ "path": "/", "api": 200, "children": 1 }).to_string();
+        assert!(reload_check(&back).is_ok());
+        let refused = json!({ "path": "/__bootstrap?code=x", "api": 403, "children": 0 });
+        assert!(reload_check(&refused.to_string()).is_err());
+        assert!(reload_check("not json").is_err());
     }
 
     #[test]

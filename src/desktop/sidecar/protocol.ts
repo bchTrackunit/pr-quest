@@ -6,7 +6,8 @@ import { DATA_KEY_BYTES } from './dataKeyEncryptor.ts';
 /*
  * The Tauri shell and this sidecar talk over stdio, which no other program can read:
  * - stdin, one JSON line each: first a `Launch`, then any `Command`s. Closing stdin, which happens
- *   when the shell quits or dies, stops the sidecar.
+ *   when the shell quits or dies, stops the sidecar. `rebootstrap`, when the player reloads the
+ *   window, is answered with `BOOTSTRAP_PREFIX` and a new one-time code for the window to open.
  * - stdout, one prefixed JSON line each: `NOTICE_PREFIX` and a `SecretsNotice` for the shell to
  *   show, answered with a `notice` command; `READY_PREFIX` and a `Ready` once the server listens;
  *   `FATAL_PREFIX` and why it couldn't start; then smoke test lines. Logs go to stderr, so nothing
@@ -17,6 +18,7 @@ export const READY_PREFIX = 'PRQUEST_READY ';
 export const NOTICE_PREFIX = 'PRQUEST_NOTICE ';
 export const FATAL_PREFIX = 'PRQUEST_FATAL ';
 export const SMOKE_DONE_PREFIX = 'PRQUEST_SMOKE_DONE ';
+export const BOOTSTRAP_PREFIX = 'PRQUEST_BOOTSTRAP ';
 
 /** 32 or more random bytes in base64url, which a cookie and a query string carry as they are. */
 const Token = z.string().regex(/^[\w-]{43,}$/);
@@ -38,6 +40,7 @@ export type Launch = z.infer<typeof LaunchSchema>;
 
 const CommandSchema = z.discriminatedUnion('command', [
   z.object({ command: z.literal('smoke') }),
+  z.object({ command: z.literal('rebootstrap') }),
   z.object({ command: z.literal('notice'), action: z.enum(NOTICE_ACTIONS) }),
 ]);
 export type Command = z.infer<typeof CommandSchema>;
@@ -69,6 +72,11 @@ export function readyLine(ready: Ready): string {
 
 export function noticeLine(notice: SecretsNotice): string {
   return `${NOTICE_PREFIX}${JSON.stringify(notice)}`;
+}
+
+/** A new one-time code for `BOOTSTRAP_PATH`, which the shell's window opens for its cookie. */
+export function bootstrapLine(code: string): string {
+  return `${BOOTSTRAP_PREFIX}${JSON.stringify({ code })}`;
 }
 
 /** Why the server couldn't start, which the shell shows in its error dialog. */

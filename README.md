@@ -325,10 +325,12 @@ non-zero if any failed. Without an artifact it checks the app, AppImage or insta
 detached again), a `.deb` (unpacked), a `-setup.exe` (installed silently into a temporary
 folder and uninstalled) or an executable.
 
-The checks: the OS keychain can make, read and delete a data key; the UI renders with nothing
-blocked by its Content Security Policy; the start-up link leaves the window on `/` and works only
-once; the request secret travels as an `HttpOnly` cookie scripts can't read; the updater builds
-with its key; the server refuses a request without the secret; a saved key is encrypted on disk;
+The checks: the bundle ships Node as `pr-quest-node`, never as `node`; the OS keychain can make,
+read and delete a data key; the UI renders with nothing blocked by its Content Security Policy;
+the start-up link leaves the window on `/` and works only once; the request secret travels as an
+`HttpOnly` cookie scripts can't read; the page can't call the shell or its plugins over IPC;
+**View > Reload**, which has the server issue a new start-up link, brings the UI back; the
+updater builds with its key; the server refuses a request without the secret; a saved key is encrypted on disk;
 both SDKs load with their native parts; and a call with a made-up key reaches Cursor and
 Anthropic and is refused as unauthenticated. The live event stream needs a GitHub sign-in too,
 so without one, as on CI, the cookie check confirms the events route accepts the cookie instead

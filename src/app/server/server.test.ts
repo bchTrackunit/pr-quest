@@ -132,6 +132,23 @@ describe('startServer', () => {
     expect(logs.join('\n')).not.toContain(bootstrapCode);
   });
 
+  test('issues a new bootstrap link, such as for a window that reloads', async () => {
+    const requestSecret = 'r'.repeat(43);
+    const bootstrapCode = 'b'.repeat(43);
+    const server = await start(LOCAL_CONFIG, { requestSecret, bootstrapCode });
+    await fetch(`${server.url}${BOOTSTRAP_PATH}?code=${bootstrapCode}`, { redirect: 'manual' });
+
+    const code = server.issueBootstrapCode?.() ?? '';
+    const reopened = await fetch(`${server.url}${BOOTSTRAP_PATH}?code=${code}`, {
+      redirect: 'manual',
+    });
+
+    expect(code).toMatch(/^[\w-]{43}$/);
+    expect(reopened.status).toBe(303);
+    expect(logs.join('\n')).not.toContain(code);
+    expect((await start(LOCAL_CONFIG, { requestSecret })).issueBootstrapCode).toBeUndefined();
+  });
+
   test('takes a bootstrap code only in local mode with a request secret', async () => {
     const bootstrapCode = 'b'.repeat(43);
 
