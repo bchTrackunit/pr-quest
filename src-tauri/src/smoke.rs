@@ -39,6 +39,11 @@ pub const WINDOW_SCRIPT: &str = r#"
       source.onopen = () => done('open');
       source.onerror = () => done('error');
     });
+    // EventSource doesn't say why it failed; the events route needs a GitHub sign-in as well.
+    const eventsStatus = events === 'open' ? undefined : await fetch('/api/events').then(
+      (res) => { res.body?.cancel(); return res.status; },
+      (error) => String(error),
+    );
     await sleep(500);
     const report = {
       path: location.pathname + location.search,
@@ -47,6 +52,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       fonts,
       api,
       events,
+      eventsStatus,
       cookieVisible: document.cookie.includes('pr_quest_secret'),
       violations,
       userAgent: navigator.userAgent,
@@ -135,19 +141,7 @@ impl Smoke {
                 Ok(format!("nothing blocked; {fonts} font(s) loaded"))
             },
         );
-        let api = &report["api"];
-        let events = report["events"].as_str().unwrap_or("?");
-        let visible = report["cookieVisible"].as_bool().unwrap_or(true);
-        self.check(
-            "request-secret-cookie",
-            if api.as_u64() == Some(200) && events == "open" && !visible {
-                Ok("fetch and EventSource carry the HttpOnly cookie; scripts can't read it".into())
-            } else {
-                Err(format!(
-                    "fetch got {api}, EventSource {events}, cookie visible to scripts: {visible}"
-                ))
-            },
-        );
+        self.check("request-secret-cookie", cookie_check(&report));
     }
 
     pub fn finish(&self, sidecar_ok: bool) -> i32 {
@@ -157,9 +151,74 @@ impl Smoke {
     }
 }
 
+/// Whether the page's requests carry the request secret's HttpOnly cookie. Without a GitHub
+/// sign-in, as on CI, the events route answers 401 and EventSource can't open; the secret then
+/// counts as carried when that 401 isn't the 403 a missing secret gets.
+fn cookie_check(report: &Value) -> Result<String, String> {
+    let api = &report["api"];
+    let events = report["events"].as_str().unwrap_or("?");
+    let events_status = &report["eventsStatus"];
+    let visible = report["cookieVisible"].as_bool().unwrap_or(true);
+    let problem = || {
+        format!(
+            "fetch got {api}, EventSource {events} ({events_status}), cookie visible to scripts: \
+             {visible}"
+        )
+    };
+    if api.as_u64() != Some(200) || visible {
+        return Err(problem());
+    }
+    match (events, events_status.as_u64()) {
+        ("open", _) => {
+            Ok("fetch and EventSource carry the HttpOnly cookie; scripts can't read it".into())
+        }
+        ("error", Some(401)) => Ok("fetch and the events route carry the HttpOnly cookie; \
+             scripts can't read it; EventSource can't open while nobody is signed in to GitHub"
+            .into()),
+        _ => Err(problem()),
+    }
+}
+
 pub fn report_of(url: &Url) -> String {
     url.query_pairs()
         .find(|(name, _)| name == "data")
         .map(|(_, value)| value.into_owned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn fetch_and_event_source_carry_the_cookie() {
+        let report = json!({ "api": 200, "events": "open", "cookieVisible": false });
+        assert!(cookie_check(&report).is_ok());
+    }
+
+    #[test]
+    fn without_a_github_sign_in_the_events_route_still_takes_the_cookie() {
+        let report = json!({
+            "api": 200, "events": "error", "eventsStatus": 401, "cookieVisible": false
+        });
+        let detail = cookie_check(&report).unwrap();
+        assert!(detail.contains("nobody is signed in"), "{detail}");
+    }
+
+    #[test]
+    fn a_refused_cookie_fails() {
+        let report = json!({
+            "api": 200, "events": "error", "eventsStatus": 403, "cookieVisible": false
+        });
+        assert!(cookie_check(&report).is_err());
+        let report = json!({ "api": 403, "events": "open", "cookieVisible": false });
+        assert!(cookie_check(&report).is_err());
+    }
+
+    #[test]
+    fn a_cookie_scripts_can_read_fails() {
+        let report = json!({ "api": 200, "events": "open", "cookieVisible": true });
+        assert!(cookie_check(&report).is_err());
+    }
 }
