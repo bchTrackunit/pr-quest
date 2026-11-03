@@ -8,10 +8,30 @@ const windows = targetFor('x86_64-pc-windows-msvc');
 const linux = targetFor('x86_64-unknown-linux-gnu');
 const IDENTITY = 'Developer ID Application: Octo Cat (ABCDE12345)';
 const PUBKEY = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IFJFQUwK';
+const AD_HOC = {
+  macOS: { signingIdentity: '-', hardenedRuntime: false, entitlements: null },
+};
 
 describe('configOverlay', () => {
-  it('changes nothing for a local build', () => {
-    expect(configOverlay({}, mac, '/repo/apps/desktop')).toEqual({ overlay: {}, problems: [] });
+  it('changes nothing for a local Linux or Windows build', () => {
+    expect(configOverlay({}, linux, '/repo/apps/desktop')).toEqual({ overlay: {}, problems: [] });
+    expect(configOverlay({}, windows, '/repo/apps/desktop')).toEqual({ overlay: {}, problems: [] });
+  });
+
+  it('signs an unsigned macOS app ad hoc as a whole, without the hardened runtime', () => {
+    for (const identity of [undefined, '']) {
+      expect(configOverlay({ APPLE_SIGNING_IDENTITY: identity }, mac, '/repo/apps/desktop')).toEqual({
+        overlay: { bundle: AD_HOC },
+        problems: [],
+      });
+    }
+  });
+
+  it('leaves macOS signing to Tauri with a Developer ID', () => {
+    expect(configOverlay({ APPLE_SIGNING_IDENTITY: IDENTITY }, mac, '/repo/apps/desktop')).toEqual({
+      overlay: {},
+      problems: [],
+    });
   });
 
   it('makes signed updater artifacts with the release key for a release build', () => {
@@ -61,6 +81,46 @@ describe('configOverlay', () => {
     ).toEqual([]);
   });
 
+  it('lets a release build skip code signing only when PR_QUEST_ALLOW_UNSIGNED_RELEASE is 1', () => {
+    const dryRun = {
+      PR_QUEST_RELEASE_BUILD: '1',
+      PR_QUEST_UPDATER_PUBKEY: PUBKEY,
+      PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1',
+    };
+    expect(configOverlay(dryRun, mac, '/repo/apps/desktop')).toEqual({
+      overlay: {
+        bundle: { createUpdaterArtifacts: true, ...AD_HOC },
+        plugins: { updater: { pubkey: PUBKEY } },
+      },
+      problems: [],
+    });
+    expect(configOverlay(dryRun, windows, '/repo/apps/desktop').problems).toEqual([]);
+    expect(configOverlay(dryRun, linux, '/repo/apps/desktop').problems).toEqual([]);
+  });
+
+  it('still needs the updater key when signing is skipped', () => {
+    expect(
+      configOverlay(
+        { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1' },
+        mac,
+        '/repo/apps/desktop',
+      ).problems,
+    ).toEqual([expect.stringMatching(/PR_QUEST_UPDATER_PUBKEY/)]);
+  });
+
+  it('refuses PR_QUEST_ALLOW_UNSIGNED_RELEASE set to anything but 1, or outside a release build', () => {
+    const release = { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: PUBKEY };
+    for (const value of ['true', 'yes', '0']) {
+      expect(
+        configOverlay({ ...release, PR_QUEST_ALLOW_UNSIGNED_RELEASE: value }, linux, '/repo/apps/desktop')
+          .problems,
+      ).toEqual([expect.stringMatching(/PR_QUEST_ALLOW_UNSIGNED_RELEASE/)]);
+    }
+    expect(
+      configOverlay({ PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1' }, linux, '/repo/apps/desktop').problems,
+    ).toEqual([expect.stringMatching(/PR_QUEST_ALLOW_UNSIGNED_RELEASE/)]);
+  });
+
   it('signs nothing on Linux, release or not', () => {
     expect(
       configOverlay({ APPLE_SIGNING_IDENTITY: IDENTITY }, linux, '/repo/apps/desktop').problems,
@@ -87,11 +147,7 @@ describe('configOverlay', () => {
 
   it('leaves the Windows sign command off other targets', () => {
     expect(
-      configOverlay(
-        { PR_QUEST_WINDOWS_SIGN_COMMAND: 'signtool sign %1' },
-        mac,
-        '/repo/apps/desktop',
-      ).overlay,
+      configOverlay({ PR_QUEST_WINDOWS_SIGN_COMMAND: 'signtool sign %1' }, linux, '/repo/apps/desktop').overlay,
     ).toEqual({});
   });
 });

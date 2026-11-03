@@ -32,7 +32,6 @@ import {
   SRC_TAURI,
 } from './desktop/paths.ts';
 import {
-  adHocSignNode,
   entitlementsOf,
   nodeEntitlementsProblem,
   signMacCode,
@@ -78,7 +77,7 @@ if (values['layout-only']) {
   process.exit(0);
 }
 
-sign(target, node);
+sign(target);
 
 const configArgs: Array<string> = [];
 if (Object.keys(overlay).length > 0) {
@@ -110,13 +109,10 @@ for (const artifact of artifacts(bundleDir)) {
   log(`${relative('.', artifact.path)} (${(artifact.bytes / 1024 / 1024).toFixed(1)} MB)`);
 }
 
-function sign({ os }: Target, nodeBinary: string): void {
+function sign({ os }: Target): void {
   const identity = process.env.APPLE_SIGNING_IDENTITY ?? '';
   if (os === 'macos' && identity !== '') {
     log(`signed ${signMacCode(identity, SIDECAR_DIR)} Mach-O files`);
-  } else if (os === 'macos') {
-    adHocSignNode(nodeBinary);
-    log(`signed ${relative('.', nodeBinary)} ad hoc, without the official binary's entitlements`);
   }
   const template = process.env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '';
   if (os === 'windows' && template !== '') {

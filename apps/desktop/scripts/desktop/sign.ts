@@ -8,9 +8,9 @@
  * Tauri signs Node with the app's entitlements (src-tauri/entitlements.plist), which replaces the
  * official binary's debugging ones.
  *
- * macOS without an identity: Tauri signs nothing, so Node would keep the official binary's
- * entitlements, get-task-allow and disable-library-validation among them. It is signed ad hoc
- * without any instead; without the hardened runtime V8 needs none.
+ * macOS without an identity: Tauri signs the app ad hoc, Node included, without the hardened
+ * runtime or entitlements (scripts/desktop/config.ts), replacing the official binary's
+ * get-task-allow and disable-library-validation; without the hardened runtime V8 needs none.
  *
  * Windows (PR_QUEST_WINDOWS_SIGN_COMMAND): Tauri's signCommand covers the shell, the installer
  * and resources ending in .exe or .dll; the SDK's .node files are signed here.
@@ -42,11 +42,6 @@ export function signMacCode(identity: string, sidecarDir: string): number {
     );
   }
   return files.length;
-}
-
-/** Replaces the official Node binary's signature and entitlements with an ad-hoc one. */
-export function adHocSignNode(node: string): void {
-  execFileSync('codesign', ['--force', '--sign', '-', node], { stdio: 'inherit' });
 }
 
 /** The entitlements of a signed file, as codesign prints them in XML; empty when it has none. */

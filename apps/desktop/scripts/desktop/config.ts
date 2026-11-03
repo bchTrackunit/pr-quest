@@ -1,8 +1,8 @@
 /*
  * What a package build adds to tauri.conf.json from its environment, passed to `tauri build
- * --config`. Without any of these variables a build is a local one: no updater artifacts and
- * nothing signed but what Tauri does by default. A release build must be signed on macOS and
- * Windows.
+ * --config`. Without any of these variables a build is a local one: no updater artifacts, and on
+ * macOS the app signed ad hoc. A release build must be signed on macOS and Windows, unless
+ * PR_QUEST_ALLOW_UNSIGNED_RELEASE is 1, which the release workflow sets only for its dry runs.
  */
 import { join } from 'node:path';
 
@@ -21,7 +21,14 @@ export function configOverlay(
   const bundle: Record<string, unknown> = {};
   const plugins: Record<string, unknown> = {};
   const problems: Array<string> = [];
-  if (env.PR_QUEST_RELEASE_BUILD === '1') {
+  const release = env.PR_QUEST_RELEASE_BUILD === '1';
+  const allowUnsigned = env.PR_QUEST_ALLOW_UNSIGNED_RELEASE ?? '';
+  if (allowUnsigned !== '' && (allowUnsigned !== '1' || !release)) {
+    problems.push(
+      'PR_QUEST_ALLOW_UNSIGNED_RELEASE can only be 1, and only with PR_QUEST_RELEASE_BUILD=1',
+    );
+  }
+  if (release) {
     // tauri build signs them with TAURI_SIGNING_PRIVATE_KEY and fails without it.
     bundle.createUpdaterArtifacts = true;
     const pubkey = env.PR_QUEST_UPDATER_PUBKEY;
@@ -33,14 +40,26 @@ export function configOverlay(
     } else {
       plugins.updater = { pubkey };
     }
-    // Players install a release, so it must be signed where the OS checks.
+    // Players install a release, so it must be signed where the OS checks. build.rs still
+    // refuses the development updater key and the placeholder repository either way.
     const identity = env.APPLE_SIGNING_IDENTITY ?? '';
-    if (target.os === 'macos' && (identity === '' || identity === '-')) {
-      problems.push('A macOS release build needs APPLE_SIGNING_IDENTITY, a Developer ID identity');
+    if (allowUnsigned !== '1') {
+      if (target.os === 'macos' && (identity === '' || identity === '-')) {
+        problems.push(
+          'A macOS release build needs APPLE_SIGNING_IDENTITY, a Developer ID identity',
+        );
+      }
+      if (target.os === 'windows' && (env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '') === '') {
+        problems.push('A Windows release build needs PR_QUEST_WINDOWS_SIGN_COMMAND');
+      }
     }
-    if (target.os === 'windows' && (env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '') === '') {
-      problems.push('A Windows release build needs PR_QUEST_WINDOWS_SIGN_COMMAND');
-    }
+  }
+  if (target.os === 'macos' && (env.APPLE_SIGNING_IDENTITY ?? '') === '') {
+    // Tauri signs inside out, then seals the whole app, before the dmg and the update archive are
+    // made; Gatekeeper calls an unsealed download damaged. Without the hardened runtime, library
+    // validation doesn't stop Node loading the SDK's ad-hoc native modules. Entitlements are
+    // dropped so Node keeps none (see checkBinaries in desktop-package.ts).
+    bundle.macOS = { signingIdentity: '-', hardenedRuntime: false, entitlements: null };
   }
   if (target.os === 'windows' && (env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '') !== '') {
     bundle.windows = {
