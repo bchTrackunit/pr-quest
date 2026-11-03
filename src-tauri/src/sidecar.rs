@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -160,13 +160,12 @@ impl Sidecar {
             }
         });
 
-        let pid = child.id();
         let child = Arc::new(Mutex::new(child));
         let watched = Arc::clone(&child);
         thread::spawn(move || loop {
             thread::sleep(POLL_INTERVAL);
             let status = match watched.lock() {
-                Ok(mut child) => child.try_wait(),
+                Ok(mut child) => reap_if_exited(&mut child),
                 Err(_) => return,
             };
             let code = match status {
@@ -174,11 +173,6 @@ impl Sidecar {
                 Ok(Some(status)) => status.code(),
                 Err(_) => None,
             };
-            // What it started, such as a review's rg, would otherwise outlive it.
-            #[cfg(unix)]
-            kill_group(pid);
-            #[cfg(not(unix))]
-            let _ = pid;
             let _ = events.send(Event::Exited(code));
             return;
         });
@@ -218,7 +212,11 @@ impl Sidecar {
         }
         let deadline = Instant::now() + STOP_TIMEOUT;
         while Instant::now() < deadline {
-            match self.child.lock().map(|mut child| child.try_wait()) {
+            match self
+                .child
+                .lock()
+                .map(|mut child| reap_if_exited(&mut child))
+            {
                 Ok(Ok(None)) => thread::sleep(POLL_INTERVAL),
                 _ => return,
             }
@@ -248,10 +246,47 @@ fn isolate(command: &mut Command) {
 
 /// Kills the sidecar and, on Unix, the rest of its process group.
 fn kill_tree(child: &mut Child) {
+    if let Ok(Some(_)) = reap_if_exited(child) {
+        return;
+    }
+    // Not reaped, so the group's id is still the sidecar's even if it exits meanwhile.
     #[cfg(unix)]
     kill_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// The sidecar's exit status once it exited, reaping it. On Unix it first kills the rest of its
+/// process group, which a review's rg would otherwise outlive it in: until the sidecar is reaped
+/// its pid, and with it the group's id, can't go to another process.
+fn reap_if_exited(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+    #[cfg(unix)]
+    {
+        let pid: libc::id_t = child.id();
+        // SAFETY: zeroed is a valid siginfo_t, which waitid only writes to.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: waitid with WNOWAIT only looks at the child's state, leaving it to be reaped.
+        let looked = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if looked == -1 {
+            // ECHILD: it was reaped already, and Child remembers its status.
+            return child.try_wait();
+        }
+        // SAFETY: waitid filled in info, or left it zeroed when the child hasn't exited.
+        if unsafe { info.si_pid() } == 0 {
+            return Ok(None);
+        }
+        kill_group(child.id());
+        child.wait().map(Some)
+    }
+    #[cfg(not(unix))]
+    child.try_wait()
 }
 
 #[cfg(unix)]
@@ -410,28 +445,59 @@ mod tests {
         assert!(parse_line("PRQUEST_READY not json").is_err());
     }
 
+    /// Starts `script` in `sh` the way the sidecar starts, and returns it with the pid of the
+    /// background process the script printed.
     #[cfg(unix)]
-    #[test]
-    fn killing_it_also_kills_what_it_started() {
+    fn spawn_with_grandchild(script: &str) -> (Child, i32) {
         let mut command = Command::new("sh");
-        command
-            .args(["-c", "sleep 30 & echo $!; wait"])
-            .stdout(Stdio::piped());
+        command.args(["-c", script]).stdout(Stdio::piped());
         isolate(&mut command);
         let mut child = command.spawn().unwrap();
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut line)
             .unwrap();
-        let grandchild: i32 = line.trim().parse().unwrap();
-        kill_tree(&mut child);
-        let gone = (0..50).any(|_| {
+        (child, line.trim().parse().unwrap())
+    }
+
+    /// Whether `pid` is gone within 5 seconds.
+    #[cfg(unix)]
+    fn gone(pid: i32) -> bool {
+        (0..50).any(|_| {
             thread::sleep(Duration::from_millis(100));
             // SAFETY: signal 0 only checks whether the process exists.
-            let alive = unsafe { libc::kill(grandchild, 0) } == 0;
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
             !alive
-        });
-        assert!(gone, "process {grandchild} outlived the sidecar");
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn killing_it_also_kills_what_it_started() {
+        let (mut child, grandchild) = spawn_with_grandchild("sleep 30 & echo $!; wait");
+        kill_tree(&mut child);
+        assert!(
+            gone(grandchild),
+            "process {grandchild} outlived the sidecar"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_that_exits_takes_what_it_started_along_before_it_is_reaped() {
+        let (mut child, grandchild) = spawn_with_grandchild("sleep 30 & echo $!");
+        let status = (0..50)
+            .find_map(|_| {
+                thread::sleep(Duration::from_millis(100));
+                reap_if_exited(&mut child).unwrap()
+            })
+            .expect("the shell exited");
+        assert!(status.success());
+        assert!(
+            gone(grandchild),
+            "process {grandchild} outlived the sidecar"
+        );
+        assert_eq!(reap_if_exited(&mut child).unwrap(), Some(status));
     }
 
     #[test]
