@@ -105,7 +105,7 @@ export function platformPackageProblem(
   if (!platformPackages.includes(target.sdkPackage)) {
     return (
       `${target.sdkPackage} isn't installed, so ${target.triple} would have no Cursor SDK ` +
-      `binaries; install it (see the README's desktop section) and package again`
+      `binaries; install it (see docs/desktop.md) and package again`
     );
   }
   const foreign = platformPackages.filter((name) => name !== target.sdkPackage);
