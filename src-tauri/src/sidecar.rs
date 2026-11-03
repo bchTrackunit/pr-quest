@@ -106,13 +106,7 @@ impl Sidecar {
                 command.env_remove(name);
             }
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // A console of its own, but hidden, which the programs it starts inherit too.
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
+        isolate(&mut command);
         let mut child = command.spawn()?;
         #[cfg(windows)]
         if let Err(error) = windows_job::assign(&child) {
@@ -124,9 +118,14 @@ impl Sidecar {
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
         let message = serde_json::to_string(launch).map_err(io::Error::other)?;
-        stdin.write_all(message.as_bytes())?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
+        let sent = stdin
+            .write_all(message.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .and_then(|()| stdin.flush());
+        if let Err(error) = sent {
+            kill_tree(&mut child);
+            return Err(error);
+        }
 
         let stdout_events = events.clone();
         let stdout_log = log.clone();
@@ -148,6 +147,7 @@ impl Sidecar {
             }
         });
 
+        let pid = child.id();
         let child = Arc::new(Mutex::new(child));
         let watched = Arc::clone(&child);
         thread::spawn(move || loop {
@@ -156,17 +156,18 @@ impl Sidecar {
                 Ok(mut child) => child.try_wait(),
                 Err(_) => return,
             };
-            match status {
-                Ok(None) => {}
-                Ok(Some(status)) => {
-                    let _ = events.send(Event::Exited(status.code()));
-                    return;
-                }
-                Err(_) => {
-                    let _ = events.send(Event::Exited(None));
-                    return;
-                }
-            }
+            let code = match status {
+                Ok(None) => continue,
+                Ok(Some(status)) => status.code(),
+                Err(_) => None,
+            };
+            // What it started, such as a review's rg, would otherwise outlive it.
+            #[cfg(unix)]
+            kill_group(pid);
+            #[cfg(not(unix))]
+            let _ = pid;
+            let _ = events.send(Event::Exited(code));
+            return;
         });
 
         Ok(Sidecar {
@@ -210,8 +211,42 @@ impl Sidecar {
             }
         }
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
+        }
+    }
+}
+
+/// On Unix, puts the sidecar in a process group of its own, so stopping it stops what it started,
+/// such as cursorsandbox and rg. On Windows the job object does that (see `windows_job`).
+fn isolate(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A console of its own, but hidden, which the programs it starts inherit too.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// Kills the sidecar and, on Unix, the rest of its process group.
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn kill_group(pid: u32) {
+    if let Ok(group) = libc::pid_t::try_from(pid) {
+        // SAFETY: killpg only sends a signal; a group that is already gone makes it fail harmlessly.
+        unsafe {
+            libc::killpg(group, libc::SIGKILL);
         }
     }
 }
@@ -341,6 +376,30 @@ mod tests {
     fn other_lines_are_logs() {
         assert!(matches!(parse_line("listening"), Ok(None)));
         assert!(parse_line("PRQUEST_READY not json").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn killing_it_also_kills_what_it_started() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .stdout(Stdio::piped());
+        isolate(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let grandchild: i32 = line.trim().parse().unwrap();
+        kill_tree(&mut child);
+        let gone = (0..50).any(|_| {
+            thread::sleep(Duration::from_millis(100));
+            // SAFETY: signal 0 only checks whether the process exists.
+            let alive = unsafe { libc::kill(grandchild, 0) } == 0;
+            !alive
+        });
+        assert!(gone, "process {grandchild} outlived the sidecar");
     }
 
     #[test]

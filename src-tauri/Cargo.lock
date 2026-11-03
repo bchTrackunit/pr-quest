@@ -2888,6 +2888,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
  "keyring",
+ "libc",
  "rfd",
  "semver",
  "serde",
