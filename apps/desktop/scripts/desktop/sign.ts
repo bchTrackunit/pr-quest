@@ -8,22 +8,28 @@
  * Tauri signs Node with the app's entitlements (src-tauri/entitlements.plist), which replaces the
  * official binary's debugging ones.
  *
- * macOS without an identity: Tauri signs the app ad hoc, Node included, without the hardened
- * runtime or entitlements (scripts/desktop/config.ts), replacing the official binary's
- * get-task-allow and disable-library-validation; without the hardened runtime V8 needs none.
+ * macOS without an identity: Tauri signs the app ad hoc, Node included, with the hardened runtime
+ * and scripts/desktop/entitlements-ad-hoc.plist (scripts/desktop/config.ts), which replaces the
+ * official binary's debugging entitlements such as get-task-allow. Ad-hoc code has no Team ID,
+ * so Node keeps disable-library-validation to load the SDK's native modules.
  *
  * Windows (PR_QUEST_WINDOWS_SIGN_COMMAND): Tauri's signCommand covers the shell, the installer
  * and resources ending in .exe or .dll; the SDK's .node files are signed here.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { closeSync, lstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
 import { signCommandArgs } from './config.ts';
 import { isMachO } from './targets.ts';
 
-/** What a signed app's Node may have: V8 compiles JavaScript at run time. */
+/** What a signed app's Node has: V8 compiles JavaScript at run time. */
 const SIGNED_NODE_ENTITLEMENTS = ['com.apple.security.cs.allow-jit'];
+/** What an ad-hoc signed app's Node has (scripts/desktop/entitlements-ad-hoc.plist). */
+const AD_HOC_NODE_ENTITLEMENTS = [
+  'com.apple.security.cs.allow-jit',
+  'com.apple.security.cs.disable-library-validation',
+];
 
 export function signMacCode(identity: string, sidecarDir: string): number {
   if (identity === '-') {
@@ -52,15 +58,33 @@ export function entitlementsOf(file: string): string {
   });
 }
 
-/** What's wrong with the bundled Node's entitlements, if anything. */
-export function nodeEntitlementsProblem(xml: string, signed: boolean): string | undefined {
-  const allowed = signed ? SIGNED_NODE_ENTITLEMENTS : [];
-  const extra = [...xml.matchAll(/<key>([^<]+)<\/key>/g)]
-    .map((match) => match[1] ?? '')
-    .filter((key) => !allowed.includes(key));
-  return extra.length === 0
-    ? undefined
-    : `the bundled Node has entitlements it must not have: ${extra.join(', ')}`;
+/** The flags of a file's code signature, as `codesign -d` prints them: `0x10002(adhoc,runtime)`. */
+export function codeFlagsOf(file: string): string {
+  // codesign prints the details on stderr.
+  const { stderr } = spawnSync('codesign', ['-d', '--verbose=2', file], { encoding: 'utf8' });
+  return /\bflags=(\S+)/.exec(stderr)?.[1] ?? '';
+}
+
+/**
+ * What's wrong with the bundled Node's signature, if anything: it needs the hardened runtime,
+ * which keeps debuggers and injected libraries out, and exactly the entitlements it runs with.
+ */
+export function nodeSignatureProblem(
+  { entitlements, flags }: { entitlements: string; flags: string },
+  signed: boolean,
+): string | undefined {
+  const wanted = signed ? SIGNED_NODE_ENTITLEMENTS : AD_HOC_NODE_ENTITLEMENTS;
+  const keys = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1] ?? '');
+  const extra = keys.filter((key) => !wanted.includes(key));
+  const missing = wanted.filter((key) => !keys.includes(key));
+  const problems = [
+    ...(/\(.*\bruntime\b.*\)/.test(flags)
+      ? []
+      : [`no hardened runtime (flags ${flags || 'none'})`]),
+    ...(extra.length > 0 ? [`entitlements it must not have: ${extra.join(', ')}`] : []),
+    ...(missing.length > 0 ? [`not the entitlements it needs: ${missing.join(', ')}`] : []),
+  ];
+  return problems.length === 0 ? undefined : `the bundled Node has ${problems.join('; ')}`;
 }
 
 export function signWindowsCode(template: string, sidecarDir: string): number {
