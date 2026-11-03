@@ -1,13 +1,15 @@
 //! `PR_QUEST_SMOKE_TEST=1` checks a packaged build, prints one `[smoke]` line per check and exits
-//! with whether all passed; scripts/tauri-smoke.ts runs it. The shell checks the keychain and the
-//! window, then asks the sidecar for its checks: the server, both SDKs and their native parts.
+//! with whether all passed; scripts/desktop-smoke.ts runs it. The shell checks the keychain, the
+//! window and the updater, then asks the sidecar for its checks: the server, both SDKs and their
+//! native parts.
 
 use serde_json::Value;
 use tauri::Url;
 
-/// The window has no IPC (the page is remote), so its script reports by navigating here, which
-/// the shell's navigation handler catches and cancels.
-pub const REPORT_SCHEME: &str = "prquest-smoke";
+/// The window has no IPC (the page is remote), so its script reports by navigating to this path of
+/// the app, which the shell's navigation handler catches and cancels. Every webview reports a
+/// navigation to an http URL; not all of them report one to a scheme nobody handles.
+pub const REPORT_PATH: &str = "/__smoke-report";
 
 /// Runs in the window before the page's own scripts, so the page's CSP doesn't apply to it and it
 /// sees every violation.
@@ -49,7 +51,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       violations,
       userAgent: navigator.userAgent,
     };
-    location.href = `prquest-smoke://report?data=${encodeURIComponent(JSON.stringify(report))}`;
+    location.href = `/__smoke-report?data=${encodeURIComponent(JSON.stringify(report))}`;
   });
 })();
 "#;

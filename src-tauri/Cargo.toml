@@ -4,27 +4,43 @@ version = "0.0.0"
 description = "PR Quest's desktop shell: a Tauri window over the PR Quest server, which runs as a Node sidecar"
 edition = "2021"
 rust-version = "1.85"
+license = "MIT"
 publish = false
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }
 
 # Exact pins at least seven days old, like .yarnrc.yml's npmMinimalAgeGate; Cargo has no age gate,
-# so transitive crates in Cargo.lock aren't held back the same way.
+# so transitive crates in Cargo.lock aren't held back the same way. deny.toml audits them.
 [dependencies]
+# No `devtools` feature: release builds have no developer tools.
 tauri = { version = "=2.12.5", features = [] }
 tauri-plugin-opener = "=2.7.2"
 tauri-plugin-single-instance = "=2.5.4"
 tauri-plugin-updater = "=2.14.0"
+# The macOS Keychain, the Windows Credential Manager and the Linux Secret Service (encrypted
+# over D-Bus with crypto-rust). Linux's kernel keyring isn't persistent, so it's left out.
 keyring = { version = "=3.6.3", features = [
   "apple-native",
   "windows-native",
   "sync-secret-service",
+  "crypto-rust",
 ] }
+# Message dialogs, as tauri-plugin-dialog shows them (GTK on Linux, comctl 6 on Windows).
+rfd = { version = "=0.16.1", default-features = false, features = ["gtk3", "common-controls-v6"] }
 base64 = "0.22"
 getrandom = "0.3"
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [profile.release]
 codegen-units = 1

@@ -3,26 +3,35 @@
 //! link that sets the per-launch request secret's cookie, since Tauri can't set cookies itself.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod dialog;
 mod keychain;
 mod log;
+mod menu;
+mod policy;
+mod release;
+mod restarts;
 mod sidecar;
 mod smoke;
+mod updates;
 
 use std::error::Error;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::dialog::Level;
 use crate::log::Log;
-use crate::sidecar::{Event, Launch, Sidecar};
+use crate::restarts::Restarts;
+use crate::sidecar::{Event, Launch, Notice, Sidecar};
 use crate::smoke::Smoke;
 
 const WINDOW: &str = "main";
@@ -30,9 +39,33 @@ const BOOTSTRAP_PATH: &str = "/__bootstrap";
 /// Starting the server takes about a second; this much longer means it's stuck.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(100);
+/// A server that crashed is started again this often, then the app gives up.
+const MAX_RESTARTS: usize = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+/// What the app holds while it runs.
+#[derive(Default)]
 struct Shell {
-    sidecar: Arc<Sidecar>,
+    sidecar: Mutex<Option<Arc<Sidecar>>>,
+    /// The server's origin, the only one the window shows. A restarted server may get another
+    /// port.
+    origin: Arc<Mutex<Option<Url>>>,
+    quitting: AtomicBool,
+}
+
+impl Shell {
+    /// Stops the server, at the latest after its stop deadline, and keeps it from restarting.
+    fn quit(&self) {
+        self.quitting.store(true, Ordering::SeqCst);
+        let sidecar = self
+            .sidecar
+            .lock()
+            .ok()
+            .and_then(|mut sidecar| sidecar.take());
+        if let Some(sidecar) = sidecar {
+            sidecar.stop();
+        }
+    }
 }
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
@@ -63,7 +96,9 @@ fn main() {
     };
     if mode != Mode::App && std::env::var_os("PR_QUEST_STATE_DIR").is_none() {
         // Otherwise the checks would run against the player's real ~/.pr-quest.
-        eprintln!("[pr-quest] The smoke test needs PR_QUEST_STATE_DIR; see scripts/tauri-smoke.ts");
+        eprintln!(
+            "[pr-quest] The smoke test needs PR_QUEST_STATE_DIR; see scripts/desktop-smoke.ts"
+        );
         std::process::exit(2);
     }
     let mut builder = tauri::Builder::default();
@@ -76,6 +111,9 @@ fn main() {
     let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(Shell::default())
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(move |app| {
             start(app.handle(), mode)?;
             Ok(())
@@ -92,17 +130,31 @@ fn main() {
             let _ = (window, event);
         })
         .build(tauri::generate_context!())
-        .expect("PR Quest could not start");
+        .unwrap_or_else(|error| {
+            // Without an app there is no event loop to show a dialog on.
+            eprintln!("[pr-quest] PR Quest could not start: {error}");
+            std::process::exit(1);
+        });
     app.run(|app, event| match event {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => show_window(app),
         RunEvent::Exit => {
-            if let Some(shell) = app.try_state::<Shell>() {
-                shell.sidecar.stop();
+            app.state::<Shell>().quit();
+            if let Some(log) = app.try_state::<Log>() {
+                updates::install_pending(app, &log);
             }
         }
         _ => {}
     });
+}
+
+/// Where the sidecar comes from and what every start of it gets.
+struct Server {
+    node: PathBuf,
+    script: PathBuf,
+    request_secret: String,
+    data_key: Option<String>,
+    preferences_file: String,
 }
 
 fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
@@ -121,6 +173,7 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
         &log_dir.join("main.log"),
         cfg!(debug_assertions) || mode != Mode::App,
     );
+    app.manage(log.clone());
     let mut smoke = (mode == Mode::SmokeTest).then(Smoke::new);
     // A test run makes and deletes its own entry: reading the real one from a rebuilt, unsigned
     // app makes macOS ask for permission, and nobody answers in a test run.
@@ -136,14 +189,21 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
         keychain::delete(&account)
     };
     match smoke.as_mut() {
-        Some(smoke) => smoke.check(
-            "keychain",
-            match (&data_key, deleted) {
+        Some(smoke) => {
+            let keychain = match (&data_key, deleted) {
                 (Ok(_), Ok(())) => Ok("made, read back and deleted a data key".into()),
                 (Err(error), _) => Err(error.clone()),
                 (Ok(_), Err(error)) => Err(error),
-            },
-        ),
+            };
+            // CI runners without a keychain check everything else: the app then keeps keys in
+            // memory, as it does for a player without one.
+            match keychain {
+                Err(error) if std::env::var_os("PR_QUEST_SMOKE_NO_KEYCHAIN").is_some() => {
+                    smoke.info(&format!("keychain: {error}; skipped"));
+                }
+                keychain => smoke.check("keychain", keychain),
+            }
+        }
         None => {
             if let Err(error) = deleted {
                 log.warn(&error);
@@ -151,43 +211,20 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
         }
     }
     let data_key = data_key
-        .inspect_err(|error| log.warn(&format!("{error}; keys you save last until you quit")))
+        .inspect_err(|error| log.warn(&format!("no data key: {error}")))
         .ok();
-    start_sidecar(app, &data_dir, data_key, log, smoke)
-}
-
-fn start_sidecar(
-    app: &AppHandle,
-    data_dir: &Path,
-    data_key: Option<String>,
-    log: Log,
-    smoke: Option<Smoke>,
-) -> Result<(), Box<dyn Error>> {
-    let paths = app.path();
-    fs::create_dir_all(data_dir)?;
-    let node =
-        std::env::current_exe()?.with_file_name(if cfg!(windows) { "node.exe" } else { "node" });
-    let script = paths.resource_dir()?.join("sidecar").join("main.mjs");
-    let bootstrap_code = token();
-    let launch = Launch {
+    fs::create_dir_all(&data_dir)?;
+    let server = Server {
+        node: std::env::current_exe()?.with_file_name(if cfg!(windows) {
+            "node.exe"
+        } else {
+            "node"
+        }),
+        script: paths.resource_dir()?.join("sidecar").join("main.mjs"),
         request_secret: token(),
-        bootstrap_code: bootstrap_code.clone(),
         data_key,
         preferences_file: data_dir.join("desktop.json").to_string_lossy().into_owned(),
-        show_notices: false,
     };
-    let (events_tx, events_rx) = mpsc::channel();
-    let sidecar = Arc::new(Sidecar::spawn(
-        &node,
-        &script,
-        &launch,
-        &log,
-        events_tx.clone(),
-    )?);
-    drop(launch);
-    app.manage(Shell {
-        sidecar: Arc::clone(&sidecar),
-    });
     if smoke.is_some() {
         let app = app.clone();
         thread::spawn(move || {
@@ -200,131 +237,300 @@ fn start_sidecar(
         });
     }
     let app = app.clone();
-    thread::spawn(move || {
-        run(
-            &app,
-            &sidecar,
-            &log,
-            events_rx,
-            &events_tx,
-            &bootstrap_code,
-            smoke,
-        )
-    });
+    thread::spawn(move || supervise(&app, mode, &server, &log, smoke));
     Ok(())
 }
 
-/// Handles what the sidecar and the window report until the sidecar exits.
-fn run(
-    app: &AppHandle,
-    sidecar: &Sidecar,
-    log: &Log,
-    events: Receiver<Event>,
-    events_tx: &Sender<Event>,
-    bootstrap_code: &str,
-    mut smoke: Option<Smoke>,
-) {
-    let mut ready = false;
+/// Why a server session ended.
+enum Outcome {
+    /// The app is quitting, or the smoke test is done.
+    Stopped,
+    /// It stopped before it was ready.
+    Failed(String),
+    /// It stopped after it was ready.
+    Crashed(String),
+}
+
+/// Runs the server and starts it again, a bounded number of times, when it crashes. Each start
+/// gets a new bootstrap code, which the window then opens to get its cookie back.
+fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke: Option<Smoke>) {
+    let shell = app.state::<Shell>();
+    let mut restarts = Restarts::new(MAX_RESTARTS, RESTART_WINDOW);
+    let mut first = true;
     loop {
-        let event = if ready {
-            events.recv().map_err(|_| RecvTimeoutError::Disconnected)
-        } else {
-            events.recv_timeout(READY_TIMEOUT)
+        let bootstrap_code = token();
+        let launch = Launch {
+            request_secret: server.request_secret.clone(),
+            bootstrap_code: bootstrap_code.clone(),
+            data_key: server.data_key.clone(),
+            preferences_file: server.preferences_file.clone(),
+            // Once is enough: a restarted server finds the keys as they were.
+            show_notices: first && mode == Mode::App,
         };
-        match event {
-            Ok(Event::Ready(server)) => {
-                ready = true;
-                log.info(&format!(
-                    "the server listens on port {}; saved keys: {}",
-                    server.port, server.storage
-                ));
-                let origin = Url::parse(&format!("http://127.0.0.1:{}/", server.port))
-                    .expect("a loopback URL parses");
-                let mut url = origin.join(BOOTSTRAP_PATH).expect("a path joins");
-                url.query_pairs_mut().append_pair("code", bootstrap_code);
-                let reports = smoke.is_some().then(|| events_tx.clone());
-                let window_app = app.clone();
-                let window_log = log.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Err(error) = open_window(&window_app, url, &origin, reports) {
-                        window_log.warn(&format!("couldn't open the window: {error}"));
-                        window_app.exit(1);
-                    }
-                });
+        let (events_tx, events_rx) = mpsc::channel();
+        let spawned = Sidecar::spawn(
+            &server.node,
+            &server.script,
+            &launch,
+            log,
+            events_tx.clone(),
+        );
+        drop(launch);
+        let sidecar = match spawned {
+            Ok(sidecar) => Arc::new(sidecar),
+            Err(error) => {
+                return fail(
+                    app,
+                    mode,
+                    log,
+                    "PR Quest could not start",
+                    &format!("Its server didn't start: {error}."),
+                )
             }
-            Ok(Event::WindowReport(report)) => {
-                if let Some(smoke) = smoke.as_mut() {
-                    smoke.window(&report);
-                    if let Err(error) = sidecar.send(r#"{"command":"smoke"}"#) {
-                        smoke.check("sidecar", Err(error.to_string()));
-                        app.exit(smoke.finish(false));
-                    }
-                }
-            }
-            Ok(Event::SmokeLine(line)) => {
-                if let Some(smoke) = smoke.as_mut() {
-                    smoke.sidecar_line(&line);
-                }
-            }
-            Ok(Event::SmokeDone(ok)) => {
-                if let Some(smoke) = smoke.as_ref() {
-                    app.exit(smoke.finish(ok));
-                }
-            }
-            Ok(Event::Exited(code)) => {
-                if !sidecar.is_stopping() {
-                    log.warn(&format!(
-                        "the server stopped unexpectedly (exit code {code:?})"
-                    ));
-                    app.exit(1);
-                }
-                return;
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                log.warn(&format!(
-                    "the server didn't start in {} s",
-                    READY_TIMEOUT.as_secs()
-                ));
-                app.exit(1);
-                return;
-            }
-            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        if let Ok(mut current) = shell.sidecar.lock() {
+            *current = Some(Arc::clone(&sidecar));
         }
+        // Quitting may have started before the server was there to stop.
+        if shell.quitting.load(Ordering::SeqCst) {
+            return sidecar.stop();
+        }
+        let session = Session {
+            app,
+            mode,
+            sidecar: &sidecar,
+            log,
+            events_tx: &events_tx,
+            bootstrap_code: &bootstrap_code,
+        };
+        let reason = match session.run(&events_rx, &mut smoke) {
+            Outcome::Stopped => return,
+            Outcome::Failed(reason) if first => {
+                return fail(app, mode, log, "PR Quest could not start", &reason)
+            }
+            Outcome::Failed(reason) | Outcome::Crashed(reason) => reason,
+        };
+        if mode == Mode::SmokeTest || !restarts.allow(Instant::now()) {
+            return fail(app, mode, log, "PR Quest's server keeps stopping", &reason);
+        }
+        log.warn(&format!("{reason} Starting it again."));
+        first = false;
     }
 }
 
+struct Session<'a> {
+    app: &'a AppHandle,
+    mode: Mode,
+    sidecar: &'a Sidecar,
+    log: &'a Log,
+    events_tx: &'a Sender<Event>,
+    bootstrap_code: &'a str,
+}
+
+impl Session<'_> {
+    /// Handles what the sidecar and the window report until the sidecar exits.
+    fn run(&self, events: &Receiver<Event>, smoke: &mut Option<Smoke>) -> Outcome {
+        let mut ready = false;
+        let mut fatal = None;
+        loop {
+            let event = if ready {
+                events.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            } else {
+                events.recv_timeout(READY_TIMEOUT)
+            };
+            match event {
+                Ok(Event::Ready(server)) => {
+                    ready = true;
+                    self.log.info(&format!(
+                        "the server listens on port {}; saved keys: {}",
+                        server.port, server.storage
+                    ));
+                    self.show(server.port);
+                }
+                Ok(Event::Notice(notice)) => {
+                    let action = answer(self.app, &notice);
+                    let command = serde_json::json!({ "command": "notice", "action": action });
+                    if let Err(error) = self.sidecar.send(&command.to_string()) {
+                        self.log
+                            .warn(&format!("couldn't answer the server's notice: {error}"));
+                    }
+                }
+                Ok(Event::Fatal(message)) => fatal = Some(message),
+                Ok(Event::WindowReport(report)) => {
+                    if let Some(smoke) = smoke.as_mut() {
+                        smoke.window(&report);
+                        smoke.check("updater", updates::smoke_check(self.app));
+                        if let Err(error) = self.sidecar.send(r#"{"command":"smoke"}"#) {
+                            smoke.check("sidecar", Err(error.to_string()));
+                            self.app.exit(smoke.finish(false));
+                            return Outcome::Stopped;
+                        }
+                    }
+                }
+                Ok(Event::SmokeLine(line)) => {
+                    if let Some(smoke) = smoke.as_mut() {
+                        smoke.sidecar_line(&line);
+                    }
+                }
+                Ok(Event::SmokeDone(ok)) => {
+                    if let Some(smoke) = smoke.as_ref() {
+                        self.app.exit(smoke.finish(ok));
+                        return Outcome::Stopped;
+                    }
+                }
+                Ok(Event::Exited(code)) => {
+                    if self.sidecar.is_stopping() {
+                        return Outcome::Stopped;
+                    }
+                    let reason = fatal.take().map_or_else(
+                        || format!("Its server stopped unexpectedly (exit code {code:?})."),
+                        |message| format!("{message}."),
+                    );
+                    return if ready {
+                        Outcome::Crashed(reason)
+                    } else {
+                        Outcome::Failed(reason)
+                    };
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.sidecar.stop();
+                    return Outcome::Failed(format!(
+                        "Its server didn't start in {} seconds.",
+                        READY_TIMEOUT.as_secs()
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => return Outcome::Stopped,
+            }
+        }
+    }
+
+    /// Opens the window on the server, or points the open one at a restarted server, which also
+    /// reloads the page.
+    fn show(&self, port: u16) {
+        let origin =
+            Url::parse(&format!("http://127.0.0.1:{port}/")).expect("a loopback URL parses");
+        let mut url = origin.join(BOOTSTRAP_PATH).expect("a path joins");
+        url.query_pairs_mut()
+            .append_pair("code", self.bootstrap_code);
+        if let Ok(mut current) = self.app.state::<Shell>().origin.lock() {
+            *current = Some(origin);
+        }
+        let app = self.app.clone();
+        let log = self.log.clone();
+        let mode = self.mode;
+        let reports = (mode == Mode::SmokeTest).then(|| self.events_tx.clone());
+        let _ = self.app.run_on_main_thread(move || {
+            let shown = match app.get_webview_window(WINDOW) {
+                Some(window) => window.navigate(url),
+                None => open_window(&app, url, &log, reports).inspect(|()| {
+                    if mode == Mode::App {
+                        updates::schedule(app.clone(), log.clone());
+                    }
+                }),
+            };
+            if let Err(error) = shown {
+                let detail = format!("Its window didn't open: {error}.");
+                thread::spawn(move || fail(&app, mode, &log, "PR Quest could not start", &detail));
+            }
+        });
+    }
+}
+
+/// Shows a secrets notice and returns the action of the button the player chose. Closing it
+/// chooses the last button, which never loses keys.
+fn answer(app: &AppHandle, notice: &Notice) -> String {
+    let labels: Vec<&str> = notice.buttons.iter().map(|b| b.label.as_str()).collect();
+    let chosen = dialog::ask(
+        app,
+        Level::Warning,
+        &notice.message,
+        &notice.detail,
+        &labels,
+    );
+    let action = notice
+        .buttons
+        .get(chosen)
+        .map_or("continue", |button| button.action.as_str());
+    if action == "savePlaintext" && !confirm_plaintext(app) {
+        return "keepInMemory".into();
+    }
+    action.into()
+}
+
+/// Closing this dialog keeps the keys in memory, so they're never saved unencrypted by accident.
+fn confirm_plaintext(app: &AppHandle) -> bool {
+    dialog::ask(
+        app,
+        Level::Warning,
+        "Save your keys unencrypted?",
+        "They go in secrets.json in PR Quest's state folder, where any program running as you can \
+         read them. You can remove them in Settings at any time.",
+        &["Save Unencrypted", "Keep Them Until I Quit"],
+    ) == 0
+}
+
+/// Tells the player why the app has to stop, then quits. Blocks on the dialog, so it never runs
+/// on the main thread. A test run prints a failed check instead.
+fn fail(app: &AppHandle, mode: Mode, log: &Log, message: &str, detail: &str) {
+    log.warn(&format!("{message}: {detail}"));
+    if mode == Mode::App {
+        let detail = format!("{detail}\n\nThe log is in {}.", log.path().display());
+        dialog::error(app, message, &detail);
+    } else {
+        println!("[smoke] FAIL {message}: {detail}");
+    }
+    app.exit(1);
+}
+
 /// The window shows only the app. Links anywhere else, such as a PR on GitHub, open in the system
-/// browser, and the page can't open windows of its own.
+/// browser; the page can't open windows of its own and gets no permissions but notifications.
 fn open_window(
     app: &AppHandle,
     url: Url,
-    origin: &Url,
+    log: &Log,
     smoke_reports: Option<Sender<Event>>,
 ) -> tauri::Result<()> {
-    let app_origin = origin.origin();
+    let origin = Arc::clone(&app.state::<Shell>().origin);
+    let permission_origin = Arc::clone(&origin);
     let navigation_app = app.clone();
+    let navigation_log = log.clone();
     let new_window_app = app.clone();
+    let new_window_log = log.clone();
     let smoke_test = smoke_reports.is_some();
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::External(url))
         .title("PR Quest")
         .inner_size(1280.0, 860.0)
         .min_inner_size(640.0, 480.0)
         .on_navigation(move |target| {
-            if target.origin() == app_origin {
-                return true;
+            let Some(app_origin) = origin.lock().ok().and_then(|origin| origin.clone()) else {
+                return false;
+            };
+            if !policy::is_app_url(target, &app_origin) {
+                open_externally(&navigation_app, &navigation_log, target);
+                return false;
             }
             if let Some(reports) = &smoke_reports {
-                if target.scheme() == smoke::REPORT_SCHEME {
+                if target.path() == smoke::REPORT_PATH {
                     let _ = reports.send(Event::WindowReport(smoke::report_of(target)));
                     return false;
                 }
             }
-            open_externally(&navigation_app, target);
-            false
+            true
         })
         .on_new_window(move |target, _features| {
-            open_externally(&new_window_app, &target);
+            open_externally(&new_window_app, &new_window_log, &target);
             NewWindowResponse::Deny
+        })
+        .on_permission_request(move |webview, kind| {
+            let page = webview.url().ok();
+            match permission_origin
+                .lock()
+                .ok()
+                .and_then(|origin| origin.clone())
+            {
+                Some(app_origin) => policy::permission(kind, page.as_ref(), &app_origin),
+                None => tauri::webview::PermissionResponse::Deny,
+            }
         });
     if smoke_test {
         builder = builder.initialization_script(smoke::WINDOW_SCRIPT);
@@ -333,9 +539,14 @@ fn open_window(
     Ok(())
 }
 
-fn open_externally(app: &AppHandle, target: &Url) {
-    if matches!(target.scheme(), "http" | "https") {
-        let _ = app.opener().open_url(target.as_str(), None::<&str>);
+fn open_externally(app: &AppHandle, log: &Log, target: &Url) {
+    match policy::external_url(target) {
+        Some(url) => {
+            if let Err(error) = app.opener().open_url(url.as_str(), None::<&str>) {
+                log.warn(&format!("couldn't open a link: {error}"));
+            }
+        }
+        None => log.warn(&format!("didn't open a {} link", target.scheme())),
     }
 }
 
