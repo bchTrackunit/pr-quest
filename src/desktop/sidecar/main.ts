@@ -30,16 +30,16 @@ import {
   bootstrapLine,
   exitAfterPrinting,
   fatalLine,
-  keepStdoutForProtocol,
   type Launch,
   noticeLine,
   parseCommand,
   parseLaunch,
   readyLine,
   SMOKE_DONE_PREFIX,
+  takeStdoutForProtocol,
 } from './protocol.ts';
 
-keepStdoutForProtocol();
+const protocol = takeStdoutForProtocol();
 const group = ownProcessGroup();
 /** Ends the stdin loop, which stops the server as closing stdin does. */
 let stopReading = (): void => undefined;
@@ -64,7 +64,7 @@ const warn = (message: string): void => {
   process.stderr.write(`[pr-quest] warning: ${message}\n`);
 };
 const print = (line: string): void => {
-  process.stdout.write(`${line}\n`);
+  protocol.write(`${line}\n`);
 };
 
 interface Started {
@@ -240,6 +240,6 @@ main().then(
     // Only the message: nothing here may print the launch message, which holds the secrets.
     const message = error instanceof Error ? error.message : String(error);
     warn(`stopped: ${message}`);
-    exitAfterPrinting(fatalLine(message), 1);
+    exitAfterPrinting(fatalLine(message), 1, protocol);
   },
 );

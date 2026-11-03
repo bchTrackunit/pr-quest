@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 
 import {
@@ -7,13 +9,13 @@ import {
   FATAL_PREFIX,
   exitAfterPrinting,
   fatalLine,
-  keepStdoutForProtocol,
   NOTICE_PREFIX,
   noticeLine,
   parseCommand,
   parseLaunch,
   READY_PREFIX,
   readyLine,
+  takeStdoutForProtocol,
 } from './protocol.ts';
 
 const launch = {
@@ -102,16 +104,49 @@ test('exitAfterPrinting exits only once the line is written, so the shell reads 
   expect(exit).toHaveBeenCalledWith(1);
 });
 
-test("keepStdoutForProtocol sends console.log, info and debug to stderr, which isn't the protocol", () => {
-  const stderr = { write: vi.fn(() => true) };
-  const target = { log: vi.fn(), info: vi.fn(), debug: vi.fn() };
+test('takeStdoutForProtocol leaves stdout to protocol lines and sends other writes to stderr', () => {
+  const write = vi.fn((_text: string, ..._rest: Array<unknown>) => true);
+  const stdout = { write };
+  const stderr = { write: vi.fn((_text: string, ..._rest: Array<unknown>) => true) };
+  const done = (): void => undefined;
 
-  keepStdoutForProtocol(target, stderr);
-  target.log('a', 1);
-  target.info('b');
-  target.debug({ c: true });
+  const protocol = takeStdoutForProtocol(stdout, stderr);
+  stdout.write('a dependency\n');
+  protocol.write('PRQUEST_READY {}\n', done);
 
-  expect(stderr.write.mock.calls).toEqual([['a 1\n'], ['b\n'], ['{ c: true }\n']]);
+  expect(stderr.write.mock.calls.map(([text]) => text)).toEqual(['a dependency\n']);
+  expect(write.mock.calls).toEqual([['PRQUEST_READY {}\n', done]]);
+});
+
+test("takeStdoutForProtocol keeps all of console's output off a real stdout", () => {
+  const script = `
+    import { takeStdoutForProtocol } from ${JSON.stringify(join(import.meta.dirname, 'protocol.ts'))};
+    const protocol = takeStdoutForProtocol();
+    console.log('log'); console.info('info'); console.debug('debug'); console.dir({ dir: 1 });
+    console.table([{ table: 1 }]); console.count(); console.group('group'); console.groupEnd();
+    console.time('time'); console.timeLog('time'); console.timeEnd('time');
+    process.stdout.write('direct\\n');
+    protocol.write('PROTOCOL\\n');
+  `;
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+  });
+
+  expect(run.status).toBe(0);
+  expect(run.stdout).toBe('PROTOCOL\n');
+  for (const shown of [
+    'log',
+    'info',
+    'debug',
+    'dir: 1',
+    'table',
+    'default: 1',
+    'group',
+    'time',
+    'direct',
+  ]) {
+    expect(run.stderr).toContain(shown);
+  }
 });
 
 test('readyLine is one prefixed JSON line', () => {
