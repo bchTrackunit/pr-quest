@@ -2,7 +2,7 @@
  * The PR Quest server as a sidecar of the Tauri shell in src-tauri/, which has no Node of its own.
  * The shell starts it with the Node binary it bundles; protocol.ts says how the two talk.
  */
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -167,10 +167,22 @@ function sidecarChecks({ config, server, secrets }: Started, launch: Launch): Ar
     {
       name: 'secrets-data-key',
       run: async () => {
+        const value = 'pr-quest-smoke-test-saved-key';
+        // A runner without a keychain (desktop-smoke --no-keychain) still keeps keys off disk.
+        if (process.env.PR_QUEST_SMOKE_NO_KEYCHAIN && secrets.storage === 'memory') {
+          await secrets.store.set('linear', value);
+          const written = (await readdir(config.stateDir)).filter((name) =>
+            name.startsWith('secrets.'),
+          );
+          await secrets.store.delete('linear');
+          if (written.length > 0) {
+            throw new Error(`a key saved without a keychain reached ${written.join(', ')}`);
+          }
+          return 'no keychain: a saved key stays in memory and nothing reaches the state folder';
+        }
         if (secrets.storage !== 'keychain') {
           throw new Error(`saved keys go to ${secrets.storage}, not the keychain's data key`);
         }
-        const value = 'pr-quest-smoke-test-saved-key';
         await secrets.store.set('linear', value);
         const file = await readFile(join(config.stateDir, ENCRYPTED_SECRETS_FILE), 'utf8');
         const reopened = await openDesktopSecrets(config.stateDir, {

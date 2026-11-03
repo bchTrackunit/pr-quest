@@ -8,8 +8,8 @@
  * default the app, AppImage or installer scripts/desktop-package.ts made for the target. A dmg is
  * mounted, a deb unpacked and an installer installed into a temporary folder, then removed.
  *
- * --headless (Linux) runs it under xvfb-run in its own D-Bus session, with an unlocked
- * gnome-keyring when one is installed. --no-keychain passes the keychain check when the machine
+ * --headless (Linux) runs it under xvfb-run in its own D-Bus session, with a throwaway unlocked
+ * gnome-keyring when one is installed; its keyrings and WebKit's data go in the state directory. --no-keychain passes the keychain check when the machine
  * has none, as the app then keeps keys in memory.
  */
 import { execFileSync, spawn } from 'node:child_process';
@@ -22,9 +22,10 @@ import { artifactKind, defaultArtifact } from './desktop/artifacts.ts';
 import { hostTriple, targetFor } from './desktop/targets.ts';
 
 const TIMEOUT_MS = 120_000;
+/** An empty password would make gnome-keyring ask for one, which nobody can answer headless. */
 const UNLOCK_KEYRING =
   'if command -v gnome-keyring-daemon >/dev/null; then ' +
-  'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null; fi; exec "$@"';
+  'printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null; fi; exec "$@"';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -159,6 +160,7 @@ async function smoke(executable: string): Promise<number> {
       PR_QUEST_SMOKE_TEST: '1',
       PR_QUEST_STATE_DIR: stateDir,
       PR_QUEST_DISABLE_UPDATES: '1',
+      ...(headless ? { XDG_DATA_HOME: join(stateDir, 'xdg-data') } : {}),
       // No FUSE in containers; the runtime then unpacks the AppImage instead of mounting it.
       APPIMAGE_EXTRACT_AND_RUN: '1',
       ...(values['no-keychain'] ? { PR_QUEST_SMOKE_NO_KEYCHAIN: '1' } : {}),
