@@ -74,7 +74,7 @@ const ViewSchema = z.object({
     .catch({ ...DEFAULT_FILTERS }),
   sort: z
     .object({
-      mode: z.enum(['smart', 'size']).catch(DEFAULT_SORT.mode),
+      mode: z.enum(['smart', 'size', 'created']).catch(DEFAULT_SORT.mode),
       direction: z.enum(['asc', 'desc']).catch(DEFAULT_SORT.direction),
     })
     .catch({ ...DEFAULT_SORT }),

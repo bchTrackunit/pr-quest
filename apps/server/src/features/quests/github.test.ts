@@ -7,7 +7,9 @@ import {
   IncompleteQuestListError,
   parsePullRequestBatch,
   parseSearchResults,
+  ReviewNotPostedError,
   toQuest,
+  UnanchoredFindingsError,
 } from './github.ts';
 import { GitHubApi, GitHubApiError, type FetchLike } from '../../platform/githubApi.ts';
 import type { ReviewDraft } from './reviewPayload.ts';
@@ -549,6 +551,143 @@ describe('GitHubClient.fetchHeadSha', () => {
   });
 });
 
+describe('GitHubClient.fetchDiscussion', () => {
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const member = (body: string) => ({
+    body,
+    authorAssociation: 'MEMBER',
+    author: { __typename: 'User', login: 'ada' },
+  });
+  const submitted = (body: string) => ({ ...member(body), state: 'SUBMITTED' });
+  const pullRequest = {
+    reviews: { nodes: [member('Needs expiry.'), member('  '), null] },
+    reviewThreads: {
+      nodes: [
+        {
+          path: 'src/cache.ts',
+          line: 12,
+          isResolved: false,
+          isOutdated: false,
+          comments: {
+            nodes: [
+              {
+                body: 'Race in `get`.',
+                state: 'SUBMITTED',
+                authorAssociation: 'NONE',
+                author: { __typename: 'Bot', login: 'cursor' },
+              },
+              submitted('Will fix.'),
+              { ...member('My draft reply'), state: 'PENDING' },
+            ],
+          },
+        },
+        {
+          path: 'src/old.ts',
+          line: null,
+          isResolved: true,
+          isOutdated: true,
+          comments: {
+            nodes: [{ body: 'Gone.', state: 'SUBMITTED', authorAssociation: 'NONE', author: null }],
+          },
+        },
+        {
+          path: 'src/draft.ts',
+          line: 4,
+          isResolved: false,
+          isOutdated: false,
+          comments: { nodes: [{ ...member('Only a draft'), state: 'PENDING' }] },
+        },
+        {
+          path: 'src/empty.ts',
+          line: 1,
+          isResolved: false,
+          isOutdated: false,
+          comments: { nodes: [] },
+        },
+      ],
+    },
+    comments: { nodes: [member('Ship it after expiry.')] },
+  };
+
+  test('reads reviews, inline threads and conversation comments in one query', async () => {
+    const github = fakeGitHub(() => json({ data: { repository: { pullRequest } } }));
+
+    const discussion = await github.client().fetchDiscussion(ref);
+
+    expect(github.calls).toHaveLength(1);
+    expect(github.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/graphql',
+      body: {
+        query: expect.stringContaining(
+          'states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]',
+        ),
+        variables: { owner: 'o', name: 'r', number: 5 },
+      },
+    });
+    const ada = { author: 'ada', authorAssociation: 'MEMBER', isBot: false };
+    expect(discussion).toEqual({
+      reviews: [{ ...ada, body: 'Needs expiry.' }],
+      threads: [
+        {
+          file: 'src/cache.ts',
+          line: 12,
+          resolved: false,
+          outdated: false,
+          comments: [
+            { author: 'cursor', authorAssociation: 'NONE', isBot: true, body: 'Race in `get`.' },
+            { ...ada, body: 'Will fix.' },
+          ],
+        },
+        {
+          file: 'src/old.ts',
+          resolved: true,
+          outdated: true,
+          comments: [{ author: 'ghost', authorAssociation: 'NONE', isBot: false, body: 'Gone.' }],
+        },
+      ],
+      conversation: [{ ...ada, body: 'Ship it after expiry.' }],
+    });
+  });
+
+  test('rejects when GitHub returns no pull request', async () => {
+    const github = fakeGitHub(() =>
+      json({ data: { repository: null }, errors: [{ message: 'Could not resolve' }] }),
+    );
+
+    await expect(github.client().fetchDiscussion(ref)).rejects.toThrow(/Could not resolve/);
+  });
+});
+
+describe('GitHubClient.pushersAmong', () => {
+  const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
+  const PERMISSIONS: Record<string, Reply> = {
+    Admin: json({ permission: 'admin' }),
+    writer: json({ permission: 'write' }),
+    reader: json({ permission: 'read' }),
+    stranger: json({ message: 'Not Found' }, 404),
+    odd: json({ role_name: 'write' }),
+  };
+
+  test('keeps the logins GitHub says can push, lower-cased, and refuses the rest', async () => {
+    const github = fakeGitHub((call) => {
+      const login = /\/collaborators\/([^/]+)\/permission$/.exec(call.path)?.[1];
+      return login ? PERMISSIONS[decodeURIComponent(login)] : undefined;
+    });
+    const warnings: Array<string> = [];
+
+    const pushers = await github
+      .client((message) => warnings.push(message))
+      .pushersAmong(ref, Object.keys(PERMISSIONS));
+
+    expect(pushers).toEqual(new Set(['admin', 'writer']));
+    expect(github.calls.map((call) => call.path)).toContain(
+      '/repos/o/r/collaborators/reader/permission',
+    );
+    expect(warnings).toEqual([expect.stringContaining('stranger'), expect.stringContaining('odd')]);
+  });
+});
+
 describe('GitHubClient.fetchDiff', () => {
   const ref = { repo: { owner: 'o', name: 'r' }, number: 5 };
   const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';
@@ -667,17 +806,35 @@ describe('GitHubClient.submitReview', () => {
     ],
   };
 
-  test('posts one review with inline comments and returns its URL', async () => {
-    const github = fakeGitHub(() =>
-      json({ html_url: 'https://github.com/o/r/pull/5#pullrequestreview-1' }),
+  const lined: ReviewDraft = { ...draft, findings: draft.findings.slice(0, 1) };
+  const reviewUrl = 'https://github.com/o/r/pull/5#pullrequestreview-7';
+  const pending = json({ id: 7, node_id: 'PRR_7', html_url: reviewUrl });
+  const threadAdded = json({ data: { addPullRequestReviewThread: { thread: { id: 'T_1' } } } });
+  const threadRefused = json({
+    data: { addPullRequestReviewThread: null },
+    errors: [{ message: 'Line could not be resolved' }],
+  });
+  const threads = (calls: Array<Call>) =>
+    calls
+      .filter((call) => call.path === '/graphql')
+      .map(
+        (call) => (call.body as { variables: { input: Record<string, unknown> } }).variables.input,
+      );
+
+  /** Answers review calls in order and thread mutations from `threadReplies`. */
+  function reviewGitHub(reviewReplies: Array<Reply>, threadReplies: Array<Reply> = []) {
+    return fakeGitHub((call) =>
+      call.path === '/graphql' ? threadReplies.shift() : reviewReplies.shift(),
     );
+  }
 
-    const result = await github.client().submitReview(ref, draft);
+  test('posts findings that all have a line as one review with inline comments', async () => {
+    const github = reviewGitHub([json({ html_url: reviewUrl })]);
 
-    expect(result).toEqual({
-      url: 'https://github.com/o/r/pull/5#pullrequestreview-1',
-      inlineCommentsDropped: false,
-    });
+    const result = await github.client().submitReview(ref, lined);
+
+    expect(result).toEqual({ url: reviewUrl });
+    expect(github.calls).toHaveLength(1);
     expect(github.calls[0]).toMatchObject({
       method: 'POST',
       path: '/repos/o/r/pulls/5/reviews',
@@ -687,26 +844,205 @@ describe('GitHubClient.submitReview', () => {
         comments: [{ path: 'src/a.ts', line: 3, side: 'RIGHT' }],
       },
     });
+    expect(github.calls[0]?.body).toMatchObject({
+      body: expect.not.stringContaining('Null check'),
+    });
   });
 
-  test('retries with every finding in the body when GitHub rejects the lines', async () => {
-    const replies = [
-      json({ message: 'Validation Failed' }, 422),
-      json({ html_url: 'https://github.com/o/r/pull/5#pullrequestreview-2' }),
-    ];
-    const github = fakeGitHub(() => replies.shift());
+  test('adds findings without a line as file comments on a pending review, then submits it', async () => {
+    const github = reviewGitHub([pending, json({ html_url: reviewUrl })], [threadAdded]);
 
     const result = await github.client().submitReview(ref, draft);
 
-    expect(result.inlineCommentsDropped).toBe(true);
-    const retry = github.calls[1]?.body as {
-      comments: Array<unknown>;
-      body: string;
-      commit_id?: string;
+    expect(result).toEqual({ url: reviewUrl });
+    const [create, , submit] = github.calls;
+    expect(create?.body).toEqual({
+      commit_id: 'abc123',
+      comments: [expect.objectContaining({ path: 'src/a.ts', line: 3 })],
+    });
+    expect(threads(github.calls)).toEqual([
+      {
+        pullRequestReviewId: 'PRR_7',
+        path: 'src/b.ts',
+        body: '**[Nit]** Rename this file.',
+        subjectType: 'FILE',
+      },
+    ]);
+    expect(submit).toMatchObject({
+      method: 'POST',
+      path: '/repos/o/r/pulls/5/reviews/7/events',
+      body: { event: 'COMMENT', body: expect.not.stringContaining('Rename this file.') },
+    });
+  });
+
+  test('after a refused line, adds each finding on its own and moves only the refused one to its file', async () => {
+    const twoLined: ReviewDraft = {
+      ...draft,
+      findings: [
+        { file: 'src/a.ts', line: 3, severity: 'major', body: 'Null check missing.' },
+        { file: 'src/c.ts', line: 900, severity: 'minor', body: 'Off by one.' },
+      ],
     };
-    expect(retry.comments).toEqual([]);
-    expect(retry.commit_id).toBeUndefined();
-    expect(retry.body).toContain('`src/a.ts:3`');
+    const github = reviewGitHub(
+      [json({ message: 'Validation Failed' }, 422), pending, json({ html_url: reviewUrl })],
+      [threadAdded, threadRefused, threadAdded],
+    );
+
+    const result = await github.client().submitReview(ref, twoLined);
+
+    expect(result).toEqual({ url: reviewUrl });
+    expect(github.calls[1]?.body).toEqual({ commit_id: 'abc123', comments: [] });
+    expect(threads(github.calls)).toEqual([
+      expect.objectContaining({ path: 'src/a.ts', line: 3, side: 'RIGHT' }),
+      expect.objectContaining({ path: 'src/c.ts', line: 900 }),
+      {
+        pullRequestReviewId: 'PRR_7',
+        path: 'src/c.ts',
+        body: '**[Minor]** On line 900: Off by one.',
+        subjectType: 'FILE',
+      },
+    ]);
+  });
+
+  test('sends a multi-line suggestion with its start line', async () => {
+    const github = reviewGitHub([pending, json({ html_url: reviewUrl })], [threadAdded]);
+    const ranged: ReviewDraft = {
+      ...draft,
+      findings: [
+        { file: 'src/a.ts', line: 5, startLine: 3, severity: 'major', body: 'b', suggestion: 'x' },
+        { file: 'src/b.ts', severity: 'nit', body: 'Rename this file.' },
+      ],
+    };
+
+    await github.client().submitReview(ref, ranged);
+
+    expect(github.calls[0]?.body).toMatchObject({
+      comments: [{ path: 'src/a.ts', line: 5, start_line: 3, start_side: 'RIGHT' }],
+    });
+  });
+
+  test('deletes the pending review and posts nothing when a finding fits neither its line nor its file', async () => {
+    const github = reviewGitHub(
+      [pending, json({}, 200)],
+      [
+        json({
+          data: { addPullRequestReviewThread: null },
+          errors: [{ message: 'Path could not be resolved' }],
+        }),
+      ],
+    );
+
+    const error = await github
+      .client()
+      .submitReview(ref, draft)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(UnanchoredFindingsError);
+    expect((error as Error).message).toContain('src/b.ts');
+    expect((error as Error).message).toContain('Path could not be resolved');
+    expect(github.calls.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/repos/o/r/pulls/5/reviews/7',
+    });
+    expect(github.calls.some((call) => call.path.endsWith('/events'))).toBe(false);
+  });
+
+  test('adds a refused range on its own with its start line', async () => {
+    const ranged: ReviewDraft = {
+      ...draft,
+      findings: [{ file: 'src/a.ts', line: 5, startLine: 3, severity: 'major', body: 'b' }],
+    };
+    const github = reviewGitHub(
+      [json({ message: 'Validation Failed' }, 422), pending, json({ html_url: reviewUrl })],
+      [threadAdded],
+    );
+
+    await github.client().submitReview(ref, ranged);
+
+    expect(threads(github.calls)).toEqual([
+      expect.objectContaining({ line: 5, side: 'RIGHT', startLine: 3, startSide: 'RIGHT' }),
+    ]);
+  });
+
+  test('stops without trying the file when GitHub forbids the comment', async () => {
+    const github = reviewGitHub(
+      [pending, json({}, 200)],
+      [json({ data: null, errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible' }] })],
+    );
+
+    const error = await github
+      .client()
+      .submitReview(ref, draft)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(GitHubApiError);
+    expect(error).not.toBeInstanceOf(UnanchoredFindingsError);
+    expect(threads(github.calls)).toHaveLength(1);
+    expect(github.calls.at(-1)).toMatchObject({ method: 'DELETE' });
+  });
+
+  test('explains a pending review the player already has, without the fallback', async () => {
+    const github = reviewGitHub([
+      json(
+        {
+          message: 'Unprocessable Entity',
+          errors: ['User can only have one pending review per pull request'],
+        },
+        422,
+      ),
+    ]);
+
+    const error = await github
+      .client()
+      .submitReview(ref, lined)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ReviewNotPostedError);
+    expect((error as Error).message).toContain("isn't submitted yet");
+    expect(github.calls).toHaveLength(1);
+  });
+
+  test('keeps the original error when deleting the pending review fails', async () => {
+    const warnings: Array<string> = [];
+    const github = reviewGitHub(
+      [pending, json({ message: 'Server Error' }, 500)],
+      [threadRefused, threadRefused],
+    );
+
+    const error = await github
+      .client((message) => warnings.push(message))
+      .submitReview(ref, draft)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(UnanchoredFindingsError);
+    expect(warnings.at(-1)).toContain('Could not delete the pending review on o/r#5');
+  });
+
+  test('leaves the review alone when the submission got no answer, since it may have gone out', async () => {
+    let reviewCalls = 0;
+    const github = fakeGitHub((call) => {
+      if (call.path === '/graphql') {
+        return threadAdded;
+      }
+      reviewCalls += 1;
+      if (reviewCalls === 2) {
+        throw new Error('socket hang up');
+      }
+      return reviewCalls === 1 ? pending : json({}, 200);
+    });
+
+    await expect(github.client().submitReview(ref, draft)).rejects.toThrow('socket hang up');
+    expect(github.calls.some((call) => call.method === 'DELETE')).toBe(false);
+  });
+
+  test('deletes the pending review when submitting it fails', async () => {
+    const github = reviewGitHub(
+      [pending, json({ message: 'Server Error' }, 500), json({}, 200)],
+      [threadAdded],
+    );
+
+    await expect(github.client().submitReview(ref, draft)).rejects.toThrow('HTTP 500');
+    expect(github.calls.at(-1)).toMatchObject({ method: 'DELETE' });
   });
 
   test('does not retry other failures', async () => {

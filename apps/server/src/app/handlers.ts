@@ -11,12 +11,13 @@ import {
   parseQuestId,
   type QuestRef,
   type ReviewDraft,
+  ReviewNotPostedError,
 } from '../features/quests/index.ts';
 import { GitHubApiError, NotSignedInError } from '../platform/githubApi.ts';
 import type { ReviewRunService } from '../features/reviews/index.ts';
 import { ApiError, type RouteHandlers } from '../platform/router.ts';
 import { ModelIdSchema, parseBody } from '../platform/validation.ts';
-import { acceptedFindingIndexes } from '@pr-quest/contract/findingDecisions';
+import { selectedFindingIndexes } from '@pr-quest/contract/findingSelection';
 
 const MAX_COMMENT_LENGTH = 65_536;
 
@@ -45,14 +46,14 @@ const PostReviewSchema = z.object({
   event: z.enum(['comment', 'requestChanges']).optional(),
   findingIndexes: z
     .array(FindingIndexSchema, {
-      error: 'Send the accepted findings to post; an empty list posts only the summary',
+      error: 'Send the selected findings to post; an empty list posts only the summary',
     })
     .max(1000),
 });
 
-const DecideFindingsSchema = z.object({
+const SelectFindingsSchema = z.object({
   findingIndexes: z.array(FindingIndexSchema).min(1).max(1000),
-  decision: z.enum(['undecided', 'accepted', 'rejected']),
+  selected: z.boolean(),
 });
 
 function requireQuestRef(id: string): QuestRef {
@@ -73,6 +74,9 @@ async function upstream<TResult>(action: () => Promise<TResult>): Promise<TResul
     }
     if (error instanceof NotSignedInError) {
       throw new ApiError(401, 'notSignedIn', error.message);
+    }
+    if (error instanceof ReviewNotPostedError) {
+      throw new ApiError(409, 'conflict', error.message);
     }
     if (error instanceof GitHubApiError && error.httpStatus === 401) {
       throw new ApiError(
@@ -203,9 +207,9 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       }
     },
 
-    decideFindings: async ({ params, body }) => {
-      const { findingIndexes, decision } = parseBody(DecideFindingsSchema, body);
-      return { run: await runs.decide(params.id, findingIndexes, decision) };
+    selectFindings: async ({ params, body }) => {
+      const { findingIndexes, selected } = parseBody(SelectFindingsSchema, body);
+      return { run: await runs.select(params.id, findingIndexes, selected) };
     },
 
     discardRun: async ({ params }) => ({ run: await runs.discard(params.id) }),
@@ -239,19 +243,19 @@ function buildDraft(
   if (outOfRange !== undefined) {
     throw new ApiError(400, 'badRequest', `findingIndexes: ${outOfRange} is out of range`);
   }
-  // The saved decisions decide what is posted; the request only confirms what the player saw.
-  const accepted = acceptedFindingIndexes(run);
+  // The saved selection decides what is posted; the request only confirms what the player saw.
+  const selected = selectedFindingIndexes(run);
   if (
-    indexes.length !== accepted.length ||
-    indexes.some((index, position) => index !== accepted[position])
+    indexes.length !== selected.length ||
+    indexes.some((index, position) => index !== selected[position])
   ) {
     throw new ApiError(
       409,
       'conflict',
-      'The accepted findings changed since you confirmed. Check them and post again.',
+      'The selected findings changed since you confirmed. Check them and post again.',
     );
   }
-  const findings = accepted.flatMap((index) => result.findings[index] ?? []);
+  const findings = selected.flatMap((index) => result.findings[index] ?? []);
   const draft: ReviewDraft = {
     event: request.event ?? 'comment',
     summary: result.summary,

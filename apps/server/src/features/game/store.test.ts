@@ -137,30 +137,68 @@ describe('FileStateStore', () => {
     expect((await FileStateStore.open(dir)).state.runs).toEqual([claudeRun]);
   });
 
-  test('keeps the finding decisions of a run', async () => {
-    const decided: StoredRun = {
+  test('keeps the selected findings of a run', async () => {
+    const selected: StoredRun = {
       ...storedRun,
-      run: { ...storedRun.run, findingDecisions: ['rejected'] },
+      run: { ...storedRun.run, selectedFindings: [0, 2] },
     };
     const store = await FileStateStore.open(dir);
-    await store.update((state) => ({ ...state, runs: [decided] }));
+    await store.update((state) => ({ ...state, runs: [selected] }));
 
-    expect((await FileStateStore.open(dir)).state.runs).toEqual([decided]);
+    expect((await FileStateStore.open(dir)).state.runs).toEqual([selected]);
   });
 
-  test('drops unreadable finding decisions instead of the whole state file', async () => {
+  test('drops an unreadable selection instead of the whole state file', async () => {
     await writeFile(
       join(dir, 'state.json'),
       JSON.stringify({
         version: 1,
         game: { ...initialGameState(), xp: 42 },
-        runs: [{ run: { ...storedRun.run, findingDecisions: ['maybe'] }, quest: storedRun.quest }],
+        runs: [{ run: { ...storedRun.run, selectedFindings: ['maybe'] }, quest: storedRun.quest }],
       }),
     );
 
     const store = await FileStateStore.open(dir);
 
     expect(store.state.game.xp).toBe(42);
+    expect(store.state.runs[0]?.run).toEqual(storedRun.run);
+  });
+
+  test('turns finding decisions from before selections into the accepted findings', async () => {
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 2,
+        game: initialGameState(),
+        runs: [
+          {
+            run: {
+              ...storedRun.run,
+              findingDecisions: ['accepted', 'rejected', 'undecided', 'accepted'],
+            },
+            quest: storedRun.quest,
+          },
+        ],
+      }),
+    );
+
+    const store = await FileStateStore.open(dir);
+
+    expect(store.state.runs[0]?.run).toEqual({ ...storedRun.run, selectedFindings: [0, 3] });
+  });
+
+  test('drops unreadable finding decisions from before selections', async () => {
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 2,
+        game: initialGameState(),
+        runs: [{ run: { ...storedRun.run, findingDecisions: ['maybe'] }, quest: storedRun.quest }],
+      }),
+    );
+
+    const store = await FileStateStore.open(dir);
+
     expect(store.state.runs[0]?.run).toEqual(storedRun.run);
   });
 
