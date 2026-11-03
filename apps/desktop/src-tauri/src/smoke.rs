@@ -17,17 +17,18 @@ pub const WINDOW_SCRIPT: &str = r#"
 (() => {
   if (window.top !== window || location.protocol !== 'http:') return;
   const violations = [];
-  // The IPC probe below is meant to be blocked; that is the ipc check's, not the csp check's.
+  // The IPC probe below is meant to be blocked; the shell tells its request from anything else
+  // blocked meanwhile (see csp_violations).
   let probingIpc = false;
-  let ipcBlockedByCsp = 0;
+  const probeViolations = [];
   document.addEventListener('securitypolicyviolation', (event) => {
-    if (probingIpc && event.blockedURI.startsWith('ipc:')) {
-      ipcBlockedByCsp += 1;
-      return;
+    const line =
+      `${event.violatedDirective} ${event.blockedURI} at ${event.sourceFile || '?'}:${event.lineNumber} ${event.sample}`;
+    if (probingIpc) {
+      probeViolations.push({ uri: event.blockedURI, line });
+    } else {
+      violations.push(line);
     }
-    violations.push(
-      `${event.violatedDirective} ${event.blockedURI} at ${event.sourceFile || '?'}:${event.lineNumber} ${event.sample}`,
-    );
   });
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   window.addEventListener('load', async () => {
@@ -73,7 +74,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       events,
       eventsStatus,
       ipc,
-      ipcBlockedByCsp,
+      probeViolations,
       cookieVisible: document.cookie.includes('pr_quest_secret'),
       violations,
       userAgent: navigator.userAgent,
@@ -144,10 +145,7 @@ impl Smoke {
                 Err(format!("the window is on {path:?}"))
             },
         );
-        let violations: Vec<&str> = report["violations"]
-            .as_array()
-            .map(|all| all.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+        let (violations, ipc_blocked) = csp_violations(&report);
         let fonts = report["fonts"].as_u64().unwrap_or(0);
         self.check(
             "csp",
@@ -163,7 +161,7 @@ impl Smoke {
             },
         );
         self.check("request-secret-cookie", cookie_check(&report));
-        self.check("ipc", ipc_check(&report));
+        self.check("ipc", ipc_check(&report, ipc_blocked));
     }
 
     pub fn finish(&self, sidecar_ok: bool) -> i32 {
@@ -217,13 +215,48 @@ pub fn reload_check(report: &str) -> Result<String, String> {
     }
 }
 
+/// What the page's CSP blocked, but for the IPC probe's own request, and how often it blocked that.
+fn csp_violations(report: &Value) -> (Vec<&str>, usize) {
+    let lines = |key: &str| {
+        report[key]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    };
+    let mut violations: Vec<&str> = lines("violations")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut ipc_blocked = 0;
+    for violation in lines("probeViolations") {
+        if is_ipc_request(violation["uri"].as_str().unwrap_or("")) {
+            ipc_blocked += 1;
+        } else {
+            violations.push(violation["line"].as_str().unwrap_or("?"));
+        }
+    }
+    (violations, ipc_blocked)
+}
+
+/// Tauri's IPC goes through its ipc:// scheme, but through http://ipc.localhost on Windows, whose
+/// webview can't fetch a custom scheme.
+fn is_ipc_request(uri: &str) -> bool {
+    [
+        "ipc://localhost/",
+        "http://ipc.localhost/",
+        "https://ipc.localhost/",
+    ]
+    .iter()
+    .any(|prefix| uri.starts_with(prefix))
+}
+
 /// Whether the page was refused when it called the shell, or had no way to.
-fn ipc_check(report: &Value) -> Result<String, String> {
+fn ipc_check(report: &Value, ipc_blocked: usize) -> Result<String, String> {
     match report["ipc"].as_str() {
         Some("absent") => Ok("the page has no IPC".into()),
         Some(ipc) if ipc.starts_with("rejected") => {
-            let csp = if report["ipcBlockedByCsp"].as_u64().unwrap_or(0) > 0 {
-                "; the page's CSP blocked its ipc:// request first"
+            let csp = if ipc_blocked > 0 {
+                "; the page's CSP blocked its IPC request first"
             } else {
                 ""
             };
@@ -285,12 +318,31 @@ mod tests {
     #[test]
     fn the_page_cant_call_the_shell() {
         for ipc in ["absent", "rejected: plugin:opener|open_url not allowed"] {
-            assert!(ipc_check(&json!({ "ipc": ipc })).is_ok(), "{ipc}");
+            assert!(ipc_check(&json!({ "ipc": ipc }), 0).is_ok(), "{ipc}");
         }
         for ipc in ["allowed", "no answer in 5 s"] {
-            assert!(ipc_check(&json!({ "ipc": ipc })).is_err(), "{ipc}");
+            assert!(ipc_check(&json!({ "ipc": ipc }), 1).is_err(), "{ipc}");
         }
-        assert!(ipc_check(&json!({})).is_err());
+        assert!(ipc_check(&json!({}), 0).is_err());
+    }
+
+    #[test]
+    fn the_blocked_ipc_probe_is_the_ipc_checks_on_every_platform() {
+        let report = json!({
+            "violations": ["img-src https://x.example/a.png at ?:1"],
+            "probeViolations": [
+                { "uri": "ipc://localhost/plugin%3Aopener%7Copen_url", "line": "a" },
+                { "uri": "http://ipc.localhost/plugin%3Aopener%7Copen_url", "line": "b" },
+                { "uri": "http://ipc.localhost.evil.example/x", "line": "c" },
+                { "uri": "https://evil.example/", "line": "d" },
+            ],
+        });
+        let (violations, ipc_blocked) = csp_violations(&report);
+        assert_eq!(
+            violations,
+            ["img-src https://x.example/a.png at ?:1", "c", "d"]
+        );
+        assert_eq!(ipc_blocked, 2);
     }
 
     #[test]
