@@ -19,10 +19,12 @@ flowchart LR
 
 1. **Check the version.**
    - The `version` in `package.json` must look like `0.2.0`, or `0.2.0-beta.1` for a prerelease,
-     and `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` must have the same one. Dry runs
-     check this too.
+     and `src-tauri/Cargo.toml` must have the same one. `src-tauri/tauri.conf.json` must take its
+     version from `package.json` (`"version": "../package.json"`), which is the version the app
+     reports to its updater. Dry runs check this too.
    - The tag must be `v` followed by that version, and the tagged commit must be on the default
-     branch.
+     branch. The dry run's opt-out from code signing, `PR_QUEST_ALLOW_UNSIGNED_RELEASE`, must not
+     be set.
    - It stops if any signing secret's name is a repository or organization secret it can see;
      see [Secrets and settings](#secrets-and-settings).
    - The repository variable `PR_QUEST_UPDATER_PUBKEY` must be a Tauri updater public key, and
@@ -54,7 +56,8 @@ flowchart LR
    - runs [`scripts/ci/package.sh`](scripts/ci/package.sh), which sets up signing from the
      secrets and runs `just desktop-package --target <triple>` as a release build
      (`PR_QUEST_RELEASE_BUILD=1`, with `PR_QUEST_RELEASE_REPO` set to the repository the workflow
-     runs in);
+     runs in). A release build stops on macOS and Windows without signing, and leaves a record of
+     how it was signed next to the bundles;
    - checks the signatures: on macOS, the code signature, Gatekeeper's verdict and the stapled
      notarization; on Windows, every `.exe`, `.dll` and `.node` file of the installed app, and
      the installer;
@@ -63,13 +66,14 @@ flowchart LR
    - uploads the installers and update files under the release's file names.
 
 5. **Check the release files.** Gathers what the five builds made, and stops at a missing,
-   unexpected or duplicate file. It checks every update signature against
+   unexpected or duplicate file, or at a build record that says a macOS or Windows build wasn't
+   signed or used the dry run's opt-out. It checks every update signature against
    `PR_QUEST_UPDATER_PUBKEY` with `just desktop-verify-updater`, and that the signature is bound
    to the release's version, since the app refuses any other. Then it writes `latest.json` and
    `SHA256SUMS.txt`. See [`scripts/ci/release-assets.sh`](scripts/ci/release-assets.sh).
 6. **Publish the draft release.** The only job that can write to the repository, and it runs
    none of the repository's code. It stops if the tag no longer points at the commit the builds
-   used, or if the release is published already. Otherwise it creates the draft release with
+   used, if the files are marked as a dry run's, or if the release is published already. Otherwise it creates the draft release with
    generated notes, marked as a prerelease when the version has a prerelease part. Re-running it
    uploads to the same draft again, replacing its files. Because only this job creates the
    release, the builds can't race to create several.
@@ -77,12 +81,18 @@ flowchart LR
 Running the workflow by hand from the **Actions** tab (**Release**, then **Run workflow**) is a
 **dry run**. It runs every job but the last, the same way as a release, except that:
 
-- it uses no environment and no secrets, so every build is unsigned;
+- it uses no environment and no secrets, so it sets `PR_QUEST_ALLOW_UNSIGNED_RELEASE=1`, the
+  only way a release build may skip code signing on macOS and Windows. The macOS app is signed
+  ad hoc instead, as every unsigned build is;
 - it makes a throwaway updater key pair, kept as a workflow artifact for a day, so the update
   files and `latest.json` are made and checked as in a release;
-- it keeps the files as the `release-assets` workflow artifact for 7 days, and publishes nothing.
+- it keeps the files as the `release-assets` workflow artifact for 7 days, marked with a
+  `DRY-RUN` file, and publishes nothing.
 
-Apps from a dry run trust only that throwaway key, so they never accept a real update.
+Apps from a dry run trust only that throwaway key, so they never accept a real update. The
+opt-out can't reach a release: `package.sh` and the version check stop a tag build that sets it,
+and the check of the release files refuses bundles whose build record says they used it, or that
+a macOS or Windows build wasn't signed.
 
 As written, the workflow lets only the publish job write to the repository, and passes each
 secret only to the packaging step of its own platform in a tag build. That alone protects nothing
@@ -151,9 +161,9 @@ Before the first real release, make a dry run, then a prerelease such as `0.1.0-
 approve it, check its draft as below, then delete the draft and the tag. Only then release
 `0.1.0`.
 
-1. Set the new version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`,
-   update `Cargo.lock` with `cargo update --manifest-path src-tauri/Cargo.toml -p pr-quest`, and
-   merge the change to the default branch.
+1. Set the new version in `package.json` and `src-tauri/Cargo.toml`, update `Cargo.lock` with
+   `cargo update --manifest-path src-tauri/Cargo.toml -p pr-quest`, and merge the change to the
+   default branch. The app takes its version from `package.json`.
 2. Tag the merged commit and push the tag:
 
    ```sh
@@ -219,8 +229,9 @@ repository or organization secret it can see. Set up the environment first, as d
 - **macOS** needs both certificate secrets and either the three `APPLE_API_*` secrets
   (recommended) or the three Apple Account ones, not both.
 - **Windows** needs either the six `AZURE_*` secrets or both `.pfx` ones, not both.
-- Leave out all of a platform's secrets and its build is unsigned, with a warning on the run. If
-  only some of them are set, the build stops instead of shipping something half-signed.
+- A tag build stops on macOS or Windows without that platform's secrets, so there are no unsigned
+  releases, and it stops when only some of them are set instead of shipping something
+  half-signed. Linux isn't code signed and needs only the updater key.
 - The macOS certificate goes into a temporary keychain with a random password, and the API key
   into a file in the runner's temporary folder. `package.sh` deletes both when it ends, and
   removes the `.pfx` certificate from the Windows certificate store.
@@ -238,29 +249,15 @@ gh secret set APPLE_API_KEY_P8 --env release < AuthKey_ABC123DEFG.p8
 gh secret list                                                   # repository secrets: none of the above
 ```
 
-### Variables
+### The variable
 
-Repository variables (**Settings**, **Secrets and variables**, **Actions**, **Variables**), which
-aren't secret:
-
-| Variable                  | What it is                                                                                         |
-| ------------------------- | -------------------------------------------------------------------------------------------------- |
-| `PR_QUEST_UPDATER_PUBKEY` | Required. The updater's public key: the contents of the `.pub` file `tauri signer generate` writes |
-| `REQUIRE_SIGNING`         | Optional. `true` makes a tag build stop when macOS or Windows would be unsigned                    |
+One repository variable (**Settings**, **Secrets and variables**, **Actions**, **Variables**),
+which isn't secret: `PR_QUEST_UPDATER_PUBKEY`, the updater's public key, the contents of the
+`.pub` file `tauri signer generate` writes. A tag build stops without it.
 
 ```sh
 gh variable set PR_QUEST_UPDATER_PUBKEY < pr-quest-updater.key.pub
-gh variable set REQUIRE_SIGNING --body true
 ```
-
-Once you have released a signed version, set `REQUIRE_SIGNING` to `true` (`1` and `yes` work too,
-in any case; any other value stops the build rather than being read as off). A tag build then
-stops when macOS or Windows would be unsigned, for example because a secret was deleted or
-expired. Tauri's updater checks only its own signature, so an unsigned version would still
-install over a signed one, but new users would get the warnings under
-[What users see without signing](#what-users-see-without-signing), and on macOS every user would
-be asked for their login password when the app next reads its keychain entry. Dry runs are
-always unsigned and ignore it.
 
 ### The updater key pair
 
@@ -290,7 +287,7 @@ the version check refuses it.
 ### Protect the signing secrets
 
 Anyone who can push to the repository can change the workflow file in a commit, tag it, and so
-run their own workflow when the tag is pushed. Three settings keep that from reaching the signing
+run their own workflow when the tag is pushed. Two settings keep that from reaching the signing
 secrets:
 
 1. **The `release` environment.** Under **Settings**, **Environments**, create `release`:
@@ -316,8 +313,6 @@ secrets:
    admin** role there, which is its owner. Only those who can bypass can then push, move or delete
    a `v*` tag.
 
-3. **The `REQUIRE_SIGNING` variable**, once a signed version is out; see above.
-
 The reviewer is the last check: a run waiting for approval runs whatever workflow file the tag's
 commit has. Approve only a run for a tag you pushed, at a commit on the default branch. The
 version check job also stops a tag that isn't on the default branch, but someone who changes the
@@ -341,8 +336,8 @@ You need a membership of the [Apple Developer Program](https://developer.apple.c
    `APPLE_CERTIFICATE_PASSWORD`, then delete the exported file.
 
 The `.p12` must hold exactly one Developer ID Application identity; `package.sh` stops
-otherwise. It sets `APPLE_SIGNING_IDENTITY` from it, so `just desktop-package` signs the sidecar,
-Node and the app with the hardened runtime.
+otherwise. It sets `APPLE_SIGNING_IDENTITY` from it, so `just desktop-package` signs the bundled
+Node (`pr-quest-node`), the server's native modules and the app with the hardened runtime.
 
 ### The App Store Connect API key, for notarization
 
@@ -393,19 +388,19 @@ its own `PR_QUEST_WINDOWS_SIGN_COMMAND` in `package.sh`, which isn't written.
 
 ## What users see without signing
 
-**macOS.** An unsigned build isn't notarized, so Gatekeeper refuses to open it the first time. On
-macOS 15 and later, the user has to try once, then choose **Open Anyway** under **System
-Settings**, **Privacy & Security**, and confirm with their password. On macOS 14 and earlier,
-right-clicking the app and choosing **Open** also works. Updates still install, since Tauri's
-updater checks only its own signature, but every new build asks for the login password when it
-first reads the keychain entry an earlier build made.
+Releases are always signed on macOS and Windows; what follows is what a dry run's or a local
+build's unsigned bundles show, for anyone who passes them around.
 
-That needs the app to be at least ad-hoc signed as a whole. Today an unsigned build isn't: only
-its main program carries the linker's ad-hoc signature, and the bundle has no sealed resources,
-which `codesign --verify` and `syspolicy_check` reject. A downloaded copy is then likely to be
-reported as damaged, with no **Open Anyway**; removing the quarantine flag
-(`xattr -dr com.apple.quarantine "/Applications/PR Quest.app"`) gets past that. Don't publish an
-unsigned macOS build until the packaging ad-hoc signs the bundle.
+**macOS.** An unsigned build is signed ad hoc as a whole, without the hardened runtime, so its
+signature is valid (`codesign --verify --deep --strict` passes) but it isn't notarized. Gatekeeper
+refuses a downloaded (quarantined) copy for that reason alone: `spctl --assess` says `rejected`,
+not that the signature is invalid, so macOS should show its "Apple could not verify" prompt rather
+than calling the app damaged. On macOS 15 and later, the user then chooses **Open Anyway** under
+**System Settings**, **Privacy & Security**, and confirms with their password; on macOS 14 and
+earlier, right-clicking the app and choosing **Open** works. Only the `spctl` verdict has been
+checked, not the prompt itself. The `dmg` isn't signed at all, which doesn't stop it opening.
+Every new build also asks for the login password when it first reads the keychain entry an
+earlier build made.
 
 **Windows.** SmartScreen shows "Windows protected your PC" before the installer runs, and the
 user has to choose **More info**, then **Run anyway**. Some antivirus programs also flag unsigned
