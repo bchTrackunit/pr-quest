@@ -1,26 +1,43 @@
 //! The app menu: About, the Edit menu (without it, copy and paste shortcuts don't work on macOS),
 //! the Window menu, Help and Quit. Nothing in it opens the developer tools, which release builds
-//! don't have.
+//! don't have. Help links to the release repository only once it is a real one.
 
-use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{
+    AboutMetadata, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::release::Repo;
 use crate::updates::release_repo;
 
 const DOWNLOAD_LATEST: &str = "download-latest";
 const PROJECT_PAGE: &str = "project-page";
 
+/// Help's items that open the repository: none for the placeholder, whose pages don't exist.
+fn repo_links(repo: &Repo) -> &'static [(&'static str, &'static str)] {
+    if repo.is_publishable() {
+        &[
+            (DOWNLOAD_LATEST, "Download the Latest Version"),
+            (PROJECT_PAGE, "PR Quest on GitHub"),
+        ]
+    } else {
+        &[]
+    }
+}
+
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let info = app.package_info();
+    let repo = release_repo();
+    let publishable = repo.is_publishable();
     let about = PredefinedMenuItem::about(
         app,
         Some("About PR Quest"),
         Some(AboutMetadata {
             name: Some(info.name.clone()),
             version: Some(info.version.to_string()),
-            website: Some(release_repo().project_url()),
-            website_label: Some("PR Quest on GitHub".into()),
+            website: publishable.then(|| repo.project_url()),
+            website_label: publishable.then(|| "PR Quest on GitHub".into()),
             license: Some("MIT".into()),
             ..AboutMetadata::default()
         }),
@@ -51,14 +68,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;
-    let download = MenuItem::with_id(
-        app,
-        DOWNLOAD_LATEST,
-        "Download the Latest Version",
-        true,
-        None::<&str>,
-    )?;
-    let project = MenuItem::with_id(app, PROJECT_PAGE, "PR Quest on GitHub", true, None::<&str>)?;
+    let links = repo_links(&repo)
+        .iter()
+        .map(|(id, label)| MenuItem::with_id(app, *id, *label, true, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let separator = PredefinedMenuItem::separator(app)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit PR Quest"))?;
 
     if cfg!(target_os = "macos") {
@@ -78,31 +92,57 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 &quit,
             ],
         )?;
-        let help = Submenu::with_items(app, "Help", true, &[&download, &project])?;
-        Menu::with_items(app, &[&app_menu, &edit, &window, &help])
+        let menu = Menu::with_items(app, &[&app_menu, &edit, &window])?;
+        if !links.is_empty() {
+            let items: Vec<&dyn IsMenuItem<R>> = links
+                .iter()
+                .map(|item| item as &dyn IsMenuItem<R>)
+                .collect();
+            menu.append(&Submenu::with_items(app, "Help", true, &items)?)?;
+        }
+        Ok(menu)
     } else {
         let file = Submenu::with_items(app, "File", true, &[&quit])?;
-        let help = Submenu::with_items(
-            app,
-            "Help",
-            true,
-            &[
-                &download,
-                &project,
-                &PredefinedMenuItem::separator(app)?,
-                &about,
-            ],
-        )?;
+        let mut items: Vec<&dyn IsMenuItem<R>> = links
+            .iter()
+            .map(|item| item as &dyn IsMenuItem<R>)
+            .collect();
+        if !items.is_empty() {
+            items.push(&separator);
+        }
+        items.push(&about);
+        let help = Submenu::with_items(app, "Help", true, &items)?;
         Menu::with_items(app, &[&file, &edit, &window, &help])
     }
 }
 
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     let repo = release_repo();
+    if !repo.is_publishable() {
+        return;
+    }
     let url = match event.id().as_ref() {
         DOWNLOAD_LATEST => repo.latest_release_url(),
         PROJECT_PAGE => repo.project_url(),
         _ => return,
     };
     let _ = app.opener().open_url(url, None::<&str>);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn links_to_a_real_repository() {
+        let repo = Repo::parse("octocat/pr-quest").unwrap();
+        let ids: Vec<&str> = repo_links(&repo).iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [DOWNLOAD_LATEST, PROJECT_PAGE]);
+    }
+
+    #[test]
+    fn has_no_links_to_the_placeholder_which_go_nowhere() {
+        let repo = Repo::parse(crate::release::DEFAULT_REPO).unwrap();
+        assert!(repo_links(&repo).is_empty());
+    }
 }
