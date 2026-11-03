@@ -51,13 +51,16 @@ impl<'a> Repo<'a> {
 
 /// Why a release build's updater key won't do, if it won't: the one in tauri.conf.json (`base`) is
 /// for local builds, whose private half isn't kept secret, so a release must replace it through
-/// the `--config` overlay that `tauri build` passes as `TAURI_CONFIG`.
+/// the `--config` overlay that `tauri build` passes as `TAURI_CONFIG`. Keys are compared trimmed,
+/// and a blank one counts as missing.
 #[allow(dead_code)]
 pub fn updater_key_problem(base: &str, overlay: Option<&str>) -> Option<String> {
     let pubkey = |config: &serde_json::Value| {
         config
             .pointer("/plugins/updater/pubkey")
             .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
             .map(str::to_owned)
     };
     let base = match serde_json::from_str(base) {
@@ -141,6 +144,9 @@ mod tests {
             None,
             Some(r#"{"bundle":{"createUpdaterArtifacts":true}}"#),
             Some(r#"{"plugins":{"updater":{"pubkey":"DEV"}}}"#),
+            Some(r#"{"plugins":{"updater":{"pubkey":"DEV\n"}}}"#),
+            Some(r#"{"plugins":{"updater":{"pubkey":"  DEV "}}}"#),
+            Some(r#"{"plugins":{"updater":{"pubkey":" \n"}}}"#),
         ] {
             let problem = updater_key_problem(BASE, overlay);
             assert!(
