@@ -1,16 +1,19 @@
 /*
  * macOS only: starts the packaged app with a throwaway state directory, lets it idle, and prints
  * the memory footprint of all its processes, the way Activity Monitor counts it. Then checks that
- * quitting and a crashed shell leave no process behind, that a crashed sidecar is started again,
- * and that one which keeps crashing makes the shell give up.
+ * quitting and a crashed shell leave no process behind, that a crashed sidecar is started again
+ * with a new request secret and the window reconnects to it, and that one which keeps crashing
+ * makes the shell give up.
  *
  *   node scripts/desktop-measure.ts [executable]
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+
+import { hostTriple } from './desktop/targets.ts';
 
 const IDLE_MS = 25_000;
 const EXIT_WAIT_MS = 10_000;
@@ -18,8 +21,8 @@ const RESTART_WAIT_MS = 15_000;
 /** src-tauri/src/main.rs's MAX_RESTARTS. */
 const MAX_RESTARTS = 3;
 const DEFAULT_EXECUTABLE = join(
-  'src-tauri',
-  'target',
+  process.env.CARGO_TARGET_DIR ?? join('src-tauri', 'target'),
+  hostTriple(process.platform, process.arch),
   'release',
   'bundle',
   'macos',
@@ -224,6 +227,12 @@ async function lifecycle(): Promise<void> {
     },
     'the sidecar stopped itself once the killed shell closed its stdin',
   );
+  /** What the shell logged: test runs log each server's request secret by its fingerprint. */
+  const shellLog = (running: Running): string => {
+    const file = join(running.stateDir, 'tauri', 'main.log');
+    return existsSync(file) ? readFileSync(file, 'utf8') : '';
+  };
+  const count = (text: string, phrase: string): number => text.split(phrase).length - 1;
   await scenario(
     'sidecar-crash',
     async (running, sidecar) => {
@@ -231,9 +240,23 @@ async function lifecycle(): Promise<void> {
       if ((await restarted(running, sidecar)) === undefined) {
         return "the shell didn't start a new sidecar";
       }
+      await delay(5000);
+      const log = shellLog(running);
+      const secrets = [...log.matchAll(/starting the server with request secret (\w+)/g)].map(
+        (match) => match[1],
+      );
+      if (secrets.length !== 2 || secrets[0] === secrets[1]) {
+        return `the restarted server didn't get a new request secret: ${secrets.join(', ')}`;
+      }
+      if (!log.includes('the window left the stopped server')) {
+        return 'the window stayed on the stopped server';
+      }
+      if (count(log, "the window opens the server's start-up link") !== 2) {
+        return "the window didn't open the restarted server's start-up link";
+      }
       return alive(running.pid) ? undefined : 'the shell quit';
     },
-    'the shell started a new sidecar and kept running',
+    'the shell started a new sidecar with a new request secret, and the window reconnected to it',
   );
   await scenario(
     'sidecar-keeps-crashing',

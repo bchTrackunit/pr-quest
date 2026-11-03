@@ -1,6 +1,7 @@
 //! PR Quest's Tauri shell. Tauri has no Node, so the server runs as a sidecar in the Node binary
 //! bundled next to this one, on 127.0.0.1 and a free port. The window opens a one-time bootstrap
-//! link that sets the per-launch request secret's cookie, since Tauri can't set cookies itself.
+//! link that sets the request secret's cookie, since Tauri can't set cookies itself. Each start
+//! of the server has its own secret and link.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod dialog;
@@ -24,6 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use sha2::{Digest, Sha256};
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -77,6 +79,15 @@ pub fn random_bytes<const N: usize>() -> [u8; N] {
 /// 32 random bytes in base64url, which a cookie and a query string carry as they are.
 fn token() -> String {
     URL_SAFE_NO_PAD.encode(random_bytes::<32>())
+}
+
+/// The start of a secret's SHA-256, which test runs log so scripts/desktop-measure.ts can tell a
+/// restarted server's secret from the last one's.
+fn fingerprint(secret: &str) -> String {
+    Sha256::digest(secret.as_bytes())[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// `PR_QUEST_SMOKE_TEST`: `1` runs the smoke test and exits; `idle` keeps the test's isolation but
@@ -165,9 +176,20 @@ fn main() {
 struct Server {
     node: PathBuf,
     script: PathBuf,
-    request_secret: String,
     data_key: Option<String>,
     preferences_file: String,
+}
+
+/// What one start of the server gets. The secrets are new each time: a program that took the
+/// port while the server restarted could have captured the old cookie, which then opens nothing.
+fn launch(server: &Server, show_notices: bool) -> Launch {
+    Launch {
+        request_secret: token(),
+        bootstrap_code: token(),
+        data_key: server.data_key.clone(),
+        preferences_file: server.preferences_file.clone(),
+        show_notices,
+    }
 }
 
 fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
@@ -244,7 +266,6 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
             "pr-quest-node"
         }),
         script: resources.join("sidecar").join("main.mjs"),
-        request_secret: token(),
         data_key,
         preferences_file: data_dir.join("desktop.json").to_string_lossy().into_owned(),
     };
@@ -275,21 +296,21 @@ enum Outcome {
 }
 
 /// Runs the server and starts it again, a bounded number of times, when it crashes. Each start
-/// gets a new bootstrap code, which the window then opens to get its cookie back.
+/// gets a new request secret and bootstrap code, which the window then opens for its cookie.
 fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke: Option<Smoke>) {
     let shell = app.state::<Shell>();
     let mut restarts = Restarts::new(MAX_RESTARTS, RESTART_WINDOW);
     let mut first = true;
     loop {
-        let bootstrap_code = token();
-        let launch = Launch {
-            request_secret: server.request_secret.clone(),
-            bootstrap_code: bootstrap_code.clone(),
-            data_key: server.data_key.clone(),
-            preferences_file: server.preferences_file.clone(),
-            // Once is enough: a restarted server finds the keys as they were.
-            show_notices: first && mode == Mode::App,
-        };
+        // Once is enough: a restarted server finds the keys as they were.
+        let launch = launch(server, first && mode == Mode::App);
+        let bootstrap_code = launch.bootstrap_code.clone();
+        if mode != Mode::App {
+            log.info(&format!(
+                "starting the server with request secret {}",
+                fingerprint(&launch.request_secret)
+            ));
+        }
         let (events_tx, events_rx) = mpsc::channel();
         let spawned = Sidecar::spawn(
             &server.node,
@@ -343,6 +364,7 @@ fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke:
             );
         }
         log.warn(&format!("{reason} Starting it again."));
+        leave_server(app, log);
         first = false;
     }
 }
@@ -467,6 +489,21 @@ impl Session<'_> {
     }
 }
 
+/// Takes the window off a server that stopped, so the page stops calling its port, which another
+/// program could take, and the window goes nowhere until the restarted server is shown.
+fn leave_server(app: &AppHandle, log: &Log) {
+    if let Ok(mut origin) = app.state::<Shell>().origin.lock() {
+        *origin = None;
+    }
+    let window_app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = window_app.get_webview_window(WINDOW) {
+            let _ = window.navigate(Url::parse(policy::BLANK).expect("about:blank parses"));
+        }
+    });
+    log.info("the window left the stopped server");
+}
+
 /// Shows a secrets notice and returns the action of the button the player chose. Closing it
 /// chooses the last button, which never loses keys.
 fn answer(app: &AppHandle, notice: &Notice) -> String {
@@ -539,12 +576,18 @@ fn open_window(
         .inner_size(1280.0, 860.0)
         .min_inner_size(640.0, 480.0)
         .on_navigation(move |target| {
+            if policy::is_blank(target) {
+                return true;
+            }
             let Some(app_origin) = origin.lock().ok().and_then(|origin| origin.clone()) else {
                 return false;
             };
             if !policy::is_app_url(target, &app_origin) {
                 open_externally(&navigation_app, &navigation_log, target);
                 return false;
+            }
+            if target.path() == BOOTSTRAP_PATH {
+                navigation_log.info("the window opens the server's start-up link");
             }
             if let Some(reports) = &smoke_reports {
                 if target.path() == smoke::REPORT_PATH {
@@ -592,5 +635,39 @@ fn show_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server() -> Server {
+        Server {
+            node: PathBuf::from("pr-quest-node"),
+            script: PathBuf::from("main.mjs"),
+            data_key: None,
+            preferences_file: "desktop.json".into(),
+        }
+    }
+
+    #[test]
+    fn every_start_of_the_server_gets_new_secrets() {
+        let first = launch(&server(), true);
+        let restarted = launch(&server(), false);
+        assert_ne!(first.request_secret, restarted.request_secret);
+        assert_ne!(first.bootstrap_code, restarted.bootstrap_code);
+        assert_ne!(first.request_secret, first.bootstrap_code);
+        assert!(first.show_notices && !restarted.show_notices);
+    }
+
+    #[test]
+    fn a_fingerprint_tells_secrets_apart_without_giving_them_away() {
+        let secret = token();
+        let print = fingerprint(&secret);
+        assert_eq!(print, fingerprint(&secret));
+        assert_ne!(print, fingerprint(&token()));
+        assert_eq!(print.len(), 8);
+        assert!(!secret.contains(&print));
     }
 }

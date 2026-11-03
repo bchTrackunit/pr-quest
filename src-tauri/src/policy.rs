@@ -12,6 +12,13 @@ pub fn is_app_url(url: &Url, app: &Url) -> bool {
     url.origin() == app.origin()
 }
 
+/// The empty page the window shows while the server restarts.
+pub const BLANK: &str = "about:blank";
+
+pub fn is_blank(url: &Url) -> bool {
+    url.as_str() == BLANK
+}
+
 /// The URL to hand to the system browser, or `None` when it isn't a web or mail link.
 pub fn external_url(url: &Url) -> Option<&Url> {
     EXTERNAL_SCHEMES.contains(&url.scheme()).then_some(url)
@@ -60,6 +67,18 @@ mod tests {
             "https://github.com/",
         ] {
             assert!(!is_app_url(&url(page), &app()), "{page}");
+        }
+    }
+
+    #[test]
+    fn only_about_blank_is_the_blank_page() {
+        assert!(is_blank(&url("about:blank")));
+        for page in [
+            "about:srcdoc",
+            "http://127.0.0.1:53124/",
+            "data:text/html,x",
+        ] {
+            assert!(!is_blank(&url(page)), "{page}");
         }
     }
 
