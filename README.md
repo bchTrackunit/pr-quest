@@ -1,57 +1,66 @@
 # PR Quest
 
-PR Quest is a small local web app that turns the pull requests you've been asked to review into
-quests. Each open review request becomes a card with a difficulty tier based on its diff size.
-From a card you can send a reviewer to the PR (a Cursor cloud agent, or Claude reading the
-diff), read its findings, post them to GitHub, or approve the PR. Real review actions earn XP,
-levels, a daily streak and achievements.
+PR Quest turns the pull requests you've been asked to review into a quest board. Each review
+request becomes a card with a difficulty tier based on its diff size. From a card you can send a
+reviewer to the PR (a Cursor cloud agent, or Claude reading the diff), choose which of its
+findings to post to GitHub, and approve the PR. Real review actions earn XP, levels, a daily
+streak and achievements.
 
-The board and server run on your machine; only the reviewer runs elsewhere, in Cursor's cloud or
-at Anthropic. The server binds to `127.0.0.1` only, because it acts as you on GitHub with your
-token. It also accepts browser requests only from its own UI and API origins, as described in
-[Local server protections](#local-server-protections).
+![The quest board, with a review agent running and another one's findings ready](docs/screenshots/board.png)
 
-## Prerequisites
+The board and its server run on your machine and act as you on GitHub with your token, so the
+server only listens on `127.0.0.1`. Only the reviewer runs elsewhere, in Cursor's cloud or at
+Anthropic.
 
-- **A GitHub token** from one of two places. PR Quest lists, approves and posts reviews as that
-  user.
-  - [Sign in with GitHub](#sign-in-with-github) from the app. This needs a GitHub OAuth App's
-    client ID, set up once.
-  - Or the **GitHub CLI**, logged in with `gh auth login`. PR Quest reads its token with
-    `gh auth token`. Check it with `gh auth status`.
-- **Node and Yarn through [Volta](https://volta.sh)**. Node 24.22.1 and Yarn 4.18.1 are pinned in
-  `package.json`, so Volta switches to them inside the repo. Yarn older than 4.17.1 can't install
-  TypeScript 7.
-- **Optional keys** for reviews and Linear. Add them in the [settings popup](#settings), or in
-  the env file `~/.pr-quest/.env`, in the [state directory](#where-state-lives). Start from the
-  example:
+## Quick start
 
-  ```sh
-  mkdir -p -m 700 ~/.pr-quest
-  cp .env.example ~/.pr-quest/.env
-  chmod 600 ~/.pr-quest/.env
-  ```
+You need:
 
-  PR Quest warns at startup when other users may read that file.
+- **Node and Yarn through [Volta](https://volta.sh).** Node 24.22.1 and Yarn 4.18.1 are pinned
+  in `package.json`, so Volta switches to them inside the repo.
+- **A GitHub token.** The simplest is a logged-in GitHub CLI (`gh auth login`); PR Quest reads its
+  token with `gh auth token`. You can also [sign in with GitHub](#sign-in-with-github) from the
+  app.
 
-  ```sh
-  # Cursor reviews. Create one at https://cursor.com/dashboard/integrations
-  CURSOR_API_KEY=...
-  # Claude reviews. Create one at https://console.anthropic.com/settings/keys
-  ANTHROPIC_API_KEY=...
-  # Optional Linear enrichment: review page links and the "needs attention" flag
-  LINEAR_API_KEY=...
-  # Enables "Sign in with GitHub"; see below
-  PR_QUEST_GITHUB_CLIENT_ID=...
-  ```
+```sh
+gh repo clone bchTrackunit/pr-quest
+cd pr-quest
+yarn install
+yarn dev
+```
 
-  Without a key for the selected review provider, the board, approvals and XP still work, and
-  "Send review agent" says which key is missing, with a button that opens the settings at it.
+Open <http://127.0.0.1:4318>. `yarn dev` starts the API on port 4317, restarting it when the
+server code changes, and the UI on port 4318 with hot reload. `yarn start` builds and runs the
+[production build](docs/development.md#production-build) instead, which serves the API and the UI
+together on <http://127.0.0.1:4317>. The board checks GitHub every 2
+minutes and when you press **Refresh**.
 
-Other optional settings: `PR_QUEST_PORT` (API, default `4317`), `PR_QUEST_UI_PORT` (UI, default
-`4318`) and `PR_QUEST_STATE_DIR` (default `~/.pr-quest`). `PR_QUEST_MODE`, `PR_QUEST_HOST`,
-`PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to [hosted mode](#hosted-mode),
-which isn't usable yet.
+## Configuration
+
+The board, approvals and XP work without any API keys. To send reviewers, add a key for the
+review provider you want, either in **Settings** (open the account chip in the top-right corner)
+or in the env file `~/.pr-quest/.env`, in the [state directory](#where-state-lives):
+
+```sh
+mkdir -p -m 700 ~/.pr-quest
+cp .env.example ~/.pr-quest/.env
+chmod 600 ~/.pr-quest/.env
+```
+
+PR Quest warns at startup when other users may read that file.
+
+| Variable                    | What it's for                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------- |
+| `CURSOR_API_KEY`            | Cursor reviews. Create one at <https://cursor.com/dashboard/integrations>                          |
+| `ANTHROPIC_API_KEY`         | Claude reviews. Create one at <https://console.anthropic.com/settings/keys>                        |
+| `LINEAR_API_KEY`            | Optional: Linear review links and the "needs attention" flag on cards                              |
+| `PR_QUEST_GITHUB_CLIENT_ID` | Enables [Sign in with GitHub](#sign-in-with-github)                                                |
+| `PR_QUEST_PORT`             | API port, default `4317`                                                                           |
+| `PR_QUEST_UI_PORT`          | UI port, default `4318`                                                                            |
+| `PR_QUEST_STATE_DIR`        | Where PR Quest keeps its data, default `~/.pr-quest` (see [Where state lives](#where-state-lives)) |
+
+`PR_QUEST_MODE`, `PR_QUEST_HOST`, `PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to
+[hosted mode](docs/development.md#hosted-mode), which isn't usable yet.
 
 PR Quest reads settings from three places, and the first one that sets a value wins:
 
@@ -63,829 +72,109 @@ PR Quest reads settings from three places, and the first one that sets a value w
    checkout. It was the only env file before, so existing setups keep working, and it may set
    `PR_QUEST_STATE_DIR`. Move its other values to `~/.pr-quest/.env` when convenient.
 
-Setting a value to an empty string in the environment or a file ignores the places below it, so
-the default applies. For an API key, the default is the key saved in Settings:
-`CURSOR_API_KEY= yarn dev` drops the key from the env files, but a Cursor key saved in Settings
-still applies. Remove it in Settings to run without one.
+All three win over keys saved in Settings. Setting a variable to an empty value ignores the places
+below it, so the default applies; for an API key that's the key saved in Settings, so
+`CURSOR_API_KEY= yarn dev` still uses a saved Cursor key. Keys from the environment or an env file
+are read-only in Settings; saved keys apply without a restart. Settings never shows a
+key, only whether it's set, where it came from and, for keys of 12 characters or more, its last
+four characters. The key inputs ask 1Password, LastPass and Bitwarden not to save them.
 
-## Sign in with GitHub
+![The settings dialog](docs/screenshots/settings.png)
 
-"Sign in with GitHub" uses GitHub's
+Settings also picks the **review provider** (Cursor or Claude) and the model for each. With the
+provider's key, the model list comes from the provider (Cursor's model list, Anthropic's
+`GET /v1/models`); without it, Settings shows a built-in list. Cursor defaults to its own default
+model and Claude to `claude-sonnet-5-5`. Keys, the provider and the models belong to this
+computer: every GitHub account that signs in here shares them, and signing out doesn't remove
+them.
+
+### Sign in with GitHub
+
+Without a sign-in, PR Quest uses the GitHub CLI's token, which it reads again at most every 5
+minutes. It looks for `gh` on the `PATH` and, on macOS and Linux, also in `/opt/homebrew/bin` and
+`/usr/local/bin`, because the desktop app started from the Dock or a launcher doesn't get your
+shell's `PATH`. "Sign in with GitHub" gives PR Quest its own token through GitHub's
 [device flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow):
-PR Quest shows a short code, you enter it at <https://github.com/login/device>, and the server
-polls GitHub until you approve. It needs no client secret and no callback, so nothing has to
-reach your machine from outside. It does need a GitHub OAuth App, which you create once.
-
-### Create the OAuth App
-
-1. On GitHub, open **Settings**, then **Developer settings**, then **OAuth Apps**, and choose
-   **New OAuth App**. To own the app as an organization instead, use the organization's
-   **Settings → Developer settings → OAuth Apps**.
-2. Fill in the form:
-   - **Application name**: for example `PR Quest (local)`. GitHub shows it when you authorize.
-   - **Homepage URL**: `http://127.0.0.1:4318`, the default UI port. If you set
-     `PR_QUEST_UI_PORT`, use your port instead. GitHub only displays it.
-   - **Authorization callback URL**: anything, for example `http://127.0.0.1:4318`. The form
-     requires one, but the device flow never uses it.
-   - **Enable Device Flow**: checked. Without it, GitHub refuses to issue codes.
-3. Choose **Register application** and copy the **Client ID**. You don't need a client secret;
-   don't generate one.
-
-### Configure PR Quest
-
-Put the client ID in `~/.pr-quest/.env` (or `.env.local`) and restart PR Quest:
-
-```sh
-PR_QUEST_GITHUB_CLIENT_ID=Ov23li...
-```
-
-A client ID isn't secret: it only names the app, and every sign-in still needs your approval on
-github.com. A team could later commit theirs as the default in `DEFAULT_GITHUB_CLIENT_ID` in
-[`apps/server/src/platform/config.ts`](apps/server/src/platform/config.ts), so nobody has to set it.
-
-Without a client ID, the sign-in button and the settings popup explain this setup and link here.
-
-### Scopes
-
-PR Quest asks for `repo read:org`:
-
-- `repo` to read private PRs, their diffs and reviews, and to post reviews and approvals. GitHub
-  OAuth Apps have no read-only scope for private repositories, so this grants full access to
-  every repo you can access. PR Quest only makes the calls described in
-  [How it works](#how-it-works).
-- `read:org` to see which team a review request came through.
-
-`repo` is broader than PR Quest needs. A GitHub App would be a better fit later: its
-user-to-server tokens can be limited to pull requests, repository contents (read) and
-organization members (read), and they expire after 8 hours.
-
-### Organizations with OAuth App access restrictions
-
-Organizations such as Trackunit can restrict which OAuth Apps may access their data. Until an
-organization owner approves the app, its token can't see that organization's private repos, so
-their PRs don't show up on the board. When you authorize the app, GitHub lists your
-organizations with a **Request** button next to each restricted one; you can also request access
-later under **Settings → Applications → Authorized OAuth Apps**. An organization owner then
-approves it in the organization's settings under **Third-party access → OAuth app policy**.
-Until then, keep using the gh fallback: the GitHub CLI is an OAuth App too, and it works wherever
-the organization already approved it, as Trackunit has. A signed-in OAuth token wins over gh, so
-if you signed in before the approval, **Sign out** to get the organization's PRs back.
-
-### The gh fallback
-
-Without a sign-in, PR Quest uses the token of a logged-in GitHub CLI (`gh auth token`). It looks
-for `gh` on the `PATH` and, on macOS and Linux, also in `/opt/homebrew/bin` and `/usr/local/bin`,
-because the desktop app started from the Dock or a launcher doesn't get your shell's `PATH`. It
-reads the token again at most every 5 minutes, so `gh auth switch` can take that long to show up.
-When you have signed in, the OAuth token wins over gh. **Sign out** forgets the OAuth token, and PR
-Quest goes back to the gh token if there is one. If that token belongs to a different GitHub
-account, PR Quest says so after you sign out. The account chip in the page's top-right corner
-shows who PR Quest acts as; its popout shows where the token came from (**OAuth** or **gh CLI**)
-and, for OAuth, offers **Sign out**. While nobody is signed in, the chip reads **🔑 Sign in**,
-and its popout starts with a **Sign in with GitHub** button.
-
-## The header
-
-The top-right corner of the page holds just two things, so the player box below it shows only
-game info (level, XP, streak and achievements):
-
-- **Live** says whether the live updates stream is connected.
-- The **account chip** shows your avatar and login, or **🔑 Sign in** while nobody is signed in.
-  On narrow screens it shows only the avatar.
-
-The chip opens the account popout. It has the same layout whether you're signed in or not:
-
-1. The account: who PR Quest acts as and the token source, or **Sign in with GitHub**.
-2. **Notifications** and **Sound**, each a switch that shows whether it's on. The first time you
-   turn notifications on, the browser asks for permission; if you blocked them, the switch is
-   off and disabled and says how to allow them again.
-3. **Settings**, the only way into the [settings](#settings) from the header.
-4. **Sign out**, for OAuth sign-ins.
-
-The account popout and the quest board's presets list are small popovers: they open below their
-button and move focus into themselves. `Escape` closes them and returns focus to the button;
-clicking or tabbing outside also closes them. Turning a switch leaves the popout open.
-
-Every control that shows only an icon has a tooltip saying what it does: the account chip, the
-✕ that closes dialogs, dismisses toasts and deletes presets, and the badges of your recent
-achievements. Tooltips show while the mouse hovers or keyboard focus is on the control, and
-`Escape` hides them.
-
-## Settings
-
-**Settings** in the account popout opens the settings popup. It has three sections:
-
-- **GitHub account**: who PR Quest acts as and the token source, with sign-in and sign-out.
-- **Review provider**: who reviews your quests, and with which model.
-- **API keys**: set, replace or remove the Cursor, Claude (Anthropic) and Linear keys.
-
-The popup traps focus and closes on `Escape` or ✕, also after the focused button goes away, for
-example when you sign out. While a change is being saved, it stays open and takes one change at a
-time. A "Send review agent" error caused by a missing key offers **Open settings**, which opens
-the popup with that key's input focused.
-
-**API keys** show only whether each key is set, its last four characters (for keys of 12
-characters or more) and its source: `settings` when it was saved from the popup, `env` when it
-comes from the environment or an env file. Environment keys win over saved ones and are
-read-only in the popup; change them in the env file and restart. Saved keys apply to the next
-request without a restart. Removing a key asks for confirmation first. The key values themselves
-never leave the server. The key inputs ask 1Password, LastPass and Bitwarden not to save them; a
-browser's built-in password manager may still offer to.
-
-Keys belong to this computer, not to a GitHub account: every GitHub account that signs in here
-uses the same saved keys, and signing out doesn't remove them. The review provider and models are
-shared the same way.
-
-### Review providers and models
-
-- **Cursor** sends a Cursor cloud agent, which checks out the repo and reviews the PR there. It
-  needs a Cursor API key.
-- **Claude** sends the PR's diff to Anthropic's Messages API. It needs an Anthropic API key and
-  never sees the rest of the repo; see [Claude reviews](#claude-reviews).
-
-Each provider has its own model setting. With the provider's key, the list comes from the
-provider (Cursor's model list, Anthropic's `GET /v1/models`); without it, or when the provider
-can't be reached, the popup shows a built-in fallback list and says so. The list reloads when the
-provider's key changes. The default for Cursor is Cursor's own default model; for Claude it is
-`claude-sonnet-5-5`. The provider and models are saved in `settings.json`; the result screen
-shows which provider and model reviewed each run.
-
-## Run it
-
-```sh
-gh repo clone bchTrackunit/pr-quest
-cd pr-quest
-yarn install
-yarn dev
-```
-
-`yarn dev` starts the API on <http://127.0.0.1:4317>, restarting it when the server code changes,
-and the UI on <http://127.0.0.1:4318> with hot reload. Open the UI in a browser or in Cursor's
-browser tab. The UI proxies `/api` to the server and receives live updates over server-sent
-events; the indicator in the header shows "Live" when it is connected.
-
-To run the production build instead:
-
-```sh
-yarn build
-yarn start
-```
-
-`yarn build` builds the UI into `apps/web/dist/` and bundles the server into `apps/server/dist/`
-with [esbuild](https://esbuild.github.io). `yarn start` runs `node apps/server/dist/main.js`, which
-serves the API and the built UI together on <http://127.0.0.1:4317>; there is no separate UI port.
-Without an `apps/web/dist/` build it serves only the API and says so. The bundle leaves `@cursor/sdk` and
-`@anthropic-ai/sdk` out, so it still needs the repo's `node_modules`.
-
-### Hosted mode
-
-`PR_QUEST_MODE` is `local` by default: one player on their own machine, listening on `127.0.0.1`
-only. Local mode refuses a `PR_QUEST_HOST` other than `127.0.0.1`, and refuses the hosted-only
-settings, so a typo can't expose the server.
-
-`PR_QUEST_MODE=hosted` is groundwork for serving many players from one address. It needs
-`PR_QUEST_PUBLIC_ORIGIN`, the origin browsers load PR Quest from (for example
-`https://pr-quest.example`), listens on `PR_QUEST_HOST` (default `::`, every interface) and accepts the Host
-names in `PR_QUEST_ALLOWED_HOSTS` (comma-separated, default the public origin's host name).
-Every player brings their own keys, so hosted mode refuses to start with `CURSOR_API_KEY`,
-`ANTHROPIC_API_KEY` or `LINEAR_API_KEY` set, and the server warns when the public origin is plain
-`http:` to anything but loopback. Hosted mode also needs a sign-in that tells players apart and storage for each of them, which
-don't exist yet, so `yarn start` refuses to start in hosted mode. Code that embeds the server
-supplies them through `startServer` in
-[`apps/server/src/app/server.ts`](apps/server/src/app/server.ts).
-
-The server checks GitHub every 2 minutes and when you press **Refresh**. Loading the page or
-reconnecting the live stream never forces a GitHub call; both use the server's cached list.
-
-## Desktop app
-
-The desktop app is the same server and UI in a native window. A small [Tauri](https://tauri.app)
-shell (Rust, in [`apps/desktop/src-tauri/`](apps/desktop/src-tauri)) opens the operating system's own web view (WebKit on
-macOS and Linux, WebView2 on Windows) and starts the server as a sidecar: a Node binary bundled
-with the app runs [`apps/desktop/src/sidecar/main.ts`](apps/desktop/src/sidecar/main.ts) in local mode.
-The window shows only PR Quest. `http`, `https` and `mailto` links, such as a PR on GitHub, open
-in your browser; links with any other scheme and navigation away from the app are blocked.
-Opening the app a second time brings the open window to the front.
-
-```sh
-just desktop-dev        # run the shell from source (a debug build) with its log in the terminal
-just desktop-package    # build the app and installers for this machine
-just desktop-smoke      # check what desktop-package made
-just desktop-check      # Rust format check, Clippy and unit tests
-just cargo-deny         # audit the Rust crates (needs `cargo install cargo-deny --locked`)
-```
-
-Building needs [rustup](https://rustup.rs), which installs the Rust that `rust-toolchain.toml`
-(at the root, so rustup finds it from wherever cargo runs) pins, as well as Node and Yarn, and on Linux the
-WebKitGTK development packages; on Debian and Ubuntu:
-
-```sh
-sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
-  libdbus-1-dev libssl-dev libxdo-dev patchelf file
-```
-
-### Packaging
-
-`just desktop-package` builds for the operating system and processor it runs on, or for
-`--target <triple>`. The bundles land in `apps/desktop/src-tauri/target/<triple>/release/bundle/` (under
-`$CARGO_TARGET_DIR` when that is set):
-
-| Target                      | Bundles                                                       |
-| --------------------------- | ------------------------------------------------------------- |
-| `aarch64-apple-darwin`      | `macos/PR Quest.app` and `dmg/PR Quest_<version>_aarch64.dmg` |
-| `x86_64-apple-darwin`       | `macos/PR Quest.app` and `dmg/PR Quest_<version>_x64.dmg`     |
-| `x86_64-unknown-linux-gnu`  | `appimage/*.AppImage` and `deb/*.deb`                         |
-| `aarch64-unknown-linux-gnu` | `appimage/*.AppImage` and `deb/*.deb`                         |
-| `x86_64-pc-windows-msvc`    | `nsis/PR Quest_<version>_x64-setup.exe`                       |
-
-`--bundles app` (or `appimage`, `deb`, `nsis`) builds fewer. `--skip-build` reuses `apps/web/dist/`, and
-`--layout-only` stops after laying out the sidecar, which `cargo` needs before it can build the
-shell. `--compile-only` stops after compiling the shell, with no signing settings, and
-`--skip-compile` signs and bundles what it compiled, after laying out the sidecar's packages and
-Node again; the release workflow compiles in one job, without its signing secrets, and bundles
-in another, from a fresh checkout. Each target takes Node from nodejs.org at a pinned version and SHA-256
-([`apps/desktop/scripts/desktop/targets.ts`](apps/desktop/scripts/desktop/targets.ts)), and the Cursor SDK's native parts
-(its sandbox, `rg` and the tree-sitter binding) from `node_modules`. `yarn install` fetches only
-this machine's copy of those, so the build stops if the target's `@cursor/sdk-<os>-<cpu>` package
-is missing or another platform's would be bundled. On an Intel Mac, or an Intel CI runner, a
-plain `yarn install` gets the right one. To build `x86_64-apple-darwin` on Apple silicon, add
-`supportedArchitectures` with `cpu: [current, x64]` to `.yarnrc.yml` for the install, without
-committing it.
-
-The macOS dmg step retries up to 3 times: `hdiutil create` often fails with "Resource busy" the
-first time, and a leftover mount of the volume would break every later attempt, so each attempt
-detaches it first. On Linux, the AppImage must not bundle `libwayland-client`, which breaks the
-app on newer Wayland desktops ([tauri#15665](https://github.com/tauri-apps/tauri/issues/15665)).
-The linuxdeploy that Tauri CLI 2.12 uses leaves it out already; if a later one doesn't, the
-package step takes it out and repacks with a pinned `appimagetool` and runtime.
-
-### Smoke test
-
-`just desktop-smoke [artifact]` starts the packaged app in smoke mode (`PR_QUEST_SMOKE_TEST=1`)
-with a throwaway state directory and without your `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and
-`LINEAR_API_KEY`, prints one `[smoke] ok` or `[smoke] FAIL` line per check, quits, and exits
-non-zero if any failed. Without an artifact it checks the app, AppImage or installer that
-`desktop-package` made for this machine (or `--target`). It also takes a `.dmg` (mounted and
-detached again), a `.deb` (unpacked), a `-setup.exe` (installed silently into a temporary
-folder and uninstalled) or an executable.
-
-The checks: the bundle ships Node as `pr-quest-node`, never as `node`; the OS keychain can make,
-read and delete a data key; the UI renders with nothing blocked by its Content Security Policy;
-the start-up link leaves the window on `/` and works only once; the request secret travels as an
-`HttpOnly` cookie scripts can't read; the page can't call the shell or its plugins over IPC;
-**View > Reload**, which has the server issue a new start-up link, brings the UI back; the
-updater builds with its key; the server refuses a request without the secret; a saved key is encrypted on disk;
-both SDKs load with their native parts; and a call with a made-up key reaches Cursor and
-Anthropic and is refused as unauthenticated. The live event stream needs a GitHub sign-in too,
-so without one, as on CI, the cookie check confirms the events route accepts the cookie instead
-of opening the stream.
-
-`--headless` (Linux) runs it under `xvfb-run` in its own D-Bus session with a throwaway unlocked
-gnome-keyring, so it needs `xvfb`, `xauth`, `dbus` and `gnome-keyring`. `--no-keychain` is for a
-machine without a keychain: the keychain check is skipped and the encryption check instead
-confirms that saved keys stay in memory. The app's smoke mode refuses to start without
-`PR_QUEST_STATE_DIR`, so it never touches your real state. On macOS, `just desktop-measure`
-reports the packaged app's idle memory per process and checks that quitting stops the server,
-that a crashed server is restarted, and that the app gives up after 3 crashes.
-
-### The window and the server
-
-The server only answers requests carrying a secret made fresh at each start, which the window
-gets as an `HttpOnly`, `SameSite=Strict` cookie from a one-time start-up link, so other programs
-and pages on your machine can't call it even though it listens on `127.0.0.1`. `GET /api/health`
-is the exception. The web view has no developer tools in a packaged app, and every browser
-permission is denied except notifications for the app's own pages.
-
-If the server stops unexpectedly, the app starts it again and reloads the window, up to 3 times in
-10 minutes; after that, or if it can't start at all, the app shows what went wrong and where its
-log is, then quits. Quitting waits at most 5 seconds for the server to stop. On Windows the server
-runs without a console window, in a job object that ends it with the app.
-
-**Unsigned builds.** Without signing settings the app is unsigned, so macOS Gatekeeper and
-Windows SmartScreen warn before the first start. On macOS 15 and later, open the app once, then
-choose **Open Anyway** in **System Settings > Privacy & Security**; on earlier versions,
-right-click the app and choose **Open**. macOS may also ask for your login password when a
-rebuilt app reads the keychain entry an earlier build made. On Windows, choose **More info** and
-**Run anyway**. An AppImage needs to be made executable (`chmod +x`) and FUSE; without FUSE, set
-`APPIMAGE_EXTRACT_AND_RUN=1`.
-
-**Linux graphics.** With the proprietary NVIDIA driver, WebKitGTK can show a blank or flickering
-window. Start the app with `WEBKIT_DISABLE_DMABUF_RENDERER=1` in its environment to work around
-it.
-
-### State
-
-The app uses the same `~/.pr-quest` (or `PR_QUEST_STATE_DIR`) and `.env` as `yarn start`; see
-[Where state lives](#where-state-lives). Don't run both on the same state directory at once: each
-keeps its own copy in memory and overwrites the other's writes. The app picks a free port the
-first time and reuses it, so the board's filters and presets, which the web view keeps per
-address, survive a restart; if another program has taken the port since, the app picks a new
-one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and `PR_QUEST_UI_PORT`,
-and refuses to start with `PR_QUEST_MODE=hosted`.
-
-The port and the choices you make in the app's dialogs are kept in `desktop.json`, and the log in
-`main.log`, which starts over as `main.old.log` past 5 MB:
-
-| OS      | `desktop.json`                                      | `main.log`                                |
-| ------- | --------------------------------------------------- | ----------------------------------------- |
-| macOS   | `~/Library/Application Support/com.prquest.desktop` | `~/Library/Logs/com.prquest.desktop`      |
-| Linux   | `~/.config/com.prquest.desktop`                     | `~/.local/share/com.prquest.desktop/logs` |
-| Windows | `%APPDATA%\com.prquest.desktop`                     | `%LOCALAPPDATA%\com.prquest.desktop\logs` |
-
-**Saved keys.** The app keeps the GitHub token and the API keys from Settings in
-`secrets.encrypted.json`, encrypted (AES-GCM) with a data key it keeps in the OS keychain as
-`com.prquest.desktop` / `secrets-data-key`: the macOS Keychain, the Windows Credential Manager,
-or the Secret Service on Linux (GNOME Keyring, or KWallet 5.97 and later). Only the macOS
-Keychain asks you before another app reads the entry. The Windows Credential Manager and the Secret
-Service have no per-app access control, so any program running as you can read the data key
-there, and with it decrypt the file; on those systems the encryption keeps the keys out of
-backups and other users' reach, not away from your own programs. Whenever it finds a
-`secrets.json`, it imports it. If that file is newer than the encrypted one, as when `yarn start`
-saved a key since, its keys replace the encrypted ones; otherwise only keys the encrypted file
-lacks are taken. The log names any key that was replaced or kept, never its value. The app
-decrypts the result to check it before deleting `secrets.json`; no plain copy is kept. If the
-check fails, both files stay as they are and the app offers to try again or to continue without
-saved keys. From then on, `yarn start` no longer sees those keys, so set them in `.env` or the
-environment for it.
-
-Without a usable keychain, such as on Linux without a Secret Service, the app reads
-`secrets.json` but keeps new keys in memory until it quits, and says so once in a dialog.
-Deleting a key, as **Sign out** does, removes it from `secrets.json` too, so it doesn't come back
-on the next start. Choosing **Save Them Unencrypted** there, and confirming it, writes
-`secrets.json` from then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the keychain isn't
-available, the app starts without saved keys and never writes `secrets.json`, so the encrypted
-file stays the only copy. Each value is bound to its key's name, and the file names the data key
-it was encrypted with by a short hash. If that isn't the keychain's data key, as after the
-keychain entry was deleted and the app made a new one, the app says so, starts without saved
-keys, keeps new ones in memory and leaves the file alone; **Start Over** moves it aside as
-`secrets.encrypted.<key id>.<time>.json` and saves keys with the new data key. If the keychain
-can't decrypt the file otherwise, as when access was denied, or the file is damaged, the app says
-which and offers to try again or to continue without saved keys; the file is left in place until
-you save a key, which replaces it.
-
-### Updates
-
-A release build checks `https://github.com/<repo>/releases/latest/download/latest.json` at start
-and every 6 hours. A newer version downloads in the background, and the updater checks its
-signature against the public key built into the app before keeping it; the app then offers to
-restart into it, or installs it when you quit. It never installs an older or the same version.
-Set `PR_QUEST_DISABLE_UPDATES=1` to turn updates off. The `.deb` never updates itself, since the
-package manager owns it; **Help > Download the Latest Version** opens the latest release. Any
-other build, including a plain `just desktop-package`, never checks for updates.
-
-A release build is one packaged with `PR_QUEST_RELEASE_BUILD=1`, `PR_QUEST_RELEASE_REPO` set to
-the GitHub `owner/name` it checks and that **Help** opens, and `PR_QUEST_UPDATER_PUBKEY` set to
-the updater's public key. It stops if the repository is still the `CHANGE-ME` placeholder (in any
-case) or the key is missing, and on macOS and Windows if it wouldn't be signed (see
-[Signing](#signing)), unless `PR_QUEST_ALLOW_UNSIGNED_RELEASE=1`, which the release workflow sets
-only for its dry runs. With `TAURI_SIGNING_PRIVATE_KEY` (and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one) it also writes the update files next to the
-bundles: `PR Quest.app.tar.gz`, the AppImage and the `-setup.exe`, each with a `.sig`.
-`just desktop-verify-updater <file>` checks a `.sig` against the key. Make a key pair with
-`yarn workspace @pr-quest/desktop exec tauri signer generate`. The release workflow never gives
-its compile or bundle jobs the private key: it makes the macOS update archive itself and signs the update
-files in a job of their own, then uploads them with a `latest.json` that lists them.
-
-### Signing
-
-Signing is off unless these are set in the environment of `just desktop-package`. Without an
-identity on macOS, Tauri signs the whole app ad hoc, with the hardened runtime and only the two
-entitlements Node needs, `allow-jit` and `disable-library-validation`
-([`entitlements-ad-hoc.plist`](apps/desktop/scripts/desktop/entitlements-ad-hoc.plist)). The
-bundle is sealed, and the bundled Node loses the official binary's debugging entitlements such as
-`get-task-allow`, so no debugger can attach to it; the package step checks the result. Publishing a release is described in
-[RELEASING.md](RELEASING.md).
-
-| Variable                                                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `APPLE_SIGNING_IDENTITY`                                  | The Developer ID Application identity, already imported into a keychain. Every Mach-O file in the sidecar is signed with the hardened runtime first, then Tauri signs the app and Node with `apps/desktop/src-tauri/entitlements.plist`, which allows only JIT; the package step refuses a Node with any other entitlement. Ad-hoc (`-`) is refused, because library validation would stop Node from loading the SDK's native parts. |
-| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | Notarize with an App Store Connect API key.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`             | Or notarize with an Apple ID and an app-specific password.                                                                                                                                                                                                                                                                                                                                                                           |
-| `PR_QUEST_WINDOWS_SIGN_COMMAND`                           | A command with `%1` for the file, such as `trusted-signing-cli -e <endpoint> -a <account> -c <profile> %1` or `signtool sign /fd SHA256 /tr <url> /td SHA256 /sha1 <thumbprint> %1`. It signs the sidecar's `.node`, `.exe` and `.dll` files, then Tauri uses it for the app and the installer.                                                                                                                                      |
-
-## Checks
-
-| Command                | What it does                                                                                  |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `yarn typecheck`       | Type-checks each package and its tests                                                        |
-| `yarn lint`            | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware                       |
-| `yarn lint:fix`        | Applies oxlint's safe fixes                                                                   |
-| `yarn format`          | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)                      |
-| `yarn format:check`    | Fails if a file isn't formatted                                                               |
-| `yarn test`            | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
-| `yarn build`           | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
-| `yarn start`           | Runs the production build; see [Run it](#run-it)                                              |
-| `yarn desktop:package` | Packages the desktop app; see [Desktop app](#desktop-app)                                     |
-
-Each package also has its own `dev`, `test` and `typecheck` scripts, for example
-`yarn workspace @pr-quest/server test`. `yarn workspace @pr-quest/server build` bundles only the
-server.
-
-With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
-tests and build, as CI does on every pull request and every push to `main`. It doesn't build the
-Rust shell of the desktop app; `just desktop-check` and `just cargo-deny` check that.
-
-oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
-`oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums and the
-[project structure](#project-structure) boundaries) are a small oxlint JS plugin in
-`oxlint-plugins/local.js`. oxfmt reads `.oxfmtrc.json`. For editor support, install the
-recommended [Oxc extension](https://marketplace.visualstudio.com/items?itemName=oxc.oxc-vscode).
-
-`yarn typecheck` runs TypeScript 7, the native compiler, which ships as the `typescript` package.
-It has no `tsserver`, so keep your editor on its bundled TypeScript rather than "Use Workspace
-Version".
-
-The UI is built with the [React Compiler](https://react.dev/learn/react-compiler)
-(`babel-plugin-react-compiler`, run by `@vitejs/plugin-react`), which memoises components and
-hooks. `vite build` prints how many it memoised and lists any it skipped; a skipped component
-still works, it just isn't memoised. Vitest reuses `apps/web/vite.config.ts`, so the jsdom UI tests
-run the compiled components. oxlint checks the Rules of React the compiler relies on with its built-in
-port of the compiler's lint rules (`react/purity`, `react/refs`, `react/immutability` and the
-others listed in `.oxlintrc.json`), and `react/todo` warns about code the compiler can't compile
-yet.
-
-## Project structure
-
-The repo is a set of [Yarn workspaces](https://yarnpkg.com/features/workspaces): the server and
-the UI are separate packages, each with its own dependencies, TypeScript and Vitest config, and
-they share code only through `@pr-quest/contract`. Tests sit next to the code they test.
-
-```text
-apps/
-  desktop/      @pr-quest/desktop, the desktop app (see Desktop app below)
-    src/        the server side: the sidecar the Tauri shell starts (sidecar/), its secrets,
-                preferences and smoke checks; it embeds @pr-quest/server
-    src-tauri/  the Tauri shell, in Rust
-    scripts/    packaging, signing, smoke tests and measurements of the desktop app
-  server/       @pr-quest/server, the API (Node: tsx in development, an esbuild bundle in production)
-    src/
-      main.ts   entry point of the production build
-      app/      composition root: dev.ts (dev entry), server.ts (startServer, for embedding),
-                app.ts, the HTTP route tables, identity.ts (who a request acts as), storage.ts
-                (where secrets, settings and player state live), per-player sessions and state dirs
-      features/ one folder per feature, listed below
-      platform/ router and security guards, config, SSE events, GitHub API wrapper, rate limits,
-                private files and secrets
-  web/          @pr-quest/web, the React UI (Vite)
-    index.html
-    vite.config.ts
-    src/
-      main.tsx  entry point
-      app/      composition root: App.tsx, the header controls and preferences, the game
-                controller hook and the live event stream
-      features/ one folder per feature, listed below
-      platform/ API client, store, Modal, Popover, Tooltip, formatting and clock helpers,
-                notifications, styles
-packages/
-  contract/     @pr-quest/contract, what the server and UI agree on: the API types and routes
-                (api.ts), the ports, the review prompt and result schema (reviewResult.ts), the
-                Cursor review gate (cursorReview.ts) and finding decisions (findingDecisions.ts)
-scripts/
-  restructure.ts  moves files from the old src/ layout; see below
-```
-
-Both apps split their code into the same features, so a feature has a server half and a UI half:
-
-| Feature    | Server                                              | UI                                 |
-| ---------- | --------------------------------------------------- | ---------------------------------- |
-| `auth`     | GitHub device flow, token resolution                | the GitHub account control         |
-| `settings` | API keys, review provider and model settings        | the settings dialog                |
-| `game`     | XP, levels, achievements, streaks, the state store  | HUD, toasts, XP popups             |
-| `quests`   | GitHub and Linear clients, quest cache and polling  | the quest board, filters and cards |
-| `reviews`  | review runs, Cursor and Claude reviews, diff budget | review result and approve dialog   |
-
-Each feature folder has an `index.ts` that is its public entry. Other code imports from
-`@pr-quest/contract/<module>`, such as `@pr-quest/contract/api`; the package has no build step and
-exports its TypeScript source.
-
-Dependency rules, enforced by `yarn lint`:
-
-- `@pr-quest/server` and `@pr-quest/web` use `@pr-quest/contract`, and `@pr-quest/contract` uses
-  no other package. `@pr-quest/desktop` uses `@pr-quest/server`, which exports only what embedding
-  it takes (`@pr-quest/server/server`, `/privateFiles` and `/secrets`); nothing uses
-  `@pr-quest/desktop`. The allowed edges are `PACKAGE_GRAPH` in `oxlint-plugins/local.js`, and each
-  one must also be a dependency in the importing package's `package.json`. The web app and the
-  desktop app export nothing, and a relative import never leaves its package.
-- Inside an app, `platform/` never imports from a feature or `app/`.
-- A feature imports its own files, its app's `platform/` and `@pr-quest/contract`. It reaches
-  another feature only through that feature's `index.ts`, never a deeper file. Tests may also use
-  another feature's `test-utils/`.
-- Only `app/` and `main.ts` import from `app/`, and they also go through each feature's `index.ts`.
-- There are no import cycles (`import/no-cycle`). The features form one direction: `reviews`
-  uses `quests`, `game` and `settings`; `quests` uses `game` and `settings`; `game` uses
-  `settings`; `settings` uses `auth`.
-
-`yarn typecheck` adds one more: `@pr-quest/contract` runs in the browser and in Node, so its source
-is type-checked with neither DOM nor Node types, and the UI's source without Node types.
-
-### Moving a branch from the old layout
-
-Before this layout, both halves lived under `src/`, as `src/features/<name>/server/` and
-`src/features/<name>/ui/`. A branch started before the move should merge `main` first, so git
-follows the renamed files, and then run the script, which moves any files still under `src/` and
-fixes the relative imports that no longer resolve:
-
-```sh
-git merge origin/main
-# If package.json conflicts, resolve it first: Node won't start while it has conflict markers.
-node scripts/restructure.ts
-yarn install && yarn format && yarn typecheck && yarn lint
-```
-
-What to expect from the merge:
-
-- `CONFLICT (file location)` for files the branch added under `src/`. Git has already put them in
-  the new folders, so `git add` them.
-- Many files show as conflicted only because they were renamed; they have no conflict markers.
-- Import lines that conflict already have the right paths on the branch's side once the script has
-  run.
-- Dependencies the branch added to the root `package.json` belong in `apps/server/package.json` or
-  `apps/web/package.json` now; the root keeps only repo-wide tools. Nothing fails if you forget,
-  because Yarn hoists every package to the root `node_modules`.
-- For a `yarn.lock` conflict, take `main`'s side and let `yarn install` add the branch's
-  dependencies back.
-- The script lists paths it can't fix, such as one that now points into the other app or a
-  `new URL()` path into `@pr-quest/contract`. It leaves paths relative to a build output rather
-  than the source file, such as `../dist`, alone.
-- `apps/desktop/src/` moves to `apps/desktop/src/`, which needs its own `package.json` and an entry in
-  `PACKAGE_GRAPH`.
-
-Don't run the script on the branch before merging: git then sees two unrelated copies of every
-file and conflicts far more. Running the script again changes nothing once every path resolves.
-
-## How it works
-
-PR Quest calls GitHub's REST and GraphQL APIs directly with `fetch` and your token. It runs no
-`gh` commands apart from `gh auth token` for the [gh fallback](#the-gh-fallback).
-
-- **Quests** come from a `GET /search/issues` search for `review-requested:@me`, which includes
-  team requests. A second search with `user-review-requested:@me` tells direct requests apart.
-  Branches, diff stats, draft state, latest reviews and requested teams for every PR come from
-  batched GraphQL queries (25 PRs per query). If a batch fails, PR Quest falls back to one query
-  per PR, except when the failure is a rate limit. A PR whose details still can't be read is left
-  off the board. If that happens to more than half of the PRs the search found, the
-  refresh counts as failed: the server logs a warning and keeps serving the previous list, so a
-  network problem can't empty the board.
-- **Approvals by others** come from each PR's latest reviews. A PR counts as approved by others
-  when someone other than you has an `APPROVED` latest review.
-- **Linear** is optional. With a Linear key, the server calls Linear's MCP `list_diffs` tool
-  to add each PR's Linear review link and `needsAttention` flag. Any Linear failure falls back to
-  GitHub data only.
-- **Tiers** use additions plus deletions: Trivial under 50 lines, Normal under 400, Hard under
-  2,000 lines and 50 files, and Boss above that.
-- **Sorting** is described in [Filtering and sorting](#filtering-and-sorting).
-
-## Filtering and sorting
-
-The bar above the quest cards narrows and orders the board. Everything runs in the browser on
-the list the server already has, so filtering never calls GitHub.
-
-The bar is one row: the search box, the **Sort** select, the **Presets** dropdown and a
-**Filters** button. **Filters** opens a panel with Difficulty, Agent and Hide; the button shows
-how many of those are on, and `Escape` or a second click closes the panel. Below the row, a line
-shows how many quests match and one chip per active filter.
-
-- **Search** matches the title, author, source branch and PR number. `#123` matches PR 123 in
-  any repo, and `repo#123` or `owner/repo#123` matches one repo's PR. Several words must all
-  match. Press `/` to jump to the search box, `Escape` to clear it and `Enter` to apply it
-  without waiting for the short typing delay.
-- **Requests** (All, Direct, Team) are the buttons in the board header. With All, the board is
-  grouped into direct and team requests; the other filters and the sort apply inside each group.
-- **Difficulty** and **Agent** (in the Filters panel) are multi-select. Agent states are Not
-  started, Running (queued or running), Loot ready (findings you haven't posted or discarded yet)
-  and Failed. Selecting nothing in a group means "any".
-- **Hide** (in the Filters panel) has two on/off switches: **Drafts** and **Approved by others**.
-- **Sort**: _Smart_ (the default) puts direct requests first, then PRs that need attention, then
-  the longest-waiting. _Smallest first_ and _Largest first_ order by additions plus deletions,
-  using changed files as the tie-breaker.
-
-Active filters show as chips you can remove one at a time, or all at once with **Clear all**.
-The count says how many quests are shown out of the total. If the filters hide every quest, the
-board says so and offers to clear them; this is different from Inbox Zero, which means GitHub
-returned no review requests.
-
-The buttons in each filter group support the arrow keys, `Home` and `End`, and every toggle
-reports its state to screen readers with `aria-pressed`.
-
-### Presets
-
-**Presets** save the current filters and sort under a name. The **Presets** dropdown lists them
-and shows the name of the one that matches the current view. Choosing a preset applies it and
-closes the dropdown. Two built-in presets, marked ★, can't be deleted:
-
-| Preset     | Difficulty      | Other settings                                        |
-| ---------- | --------------- | ----------------------------------------------------- |
-| Quick wins | Trivial, Normal | Hide drafts, hide PRs others approved, smallest first |
-| Boss rush  | Hard, Boss      | Largest first                                         |
-
-Choose **Save current…** in the dropdown to add your own (up to 20, names up to 40 characters);
-✕ next to one of yours deletes it. Saving under an
-existing name replaces that preset. The board remembers your last filters and sort in the
-browser's `localStorage` (`pr-quest:board-view:v1`, presets in `pr-quest:presets:v1`). Saved data
-that can't be read is ignored and the defaults are used instead.
-
-## GitHub rate limits
-
-GitHub's search API allows 30 searches a minute, and each refresh uses 2. PR Quest avoids
-spending them and copes when it runs out anyway:
-
-- **Cache on disk.** The last successful list is saved to `quests.json` in the state directory.
-  On startup the server serves it straight away and only asks GitHub again when it is more than
-  60 seconds old. The 2-minute poll also skips GitHub while the list is fresh.
-- **Detection.** A failed response with `x-ratelimit-remaining: 0`, or an error mentioning "API
-  rate limit exceeded", is a primary limit. A `retry-after` header, "secondary rate limit", abuse
-  detection and HTTP 429 are secondary limits. A plain HTTP 403 is not treated as a rate limit,
-  because GitHub also uses it for missing permissions and SAML.
-- **Backoff.** PR Quest waits until the reset time GitHub sent in the failed response's
-  `x-ratelimit-reset` or `retry-after` header. Without one, it reads the reset time from
-  `GET /rate_limit`, which doesn't count against the limit. When there is still no reset time, it
-  waits 60 seconds, doubling on each repeat up to 10 minutes. The backoff is saved with the
-  cache, so restarting the server doesn't retry early.
-- **During the backoff** the poll, the **Refresh** button and `?refresh=1` don't call GitHub. The
-  API returns the cached quests with `stale: true` and `rateLimit: { kind, limitedUntil }`, and
-  the server retries once on its own when the backoff ends.
-- **In the UI** a calm banner says, for example, "GitHub rate limit reached, showing results
-  from 14:02, retrying at 14:03." Refresh is disabled and counts down to the retry. A list older
-  than 60 seconds shows "cached" next to the fetch time.
-
-If GitHub limits PR Quest before it has ever fetched a list, there is nothing to show, so the
-API returns a `503` with the code `rateLimited` and the board shows that as an error.
-
-### The review agent and its safety limits
-
-With the Cursor provider, "Send review agent" starts a Cursor cloud agent through `@cursor/sdk`,
-pinned to the PR's head
-commit: the quest's `headSha` is the agent's starting ref, so pushes made after you send it don't
-change what it reviews. The repo is always the base repo. The prompt names the exact commit and
-tells the agent to check it out from `pull/<number>/head` if it didn't start there, which also
-works for PRs from forks. The agent:
-
-- reviews only `git diff origin/<target>...HEAD` at that commit, reading other code just for
-  context;
-- is told never to commit, push, create branches, open or update a PR, approve or comment;
-- returns a JSON report (`summary`, advisory `verdict`, `findings` with file, line, severity and
-  body, and `reviewedSha`, the commit it reviewed), which the server validates. If `reviewedSha`
-  is missing or isn't the commit it was sent to, the run fails instead of offering findings whose
-  line numbers may be wrong.
-
-**Which PRs the Cursor agent reviews.** The server refuses a Cursor review, before anything is
-queued, and suggests Claude instead, when:
-
-- the PR's author isn't in the repo's org or one of its collaborators: GitHub's
-  `authorAssociation` isn't `OWNER`, `MEMBER` or `COLLABORATOR`. Outside contributors,
-  first-time contributors and most bots are refused. The exception is a short list of trusted
-  bots, `dependabot[bot]` and `renovate[bot]`, which GitHub gives no role (`NONE`). GitHub
-  reserves the `[bot]` suffix for GitHub Apps, so no person can open a PR under those logins.
-  This is a weaker guarantee than for members: see the bot PR risk under "What the agent can
-  do";
-- the PR comes from a fork (`isCrossRepository`). None of the roles above implies write access,
-  but a branch in the base repo can only have been pushed by someone who has it, so steering the
-  agent gains them nothing they can't already do. Members and collaborators who work from forks
-  are refused too.
-
-While either is unknown, for example on a board cached by an older version, refreshing the board
-fixes it. The server also refuses a Cursor review when either branch name contains anything but
-letters, digits and `. _ / + @ = -`, or starts with `-` or `+`. Git allows `;`, `$`, `|`,
-backticks and quotes in branch names, and the prompt asks the agent to run commands that contain
-them. The names that pass are also quoted in the prompt.
-
-The board applies the same rules: with the Cursor provider selected, a quest the agent would
-refuse has its "Send review agent" button disabled, the reason under it and a shortcut to the
-provider setting.
-
-**What the agent can do.** The cloud agent runs with your Cursor identity, through your Cursor
-GitHub integration, on PR content that the PR's author controls: the code, the title and the
-description. Cloud agents don't accept a system prompt or tool restrictions, so the rules above,
-including "never commit" and "never approve", exist only in the prompt. A PR that contains a
-prompt injection could talk the agent out of them. The only hard guard is `autoCreatePR: false`,
-which stops the SDK from opening a PR for the agent's work. PR Quest also sets
-`workOnCurrentBranch: false`, but the SDK doesn't document what that prevents, so don't rely on
-it.
-
-On Dependabot and Renovate PRs, the content isn't controlled by someone who can already push.
-The description quotes upstream release notes, changelogs and commit messages, written by the
-dependency's maintainers, and the lockfile points at a version they published. A malicious or
-compromised release can carry a prompt injection, and the prompt's "treat it as data" is the
-only defence. If the repo's Cursor cloud environment installs dependencies, that install also
-runs the new version's install scripts inside the agent. Review such PRs with Claude when you
-don't trust the upstream release.
-
-### Claude reviews
-
-With the Claude provider, the server reviews the PR's diff, never the repo:
-
-- **The diff is pinned to the quest's head commit.** It comes from GitHub's compare API
-  (`<target>...<headSha>`), which shows the same changes as the PR. If that fails, PR Quest uses
-  the PR's own diff, but only while the PR's head is still that commit.
-- **Files are left out before the diff is sent.** Lockfiles (such as `yarn.lock` and
-  `package-lock.json`), generated files (`dist/`, `build/` and `out/` at the repo root, `vendor/`
-  and `node_modules/` anywhere, snapshots, `*.min.js`, source maps and similar) and binary files
-  are dropped. The rest are kept in order while they fit in about 280,000 characters. If
-  Anthropic still says the prompt is too long, the run fails with that message and isn't retried. A file that doesn't fit is left out as too
-  large, but smaller files after it still get in. If nothing is left, the review fails without
-  calling Anthropic.
-- **Claude is told what it can't see.** The prompt lists up to 200 omitted files by name and
-  reason, as escaped strings so a file name can't add lines to the prompt, then says how many more
-  there are. The result screen shows all of them under **Omitted files**, and a posted review
-  lists up to 50.
-- **PR content is treated as data.** The title, branches and diff sit between delimiters with a
-  random nonce, and the system prompt says never to follow instructions inside them and to report
-  attempts to steer the reviewer as a security finding.
-- **The answer is a forced tool call.** The request offers one tool, `submit_review`, and makes
-  Claude call it. The server validates its input as the same report the Cursor agent returns,
-  with up to 16,000 output tokens. A refusal, a truncated answer or invalid output fails the run.
-
-**What Claude can do.** Nothing outside its answer. The Claude provider can't run code, read the
-repo or write anywhere: the request has no tools that act, `submit_review` is only read by PR
-Quest, and nothing Claude returns reaches GitHub until you choose **Post to PR**. A prompt
-injection in the diff can still make the review itself wrong or misleading, so read the findings
-as advice. The diff, title and branch names are sent to Anthropic under your API key.
-
-### What PR Quest does with the findings
-
-**What PR Quest itself does.** PR Quest never turns agent output into an approval. The verdict is
-shown as advice only, the post endpoint accepts only `comment` and `requestChanges`, and the only
-approve path is the **Approve** dialog. Findings appear on a result screen first, and nothing
-reaches GitHub until you choose **Post to PR** and confirm.
-
-**Accepting and rejecting findings.** Every finding starts undecided. Each finding card has a
-✓ **Accept** and a ✕ **Reject** toggle; pressing the one that's on makes the finding undecided
-again. **Accept all**, **Reject all** and **Reset** decide on every finding at once, and a line
-such as "3 accepted · 1 rejected · 2 undecided" keeps count. Accepted findings get a green edge;
-rejected ones are dimmed and struck through, and **Hide rejected** takes them off the screen. The
-toggles are ordinary buttons that report their state with `aria-pressed`, and each has a tooltip.
-Decisions are saved on the server with the run as you make them (`PUT /api/runs/:id/decisions`),
-so they survive a page reload and a server restart, and other open tabs see them through the live
-updates stream. Once a run is posted, its decisions are shown but can't change. Deciding earns no
-XP and costs none.
-
-**Posting.** Only accepted findings are posted; rejected and undecided findings never are, and the
-summary always is. The confirmation says what will go out, for example "Posting 3 of 6 findings in
-one GitHub review: 2 as inline comments and 1 in the review body. 1 rejected and 2 undecided won't
-be posted." With nothing accepted, it says the review will hold only the summary, and you can
-still post it. The server enforces this rather than trusting the page: the post request names the
-accepted findings you confirmed, and the server posts the findings its saved decisions accept,
-refusing with `409` if the two differ (for example because another tab changed a decision) and
-with `400` for a finding the review doesn't have or for a request that names no findings at all.
-A finding's id is its position in the review's findings, which never changes once the review has
-finished.
-
-The confirmation always starts at **Comment**; when the agent suggests requesting changes, it says
-so next to the choice but never picks it for you. That posts one GitHub review (comment or request
-changes) anchored to the same commit the agent reviewed, with inline comments for accepted
-findings that have a line. If GitHub rejects the inline line numbers, it posts them in the review
-body instead. The omitted files are still listed, the footer names the provider and model that
-wrote the review, and `@user` or `@org/team` in the model's text is wrapped in backticks so
-posting never pings anyone. Posting earns the same XP however many findings it includes.
-
-**Approve** is a separate action with its own confirmation dialog, which names the PR and the
-short head commit you're approving. The approval is pinned to that commit: the server reads the
-PR's current head with `GET /repos/<owner>/<repo>/pulls/<number>` first, and if new commits were
-pushed, it approves nothing and answers `409 headChanged`. The dialog then says "New commits were
-pushed to this PR. Re-check them before approving." and shows the new commit. Otherwise it
-approves through `POST /repos/<owner>/<repo>/pulls/<number>/reviews` with `event: APPROVE` and
-`commit_id` set to that commit. Draft PRs can't be approved.
-
-Runs are saved, so a server restart reattaches to a Cursor run that was still going. A Claude
-review is a single request, so a restart during one marks it as failed.
-
-### Local server protections
-
-The API acts as you, so it only accepts requests that come from PR Quest:
-
-- **Host** must be `127.0.0.1` or `localhost`, which stops DNS rebinding.
-- **Origin**, when the browser sends one, must be exactly the server's own origin,
-  `http://127.0.0.1:<port>` or `http://localhost:<port>` for `PR_QUEST_PORT`. Under `yarn dev` the
-  UI's origin on `PR_QUEST_UI_PORT` is trusted too, because Vite proxies `/api` from there;
-  `yarn start` serves the UI itself and doesn't trust that port. Pages on other localhost ports,
-  such as another dev server, get `403`.
-- **`Sec-Fetch-Site`**, when the browser sends it, must be `same-origin` or `none` on every
-  request, including GETs, so an image or script tag on another page can't trigger a call.
-  Browsers send `same-site` for other localhost ports, so this is checked as well as the origin.
-- **Every POST, PUT and DELETE must be `Content-Type: application/json`**, or the server answers
-  `415`. A browser can't send JSON to another origin without a CORS preflight, which the server
-  never grants.
-
-When `yarn start` serves the built UI, page and asset requests outside `/api` get only the Host
-check, so links and bookmarks still open the page. Only GET and HEAD are served, from `dist/`
-alone: paths with `..`, a backslash or a dotfile segment get `404`. A path without a file
-extension that isn't a file gets `index.html`, so the app's own routes load. Hashed files under
-`assets/` are cached for a year as `immutable`; `index.html` and the rest are `no-cache`, so a new
-build shows up on the next load. HTML pages carry a Content Security Policy that allows only PR
-Quest's own scripts, styles, fonts and API, plus avatars from `avatars.githubusercontent.com`,
-and forbids plugins, framing and forms that post elsewhere.
-
-The [desktop app](#desktop-app) also requires a per-start secret cookie on every request but
-`GET /api/health`. `yarn start` and `yarn dev` don't.
-
-In [hosted mode](#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and the Origin
-must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a load
-balancer can probe it by IP address; its other checks still apply. It answers only
-`{ "ok": true }` there, without the configuration local mode reports.
+you enter a short code at <https://github.com/login/device>. It needs no client secret and no
+callback, but it does need a GitHub OAuth App, which you create once:
+
+1. On GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App** (or the same
+   under an organization's settings).
+2. Set **Homepage URL** and **Authorization callback URL** to `http://127.0.0.1:4318`, or your
+   port if you set `PR_QUEST_UI_PORT`. GitHub requires a callback, but the device flow never uses
+   it.
+3. Check **Enable Device Flow**, since without it GitHub refuses to issue codes. Choose **Register
+   application** and copy the **Client ID**. Don't generate a client secret.
+4. Put it in `~/.pr-quest/.env` (or `.env.local`) as `PR_QUEST_GITHUB_CLIENT_ID=...` and restart
+   PR Quest.
+
+PR Quest asks for the `repo` and `read:org` scopes. OAuth Apps have no read-only scope for
+private repos, so `repo` grants full access to every repo you can access. **Sign out** deletes the
+token from this computer but doesn't revoke it; revoke it under
+[Authorized OAuth Apps](https://github.com/settings/applications) when you're done.
+
+Organizations such as Trackunit can restrict which OAuth Apps see their private repos. Until an
+organization owner approves your app, that organization's PRs don't show up. When you authorize
+the app, GitHub shows a **Request** button next to each restricted organization; you can also
+request access later under **Settings → Applications → Authorized OAuth Apps**. An owner approves
+it under the organization's **Third-party access → OAuth app policy**. A signed-in token wins over
+the GitHub CLI, so **Sign out** to go back to the CLI's token, which Trackunit already allows.
+
+## Using the board
+
+Requests that name you directly are listed first, then requests that reach you through a team.
+Each card's tier comes from its additions plus deletions: **Trivial** under 50 lines, **Normal**
+under 400, **Hard** under 2,000 lines and 50 files, and **Boss** above that.
+
+The bar above the cards narrows and orders the board, without calling GitHub:
+
+- **Requests** (_All_, _Direct_, _Team_) picks which requests to show. With _All_, the board is
+  grouped into direct and team requests, and the other filters and the sort apply inside each.
+- **Search** matches the title, author, branch and PR number (`#123`, `repo#123` or
+  `owner/repo#123`). Press `/` to jump to it.
+- **Sort**: _Smart_ (direct requests, then PRs that need attention, then the longest-waiting),
+  smallest or largest first, or newest or oldest first.
+- **Filters**: difficulty, agent state (not started, running, loot ready, failed), and switches to
+  hide drafts and PRs others already approved.
+- **Presets** save the current filters and sort under a name. _Quick wins_ and _Boss rush_ are
+  built in. The board remembers your last view in the browser.
+
+## Reviewing a PR
+
+**Send review agent** on a card starts a review with the provider chosen in Settings:
+
+- **Cursor** starts a Cursor cloud agent that checks out the repo at the PR's head commit and
+  reviews the diff with the rest of the repo as context. Because the agent can act as you, it only
+  reviews PRs opened from the repo itself by members, collaborators, Dependabot or Renovate, and
+  whose branch names are safe in shell commands. On other PRs the button is disabled and suggests
+  Claude.
+- **Claude** sends the diff, title, branch names and the PR's trusted comments to Anthropic's API,
+  never the rest of the repo. Lockfiles, generated and binary files are left out, and the review
+  lists any file it didn't see. Claude can't run anything or reach GitHub.
+
+Both reviewers also get the PR's existing comments from people who can push to the repo and from
+known review bots (Bugbot, Copilot, CodeRabbit), so they don't repeat what's already been said.
+
+When the review finishes, the card shows **Loot ready**. Open it to read the summary and
+findings:
+
+![A finished review with two of four findings selected for posting](docs/screenshots/review.png)
+
+No finding starts selected. Tick the ones worth posting, or use **Select all** and **Clear**.
+**Post to PR** posts one GitHub review, as a comment or a change request, with the summary and the
+selected findings as inline comments on the commit that was reviewed. When the reviewer wrote
+replacement code, the comment is a suggested change the author can apply in one click. A finding
+without a line goes on its file; findings are never listed in the review body. The rest are never
+posted. With nothing selected, you can still post the summary on its own. Selecting earns no XP.
+`@mentions` in the reviewer's text are escaped, so posting never pings anyone.
+
+The reviewer's verdict is only advice. **Approve** is a separate action with its own
+confirmation, pinned to the commit you saw: if new commits were pushed since, PR Quest approves
+nothing and asks you to look again.
 
 ## XP and achievements
 
-XP is awarded only for real review actions, never for just starting an agent:
+XP comes only from real review actions, never from just starting an agent:
 
 | Action          | Base XP |
 | --------------- | ------- |
@@ -894,175 +183,69 @@ XP is awarded only for real review actions, never for just starting an agent:
 | Request changes | 15      |
 
 Base XP is multiplied by tier: Trivial ×1, Normal ×1.5, Hard ×2, Boss ×3. Approving the same PR
-twice earns XP once. The XP needed for the next level is `100 × level^1.5`. The streak counts
-consecutive local calendar days with at least one rewarded action.
+twice earns XP once. Reaching the next level takes `100 × level^1.5` XP, and the streak counts
+consecutive days with at least one rewarded action.
 
-Inbox Zero counts only what GitHub's search returns. Hiding a quest you just approved doesn't
-count as an empty queue, and neither does a refresh where most PR details couldn't be read.
+There are 27 achievements, from _First Blood_ to secret ones that show as "???" until they
+unlock. Each pays bonus XP once, by rarity: 25 (common), 50 (rare), 100 (epic) or 200
+(legendary). The [full list](docs/how-it-works.md#achievements) explains how to unlock each one.
 
-Unlocking an achievement adds bonus XP by rarity, and the bonus can level you up:
-
-| Rarity    | Bonus XP |
-| --------- | -------- |
-| Common    | 25       |
-| Rare      | 50       |
-| Epic      | 100      |
-| Legendary | 200      |
-
-Each achievement pays its bonus once. Achievements unlocked before bonuses existed don't pay
-retroactively. "Review action" below means posting a review, requesting changes or approving;
-starting or finishing an agent counts only where it says so. Times and days use the server's
-local clock.
-
-| Achievement      | How to unlock                                                                 | Rarity    |
-| ---------------- | ----------------------------------------------------------------------------- | --------- |
-| **Milestones**   |                                                                               |           |
-| First Blood      | Your first review action                                                      | Common    |
-| Centurion Bronze | 10 review actions                                                             | Common    |
-| Centurion Silver | 50 review actions                                                             | Rare      |
-| Centurion Gold   | 100 review actions                                                            | Legendary |
-| Team Player      | 10 review actions on team-requested PRs                                       | Rare      |
-| Agent Commander  | 10 finished agent reviews                                                     | Rare      |
-| Gatekeeper       | Request changes on 5 different PRs                                            | Rare      |
-| Giant Killer     | Approve 5 Boss-tier PRs                                                       | Epic      |
-| **Streaks**      |                                                                               |           |
-| On Fire          | A 5-day streak                                                                | Epic      |
-| Unstoppable      | A 7-day streak                                                                | Legendary |
-| Early Bird       | A review action before 08:00                                                  | Common    |
-| Night Owl        | A review action at 22:00 or later                                             | Common    |
-| Weekend Warrior  | A review action on a Saturday or Sunday                                       | Common    |
-| **Feats**        |                                                                               |           |
-| Quick Draw       | Approve within an hour of the review request                                  | Rare      |
-| Boss Slayer      | Post a review on, or approve, a Boss-tier PR                                  | Rare      |
-| Inbox Zero       | GitHub finds no review requests on a day you reviewed something               | Rare      |
-| Clean Sweep      | Act on 5 direct requests in a day, and leave no direct request on the board   | Epic      |
-| Necromancer      | A review action on a PR requested 30 days or more ago                         | Rare      |
-| The Long Read    | A review action on a PR with 2,000 or more changed lines                      | Rare      |
-| Eagle Eye        | Post a review with at least one accepted critical or major finding            | Common    |
-| Featherweight    | Approve 10 Trivial PRs in a day, each after a posted review or finished agent | Rare      |
-| Second Opinion   | A finished Claude review and a finished Cursor review on the same PR          | Rare      |
-| **Variety**      |                                                                               |           |
-| Explorer         | Review actions in 10 different repos                                          | Rare      |
-| Diplomat         | Review actions on PRs from 10 different people, not counting yourself or bots | Rare      |
-| Bot Wrangler     | Review actions on 10 PRs by Dependabot or Renovate                            | Rare      |
-| **Secret**       |                                                                               |           |
-| Speedrunner      | Approve within 5 minutes of the request, after a posted review or agent run   | Epic      |
-| Archaeologist    | A review action on the quest that has waited longest on your board            | Rare      |
-
-The Achievements dialog shows the secret ones as "???" with a hint until they unlock, and shows
-progress where there is a count, such as Explorer 3/10 or Centurion 12/50 toward Silver. Daily
-counts (Clean Sweep, Featherweight) start again at local midnight.
-
-Achievements are defined in
-[`apps/server/src/features/game/achievements.ts`](apps/server/src/features/game/achievements.ts); the UI
-renders whatever that file lists.
-
-### Progress from before these achievements
-
-State from an older PR Quest keeps its XP, level, counters, streak and unlocked achievements.
-Some progress is rebuilt from what was already stored:
-
-- Centurion, Team Player and Agent Commander use the existing counters.
-- Explorer counts repos from rewarded approvals and posted reviews.
-- Giant Killer counts approved PRs whose stored review run was Boss-tier.
-- Eagle Eye counts posted reviews that had a critical or major finding.
-- Second Opinion uses the finished Claude and Cursor runs still in the run history.
-
-Anything rebuilt this way unlocks, with its bonus, at the next game event, such as the next
-queue check. Diplomat, Bot Wrangler, Gatekeeper, the daily counts and the time-of-day, weekday,
-wait-time and board achievements need details older state never stored, so they count only
-actions from now on.
+![The achievements dialog](docs/screenshots/achievements.png)
 
 ## Where state lives
 
-Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are created with mode
-`0700` and files are written atomically with mode `0600`:
+Everything is under `~/.pr-quest`, or `PR_QUEST_STATE_DIR`. Directories are created with mode
+`0700` and files with mode `0600`:
 
 ```text
 ~/.pr-quest/
 ├── .env                optional settings and keys that you write; PR Quest only reads it
-├── secrets.json        the GitHub OAuth token and the API keys saved from Settings
+├── secrets.json        the GitHub OAuth token and the API keys saved in Settings
 ├── secrets.encrypted.json
 │                       the same, encrypted; the desktop app keeps them here instead
 ├── settings.json       the review provider and the model per provider
-└── users/
-    └── <login>/        one folder per GitHub user, named by the lower-cased login
-        ├── state.json  XP, counters, streak, achievements, the last 200 review runs and
-        │               their finding decisions
-        └── quests.json the last quest list, when it was fetched, any rate-limit backoff
+└── users/<login>/      one folder per GitHub user
+    ├── state.json      XP, streak, achievements and the last 200 review runs
+    └── quests.json     the last quest list, for a fast start and rate-limit backoff
 ```
 
-The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`.
-`secrets.json` and `settings.json` are shared; the game and the quest cache belong to whoever
-the current token is. Signing in as someone else opens their own folder, starting fresh. Keys
-set in the environment or an env file are never written to `secrets.json`.
+Delete a user's folder to reset their progress. Board filters and presets live in the browser's
+`localStorage`. [How it works](docs/how-it-works.md#where-state-lives) covers what happens to
+unreadable or older files.
 
-An unreadable `state.json` or `secrets.json` is moved aside as `<file>.corrupt-<time>`, and PR
-Quest starts without it. Unreadable finding decisions on a run are the exception: they are
-dropped, which leaves that run's findings undecided, and the rest of `state.json` is kept. An unreadable `settings.json` is replaced with the defaults (Cursor
-reviews, default models) without a copy, and the next settings change overwrites it. An
-unreadable `quests.json` is ignored and replaced on the next successful fetch. A `secrets.json`
-or `settings.json` written by a newer PR Quest stops the server at startup with a message, so
-an older build never drops or overwrites it. A `state.json` from a newer PR Quest is left in place,
-and the game reports an error saying so instead of loading it. The first time PR Quest reads a version 1 `state.json`, it copies it
-to `state.json.v1.bak` before anything is written; an existing backup is never overwritten, and
-nothing reads it again. Copy it back over `state.json` to run an older build. Delete a user's folder to reset their progress. Board filters and presets live
-in the browser, as described in [Presets](#presets).
+## Security
 
-### Moving the old state into a user's folder
+- **Loopback only.** In local mode, the default, the server listens on `127.0.0.1` and only
+  accepts browser requests from its own UI, so other websites and local dev servers can't use it
+  to act as you. Under `yarn dev` and `yarn start` it has no authentication, so any program
+  running on this computer can call it. The [desktop app](docs/desktop.md) also requires a secret
+  made fresh at each start, which only its window has.
+- **Secrets stay in the server.** No route returns a key or the GitHub token. Outside the desktop
+  app they're stored in plain text in `secrets.json`, protected only by its file mode. The desktop
+  app encrypts them with a key from the OS keychain instead; on Windows and Linux, though, any
+  program running as you can read that key.
+- **The Cursor agent's limits are only in its prompt.** It runs with your Cursor identity and
+  GitHub integration, and is told never to commit, push, comment or approve. A prompt injection in
+  the PR could talk it out of that; the only hard guard is that the SDK won't open a PR for it.
+  Prefer Claude for PRs whose content you don't trust, including dependency bumps from upstream
+  releases you don't trust.
+- **Nothing reaches GitHub until you choose it.** PR Quest never turns a reviewer's output into an
+  approval, and only posts the findings you selected.
 
-Before per-user folders, `state.json` and `quests.json` sat directly in `~/.pr-quest`. The first
-GitHub user PR Quest sees gets them: each file is copied into `users/<login>/`, then the original
-is renamed to `<file>.migrated-to-<login>-<UTC time>.bak`, for example
-`state.json.migrated-to-octocat-20261031T091500Z.bak`. Nothing reads the `.bak` files, so the
-old state can't be handed to a second user; delete them once you've checked your XP. A user who
-already has a `state.json` keeps it. The login that gets the old state is recorded in
-`users/.legacy-owner` before anything is copied, so an interrupted migration is finished for that
-login on the next start and never handed to someone else. The server logs which files it moved.
-If a `state.json` or `quests.json` shows up in `~/.pr-quest` again later,
-it is renamed to `<file>.orphaned-<UTC time>.bak` with a warning instead of being given to
-anyone.
-
-## Security notes
-
-- **Loopback only.** In local mode, the default, the server listens on `127.0.0.1` and checks
-  Host, Origin, `Sec-Fetch-Site` and the content type of every POST, PUT and DELETE, as described
-  in [Local server protections](#local-server-protections).
-- **Secrets stay in the server process.** The UI only learns whether a key is set, its source and
-  its last four characters. No route returns a key or the GitHub token, and the server doesn't
-  log them. `gh auth token`, the only command PR Quest runs, gets an environment without
-  `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and `LINEAR_API_KEY`.
-- **Outside the desktop app, secrets are stored in plain text.** `secrets.json` is protected by
-  its `0600` mode and the `0700` directory, not encrypted. Backups of your home folder include
-  it. The desktop app encrypts them with a key from the OS keychain instead and deletes the plain
-  file once it has checked the encrypted copy; on Windows and Linux, though, any program running
-  as you can read that key from the keychain. Without a keychain it writes them in plain text
-  only if you agree to (see [Desktop app](#desktop-app)).
-- **The OAuth token is broad.** The `repo` scope grants access to every repo you can access (see
-  [Scopes](#scopes)); moving to a GitHub App with narrower, expiring tokens is a possible
-  improvement. **Sign out** deletes the token from `secrets.json` but doesn't revoke it on
-  GitHub; revoke it at <https://github.com/settings/applications> (**Authorized OAuth Apps**)
-  when you're done.
-- **API keys are per computer.** Every GitHub account that signs in on this machine uses the
-  keys saved in Settings, and signing out leaves them in place.
-- **Sign-in needs no secret.** The device flow uses only the client ID; the device code stays in
-  the server, and no callback reaches your machine.
-- **Reviewers see PR content.** The Cursor agent runs in Cursor's cloud with access to the repo
-  through your Cursor GitHub integration, and its rules are prompt-only (see
-  [The review agent and its safety limits](#the-review-agent-and-its-safety-limits)). Claude gets
-  the diff, title and branch names under your Anthropic key, and can't act (see
-  [Claude reviews](#claude-reviews)). Neither can approve; only the **Approve** dialog can.
+[How it works](docs/how-it-works.md) describes the GitHub calls, the reviewers' safeguards and
+these protections in full.
 
 ## Privacy
 
 PR Quest has no server of its own and collects nothing. It sends your data only to the services
 you use it with, under your own accounts and keys:
 
-- **GitHub** gets the API calls described in [How it works](#how-it-works), made with your token.
+- **GitHub** gets the API calls described in [How it works](docs/how-it-works.md), made with your
+  token.
 - **Cursor** gets the PR to review when you send a Cursor review agent, under your Cursor API key.
   The agent reads the repo through your Cursor GitHub integration.
-- **Anthropic** gets the PR's diff, title and branch names when you send a Claude review, under
-  your Anthropic API key.
+- **Anthropic** gets the PR's diff, title, branch names and trusted comments when you send a
+  Claude review, under your Anthropic API key.
 - **Linear** gets a request for your pending reviews, under your Linear API key, if you set one.
 
 Nothing goes to the author of PR Quest: there is no telemetry, analytics or crash reporting. Each
@@ -1071,41 +254,59 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 
 ## Known limitations
 
-- **`requestedAt` is the PR's open time.** GitHub search doesn't return when you were asked to
-  review, so "Waiting" and Quick Draw count from when the PR was opened. Quick Draw is
-  therefore harder to get than intended.
-- **`requestedTeams` lists every team** requested on the PR, not only teams you belong to.
-- **The Linear path is unverified with a personal API key.** The MCP endpoint takes a Bearer
-  token, but whether it accepts a personal Linear key hasn't been tested. Linear's public
-  GraphQL API has no review list or approve mutation (see [the spike](docs/spike.md)), so
-  approving always goes through GitHub's API.
-- **Refreshing takes about 5 seconds** for around 50 PRs: about 2 seconds of GitHub search and
-  2–3 seconds of batched GraphQL.
-- **Secondary rate limits without `retry-after` have no reset time**, so they always use the
-  exponential backoff.
-- **"Approved by others" reads at most 100 latest reviews** per PR.
+- **"Waiting" counts from when the PR was opened**, because GitHub's search doesn't say when you
+  were asked to review. Quick Draw is harder to get than intended for the same reason.
+- **A team request lists every team** requested on the PR, not only the ones you belong to.
+- **Linear with a personal API key is unverified.** Approving always goes through GitHub, since
+  Linear's API has no approve mutation (see [the spike](docs/spike.md)).
+- **Reviewers see at most the newest 100** review summaries, inline threads and conversation
+  comments, so on a busy PR they may repeat an older one.
+- **Switching GitHub users stops that user's running reviews**, rather than finishing them as the
+  new user.
+- **Posted reviews match no Agent filter**, so selecting any agent state hides those PRs.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
-- **Switching GitHub users stops that user's running reviews.** Each signed-in session uses only
-  its own token. If the active user changes while a review runs, for example through
-  **Sign out** or `gh auth switch`, the rest of that run's GitHub calls, such as reading a Claude
-  diff, fail instead of going out as the new user.
-- **Sign out doesn't revoke the token** on GitHub; see [Security notes](#security-notes).
-- **Posted agent runs match no Agent filter.** Once findings are posted, the agent state no
-  longer applies, so selecting any Agent state hides that PR.
-- **The agent's limits are prompt-only**, as described in
-  [The review agent and its safety limits](#the-review-agent-and-its-safety-limits).
-- **Starting the agent on a commit SHA is untested against the live Cursor API.** The SDK types
-  allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
-  elsewhere, the prompt has it check out the commit, and a missing or mismatched `reviewedSha`
-  fails the run.
-- **Approving costs one extra GitHub call** to re-check the head commit.
-- **The desktop app has no release yet.** The release repository is a placeholder until
-  `PR_QUEST_RELEASE_REPO` is set, so **Help** opens a missing page; the version is `0.0.0`, there
-  is no app icon, and local builds are unsigned. The Windows build and the x86_64 Linux build
-  have only been checked by compiling the shell, and the Intel Mac build only by packaging it.
-- **The desktop app and `yarn start` don't share a running state.** Run one at a time on a
-  state directory, as described in [Desktop app](#desktop-app).
+- **The desktop app has no release yet.** The version is `0.0.0`, there is no app icon, and local
+  builds are unsigned, so macOS and Windows warn before the first start.
+- **The desktop app and `yarn start` don't share a running state.** Run one at a time on a state
+  directory, as [the desktop docs](docs/desktop.md#state) describe.
+
+## Desktop app
+
+The desktop app is the same server and UI in a native window: a small
+[Tauri](https://tauri.app) shell in Rust starts the server on a bundled Node and keeps your keys
+encrypted with a key from the OS keychain. It builds for macOS, Linux and Windows:
+
+```sh
+just desktop-package    # build the app and installers for this machine
+just desktop-smoke      # check what desktop-package made
+```
+
+[The desktop app](docs/desktop.md) covers building it, packaging, the smoke test, how the window
+talks to the server, where it keeps your keys, updates and signing, and
+[RELEASING.md](RELEASING.md) how a release is published.
+
+## Development
+
+| Command          | What it does                                                     |
+| ---------------- | ---------------------------------------------------------------- |
+| `yarn dev`       | Runs the API (restarting on changes) and the UI                  |
+| `yarn build`     | Builds the UI and bundles the server                             |
+| `yarn start`     | Builds, then runs the production build on port 4317              |
+| `yarn test`      | Runs every package's Vitest suite once                           |
+| `yarn typecheck` | Type-checks each package and its tests with TypeScript 7         |
+| `yarn lint`      | Lints with oxlint, including type-aware rules and project rules  |
+| `yarn format`    | Formats with oxfmt                                               |
+| `just check`     | Everything CI runs: type check, lint, format check, tests, build |
+
+`just check` doesn't build the desktop app's Rust shell; `just desktop-check` and
+`just cargo-deny` check that.
+
+The repo is a set of Yarn workspaces: the server in `apps/server`, the React UI in `apps/web`,
+the desktop app in `apps/desktop`, and the types and routes the server and UI share in
+`packages/contract`.
+[Development](docs/development.md) covers the tooling, the production build, the project
+structure and its import rules, and how to move a branch from the old `src/` layout.
 
 ## License
 
