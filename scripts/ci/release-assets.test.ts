@@ -35,6 +35,13 @@ const JOBS: Record<string, ReadonlyArray<string>> = {
   'desktop-linux-arm64': [`PR-Quest_${VERSION}_aarch64.AppImage`, `PR-Quest_${VERSION}_arm64.deb`],
   'desktop-win-x64': [`PR-Quest_${VERSION}_x64-setup.exe`],
 };
+const TRIPLES: Record<string, string> = {
+  'desktop-mac-arm64': 'aarch64-apple-darwin',
+  'desktop-mac-x64': 'x86_64-apple-darwin',
+  'desktop-linux-x64': 'x86_64-unknown-linux-gnu',
+  'desktop-linux-arm64': 'aarch64-unknown-linux-gnu',
+  'desktop-win-x64': 'x86_64-pc-windows-msvc',
+};
 const UPDATE_FILES: Record<string, string> = {
   'darwin-aarch64': `PR-Quest_${VERSION}_aarch64.app.tar.gz`,
   'darwin-x86_64': `PR-Quest_${VERSION}_x64.app.tar.gz`,
@@ -73,6 +80,18 @@ function sign(file: string, key: string, version = VERSION): void {
 
 let pubkey: string;
 
+/** The build record scripts/ci/package.sh writes, as collect-bundles.sh names it. */
+function writeRecord(
+  folder: string,
+  triple: string,
+  { signed, unsignedRelease = false }: { signed: boolean; unsignedRelease?: boolean },
+): void {
+  writeFileSync(
+    join(folder, `build-${triple}.txt`),
+    `target=${triple}\nsigned=${signed}\nunsigned_release=${unsignedRelease}\n`,
+  );
+}
+
 beforeAll(() => {
   keys = mkdtempSync(join(tmpdir(), 'release-assets-keys-'));
   pubkey = generateKey(join(keys, 'updater.key'));
@@ -87,6 +106,8 @@ beforeAll(() => {
         sign(join(fixture, job, file), join(keys, 'updater.key'));
       }
     }
+    const triple = TRIPLES[job] ?? '';
+    writeRecord(join(fixture, job), triple, { signed: !triple.includes('linux') });
   }
   // The stub just runs the repository's own check, as `just desktop-verify-updater` does.
   writeFileSync(
@@ -109,10 +130,11 @@ beforeEach(() => {
 function run(
   env: Record<string, string> = { PR_QUEST_UPDATER_PUBKEY: pubkey },
   download = DOWNLOAD,
+  flags: Array<string> = [],
 ) {
   const result = spawnSync(
     'bash',
-    [script, join(dir, 'artifacts'), join(dir, 'assets'), VERSION, download],
+    [script, join(dir, 'artifacts'), join(dir, 'assets'), VERSION, download, ...flags],
     {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -165,6 +187,65 @@ describe.skipIf(process.platform === 'win32')('release-assets.sh', () => {
         .digest('hex');
       expect(sums).toContain(`${sha256}  ${name}\n`);
     }
+  });
+
+  test('stops without the build record of every target', () => {
+    rmSync(artifact('desktop-win-x64', 'build-x86_64-pc-windows-msvc.txt'));
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('No build job produced build-x86_64-pc-windows-msvc.txt');
+  });
+
+  test.each([
+    ['desktop-mac-arm64', 'aarch64-apple-darwin'],
+    ['desktop-win-x64', 'x86_64-pc-windows-msvc'],
+  ])('stops when %s was not code signed', (job, triple) => {
+    writeRecord(join(dir, 'artifacts', job), triple, { signed: false });
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`${triple} wasn't code signed`);
+  });
+
+  test("stops when a build used the dry run's opt-out", () => {
+    writeRecord(join(dir, 'artifacts', 'desktop-linux-x64'), 'x86_64-unknown-linux-gnu', {
+      signed: false,
+      unsignedRelease: true,
+    });
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('built with PR_QUEST_ALLOW_UNSIGNED_RELEASE');
+  });
+
+  test('stops at a build record of another target', () => {
+    writeFileSync(
+      artifact('desktop-mac-x64', 'build-x86_64-apple-darwin.txt'),
+      'target=aarch64-apple-darwin\nsigned=true\nunsigned_release=false\n',
+    );
+
+    const result = run();
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      'build-x86_64-apple-darwin.txt is the record of another target',
+    );
+  });
+
+  test('a dry run takes unsigned bundles and marks its files as never to be published', () => {
+    for (const [job, triple] of Object.entries(TRIPLES)) {
+      writeRecord(join(dir, 'artifacts', job), triple, { signed: false, unsignedRelease: true });
+    }
+
+    const result = run(undefined, DOWNLOAD, ['--dry-run']);
+
+    expect(result.status).toBe(0);
+    expect(readdirSync(join(dir, 'assets'))).toContain('DRY-RUN');
+    expect(readdirSync(join(dir, 'assets'))).toContain('latest.json');
   });
 
   test('stops when a platform is missing', () => {

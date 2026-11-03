@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Packages the desktop app for this machine with `just desktop-package "$@"`, signed when the
-# signing secrets are in the environment and unsigned when none are. The release workflow passes
-# them under the names below; see RELEASING.md. A secret that isn't set reaches this script as an
-# empty string, so empty ones are unset first.
+# Packages the desktop app for this machine with `just desktop-package --target <triple> ...`,
+# signed when the signing secrets are in the environment. The release workflow passes them under
+# the names below; see RELEASING.md. A secret that isn't set reaches this script as an empty
+# string, so empty ones are unset first.
 #
 # - Release builds (PR_QUEST_RELEASE_BUILD=1) need the updater key pair on every platform:
 #   PR_QUEST_UPDATER_PUBKEY and TAURI_SIGNING_PRIVATE_KEY (or, for a dry run, the files
@@ -16,9 +16,11 @@
 #   AZURE_SIGNING_ACCOUNT and AZURE_SIGNING_PROFILE, or a certificate file: WINDOWS_PFX (a base64
 #   .pfx) and WINDOWS_PFX_PASSWORD. Either sets PR_QUEST_WINDOWS_SIGN_COMMAND.
 #
-# A platform with only some of its secrets set stops the build, and so does an unsigned macOS or
-# Windows build when REQUIRE_SIGNING is true: once users run a signed version, an unsigned one
-# can't update it. Everything this script writes goes into one temporary folder, deleted on exit.
+# A platform with only some of its secrets set stops the build, and so does a macOS or Windows
+# release build without any, unless PR_QUEST_ALLOW_UNSIGNED_RELEASE is 1: the dry run's opt-out,
+# which a tag build (GITHUB_EVENT_NAME=push) refuses. Everything this script writes goes into one
+# temporary folder, deleted on exit, except the build record next to the bundles,
+# pr-quest-build.txt, which says how they were signed for scripts/ci/release-assets.sh.
 set -euo pipefail
 
 updater=(TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD PR_QUEST_UPDATER_PUBKEY)
@@ -79,18 +81,36 @@ require_all() {
   fi
 }
 
-# true, 1 or yes in any case turns it on; anything else that isn't empty is a mistake to stop on,
-# since reading it as off would ship unsigned builds.
-require_signing=false
-case "$(printf '%s' "${REQUIRE_SIGNING:-}" | tr '[:upper:]' '[:lower:]')" in
-  true | 1 | yes) require_signing=true ;;
-  '') ;;
-  *) fail "REQUIRE_SIGNING is \"$REQUIRE_SIGNING\". Set it to true to require signing, or delete it." ;;
+triple=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[i]}" == --target ]]; then
+    triple="${args[i + 1]:-}"
+  fi
+done
+if [[ -z "$triple" ]]; then
+  fail "Pass --target <triple>, so the build record goes next to that target's bundles."
+fi
+record="${CARGO_TARGET_DIR:-src-tauri/target}/$triple/release/bundle/pr-quest-build.txt"
+
+allow_unsigned=false
+case "${PR_QUEST_ALLOW_UNSIGNED_RELEASE:-}" in
+  '') unset PR_QUEST_ALLOW_UNSIGNED_RELEASE ;;
+  1) allow_unsigned=true ;;
+  *) fail "PR_QUEST_ALLOW_UNSIGNED_RELEASE is \"$PR_QUEST_ALLOW_UNSIGNED_RELEASE\"; it can only be 1, for a dry run." ;;
 esac
+if [[ "$allow_unsigned" == true ]]; then
+  if [[ "${GITHUB_EVENT_NAME:-}" == push ]]; then
+    fail "PR_QUEST_ALLOW_UNSIGNED_RELEASE is set in a tag build, which must be signed. Only the dry run may set it."
+  fi
+  if any_set "${mac_certificate[@]}" "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}"; then
+    fail "PR_QUEST_ALLOW_UNSIGNED_RELEASE asks for an unsigned build, but signing secrets are set."
+  fi
+fi
 
 unsigned() {
-  if [[ "$require_signing" == true ]]; then
-    fail "$1 REQUIRE_SIGNING is true, so the build stops instead of shipping it unsigned."
+  if [[ "${PR_QUEST_RELEASE_BUILD:-}" == 1 && "$allow_unsigned" != true ]]; then
+    fail "$1 A release build must be signed on macOS and Windows; set the signing secrets of the release environment (see RELEASING.md)."
   fi
   echo "::warning title=Unsigned build::$1"
 }
@@ -291,4 +311,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "signed=$signed" >>"$GITHUB_OUTPUT"
 fi
 
+rm -f "$record"
 just desktop-package "$@"
+mkdir -p "$(dirname "$record")"
+printf 'target=%s\nsigned=%s\nunsigned_release=%s\n' "$triple" "$signed" "$allow_unsigned" >"$record"

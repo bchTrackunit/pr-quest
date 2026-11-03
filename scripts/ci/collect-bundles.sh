@@ -2,7 +2,8 @@
 # Copies what `just desktop-package --target <triple>` made into one folder, under the names the
 # release publishes them as: no spaces, which GitHub would turn into dots, and each macOS update
 # file named after its processor, since both are "PR Quest.app.tar.gz". With --updater, as for a
-# release build, the update files and their .sig must be there too. Anything missing stops it.
+# release build, the update files and their .sig must be there too, and the build record
+# scripts/ci/package.sh wrote, as build-<triple>.txt. Anything missing stops it.
 # Usage: scripts/ci/collect-bundles.sh <triple> <version> <output folder> [--updater]
 set -euo pipefail
 
@@ -70,3 +71,6 @@ case "$triple" in
     ;;
   *) fail "PR Quest isn't released for $triple." ;;
 esac
+if [[ "$updater" == true ]]; then
+  take . pr-quest-build.txt "build-$triple.txt"
+fi

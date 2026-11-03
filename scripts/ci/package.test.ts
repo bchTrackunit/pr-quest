@@ -1,7 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -55,13 +63,15 @@ beforeEach(() => {
   echo "args=$*"
   for name in APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_KEY_PATH APPLE_API_KEY_P8 APPLE_CERTIFICATE \\
     PR_QUEST_WINDOWS_SIGN_COMMAND WINDOWS_PFX TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \\
-    PR_QUEST_UPDATER_PUBKEY; do
+    PR_QUEST_UPDATER_PUBKEY PR_QUEST_ALLOW_UNSIGNED_RELEASE; do
     eval "set=\\\${$name+set}"
     eval "value=\\\${$name:-}"
     echo "$name=\${set:+[$value]}"
   done
   if [ -n "\${APPLE_API_KEY_PATH:-}" ] && [ -f "$APPLE_API_KEY_PATH" ]; then echo "p8=$(cat "$APPLE_API_KEY_PATH")"; fi
-} >"$STUB_DIR/just-env"`,
+  if [ -e "$STUB_DIR/target/aarch64-apple-darwin/release/bundle/pr-quest-build.txt" ]; then echo "stale record"; fi
+} >"$STUB_DIR/just-env"
+exit "\${STUB_JUST_STATUS:-0}"`,
   );
   stub('uname', 'echo "$STUB_UNAME"');
   stub(
@@ -89,14 +99,21 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function run(os: 'Darwin' | 'MINGW64_NT-10.0' | 'Linux', env: Record<string, string> = {}) {
-  const result = spawnSync('bash', [script, '--target', 'aarch64-apple-darwin'], {
+const RECORD = join('target', 'aarch64-apple-darwin', 'release', 'bundle', 'pr-quest-build.txt');
+
+function run(
+  os: 'Darwin' | 'MINGW64_NT-10.0' | 'Linux',
+  env: Record<string, string> = {},
+  args: Array<string> = ['--target', 'aarch64-apple-darwin'],
+) {
+  const result = spawnSync('bash', [script, ...args], {
     encoding: 'utf8',
     // Only what's given here, so a developer's own signing settings never leak in.
     env: {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       HOME: dir,
       RUNNER_TEMP: dir,
+      CARGO_TARGET_DIR: join(dir, 'target'),
       GITHUB_OUTPUT: join(dir, 'output'),
       STUB_DIR: dir,
       STUB_UNAME: os,
@@ -112,8 +129,11 @@ function run(os: 'Darwin' | 'MINGW64_NT-10.0' | 'Linux', env: Record<string, str
     env: read('just-env'),
     output: read('output'),
     calls: read('calls'),
+    record: read(RECORD),
   };
 }
+
+const dryRun = { ...release, PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1' };
 
 describe.skipIf(process.platform === 'win32')('package.sh', () => {
   test('passes its arguments to desktop-package', () => {
@@ -121,6 +141,79 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
 
     expect(result.status).toBe(0);
     expect(result.env).toContain('args=desktop-package --target aarch64-apple-darwin');
+  });
+
+  test('needs --target, to know where the bundles go', () => {
+    const result = run('Linux', {}, ['--bundles', 'deb']);
+
+    expect(result.status).toBe(1);
+    expect(result.packaged).toBe(false);
+    expect(result.stdout).toContain('--target <triple>');
+  });
+
+  describe('the build record', () => {
+    test('says how the bundles were signed, once they are built', () => {
+      const result = run('Darwin', { ...release, ...macCertificate, ...macApiKey });
+
+      expect(result.status).toBe(0);
+      expect(result.record).toBe(
+        'target=aarch64-apple-darwin\nsigned=true\nunsigned_release=false\n',
+      );
+    });
+
+    test("is deleted before the build, so a failed one doesn't leave an old record", () => {
+      mkdirSync(dirname(join(dir, RECORD)), { recursive: true });
+      writeFileSync(join(dir, RECORD), 'signed=true\n');
+      const result = run('Linux', { STUB_JUST_STATUS: '1' });
+
+      expect(result.status).toBe(1);
+      expect(result.env).not.toContain('stale record');
+      expect(result.record).toBe('');
+    });
+  });
+
+  describe('the dry run opt-out, PR_QUEST_ALLOW_UNSIGNED_RELEASE', () => {
+    test('lets a macOS or Windows release build be unsigned, and says so in the record', () => {
+      for (const os of ['Darwin', 'MINGW64_NT-10.0'] as const) {
+        const result = run(os, dryRun);
+
+        expect(result.status).toBe(0);
+        expect(result.env).toContain('PR_QUEST_ALLOW_UNSIGNED_RELEASE=[1]');
+        expect(result.stdout).toContain('::warning title=Unsigned build::');
+        expect(result.record).toContain('signed=false\nunsigned_release=true\n');
+      }
+    });
+
+    test('is refused in a tag build', () => {
+      const result = run('Darwin', { ...dryRun, GITHUB_EVENT_NAME: 'push' });
+
+      expect(result.status).toBe(1);
+      expect(result.packaged).toBe(false);
+      expect(result.stdout).toContain('tag build, which must be signed');
+    });
+
+    test('is refused along with signing secrets', () => {
+      const result = run('MINGW64_NT-10.0', { ...dryRun, ...pfx });
+
+      expect(result.status).toBe(1);
+      expect(result.packaged).toBe(false);
+      expect(result.stdout).toContain('but signing secrets are set');
+    });
+
+    test.each(['true', 'yes', '0'])('is refused when it is %s rather than 1', (value) => {
+      const result = run('Darwin', { ...release, PR_QUEST_ALLOW_UNSIGNED_RELEASE: value });
+
+      expect(result.status).toBe(1);
+      expect(result.packaged).toBe(false);
+      expect(result.stdout).toContain(`PR_QUEST_ALLOW_UNSIGNED_RELEASE is "${value}"`);
+    });
+
+    test('is passed on unset when empty', () => {
+      const result = run('Linux', { PR_QUEST_ALLOW_UNSIGNED_RELEASE: '' });
+
+      expect(result.status).toBe(0);
+      expect(result.env).toContain('PR_QUEST_ALLOW_UNSIGNED_RELEASE=\n');
+    });
   });
 
   describe('the updater key', () => {
@@ -201,30 +294,16 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
       expect(result.stdout).toContain('::warning title=Unsigned build::');
     });
 
-    test.each(['true', 'TRUE', '1', 'yes', 'Yes'])(
-      'stops an unsigned build when REQUIRE_SIGNING is %s',
-      (value) => {
-        const result = run('Darwin', { REQUIRE_SIGNING: value });
+    test('stops a release build without the signing secrets', () => {
+      const result = run('Darwin', release);
 
-        expect(result.status).toBe(1);
-        expect(result.packaged).toBe(false);
-        expect(result.stdout).toContain('so the build stops instead of shipping it unsigned');
-      },
-    );
-
-    test.each(['false', 'on', 'ture'])(
-      'stops when REQUIRE_SIGNING is %s, rather than guessing what it means',
-      (value) => {
-        const result = run('Darwin', { ...macCertificate, ...macApiKey, REQUIRE_SIGNING: value });
-
-        expect(result.status).toBe(1);
-        expect(result.packaged).toBe(false);
-        expect(result.stdout).toContain(`REQUIRE_SIGNING is "${value}"`);
-      },
-    );
+      expect(result.status).toBe(1);
+      expect(result.packaged).toBe(false);
+      expect(result.stdout).toContain('A release build must be signed on macOS and Windows');
+    });
 
     test('signs from a temporary keychain and notarizes with the API key, then cleans up', () => {
-      const result = run('Darwin', { ...macCertificate, ...macApiKey, REQUIRE_SIGNING: 'true' });
+      const result = run('Darwin', { ...macCertificate, ...macApiKey });
 
       expect(result.status).toBe(0);
       expect(result.output).toBe('signed=true\n');
@@ -308,7 +387,7 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
         { ...macCertificate, APPLE_API_KEY_P8: 'key', APPLE_ID: 'me@example.com' },
         'not both',
       ],
-    ])('stops when %s, whatever REQUIRE_SIGNING says', (_case, env, message) => {
+    ])('stops when %s', (_case, env, message) => {
       const result = run('Darwin', env);
 
       expect(result.status).toBe(1);
@@ -327,15 +406,16 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
       expect(result.env).toContain('PR_QUEST_WINDOWS_SIGN_COMMAND=\n');
     });
 
-    test('stops an unsigned build when REQUIRE_SIGNING is true', () => {
-      const result = run('MINGW64_NT-10.0', { REQUIRE_SIGNING: 'true' });
+    test('stops a release build without the signing secrets', () => {
+      const result = run('MINGW64_NT-10.0', release);
 
       expect(result.status).toBe(1);
       expect(result.packaged).toBe(false);
+      expect(result.stdout).toContain('A release build must be signed on macOS and Windows');
     });
 
     test('signs with a certificate file through signtool, then removes it from the store', () => {
-      const result = run('MINGW64_NT-10.0', { ...pfx, REQUIRE_SIGNING: 'true' });
+      const result = run('MINGW64_NT-10.0', { ...pfx });
 
       expect(result.status).toBe(0);
       expect(result.output).toBe('signed=true\n');
@@ -383,11 +463,12 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
   });
 
   describe('Linux', () => {
-    test('is never code signed, so REQUIRE_SIGNING leaves it alone', () => {
-      const result = run('Linux', { REQUIRE_SIGNING: 'true' });
+    test('is never code signed, so a release build needs no signing secrets', () => {
+      const result = run('Linux', release);
 
       expect(result.status).toBe(0);
       expect(result.output).toBe('signed=false\n');
+      expect(result.record).toContain('signed=false\nunsigned_release=false\n');
     });
 
     test("refuses other platforms' signing secrets", () => {

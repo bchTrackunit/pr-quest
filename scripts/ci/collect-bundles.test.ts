@@ -50,6 +50,7 @@ describe.skipIf(process.platform === 'win32')('collect-bundles.sh', () => {
       'macos/PR Quest.app.tar.gz',
       'macos/PR Quest.app.tar.gz.sig',
       'dmg/bundle_dmg.sh',
+      'pr-quest-build.txt',
     ]);
 
     const result = collect('aarch64-apple-darwin', '--updater');
@@ -59,6 +60,7 @@ describe.skipIf(process.platform === 'win32')('collect-bundles.sh', () => {
       `PR-Quest_${v}_aarch64.app.tar.gz`,
       `PR-Quest_${v}_aarch64.app.tar.gz.sig`,
       `PR-Quest_${v}_aarch64.dmg`,
+      'build-aarch64-apple-darwin.txt',
     ]);
   });
 
@@ -85,15 +87,20 @@ describe.skipIf(process.platform === 'win32')('collect-bundles.sh', () => {
         `PR-Quest_${v}_aarch64.AppImage`,
         `PR-Quest_${v}_aarch64.AppImage.sig`,
         `PR-Quest_${v}_arm64.deb`,
+        'build-aarch64-unknown-linux-gnu.txt',
       ],
     ],
     [
       'x86_64-pc-windows-msvc',
       [`nsis/PR Quest_${v}_x64-setup.exe`],
-      [`PR-Quest_${v}_x64-setup.exe`, `PR-Quest_${v}_x64-setup.exe.sig`],
+      [
+        `PR-Quest_${v}_x64-setup.exe`,
+        `PR-Quest_${v}_x64-setup.exe.sig`,
+        'build-x86_64-pc-windows-msvc.txt',
+      ],
     ],
   ])('collects %s with its update signature', (triple, installers, expected) => {
-    bundles(triple, [...installers, `${installers[0] ?? ''}.sig`]);
+    bundles(triple, [...installers, `${installers[0] ?? ''}.sig`, 'pr-quest-build.txt']);
 
     const result = collect(triple, '--updater');
 
@@ -108,6 +115,18 @@ describe.skipIf(process.platform === 'win32')('collect-bundles.sh', () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(`has no nsis/PR Quest_${v}_x64-setup.exe.sig`);
+  });
+
+  test('stops when a release build has no build record', () => {
+    bundles('x86_64-pc-windows-msvc', [
+      `nsis/PR Quest_${v}_x64-setup.exe`,
+      `nsis/PR Quest_${v}_x64-setup.exe.sig`,
+    ]);
+
+    const result = collect('x86_64-pc-windows-msvc', '--updater');
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('has no ./pr-quest-build.txt');
   });
 
   test('stops when the bundle has another version', () => {
