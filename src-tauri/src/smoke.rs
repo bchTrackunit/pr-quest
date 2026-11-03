@@ -51,7 +51,8 @@ pub const WINDOW_SCRIPT: &str = r#"
       (res) => { res.body?.cancel(); return res.status; },
       (error) => String(error),
     );
-    // tauri.conf.json grants no capabilities, so the page can't call the shell or its plugins.
+    // tauri.conf.json's only capability grants nothing, so the page can't call the shell or its
+    // plugins.
     const internals = window.__TAURI_INTERNALS__;
     probingIpc = true;
     const ipc = typeof internals?.invoke !== 'function' ? 'absent' : await Promise.race([

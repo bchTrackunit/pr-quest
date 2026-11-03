@@ -8,7 +8,17 @@ use std::{env, fs};
 /// the only kind that updates itself, and `PR_QUEST_RELEASE_REPO` (`owner/name`) names the
 /// repository it updates from. A release build of the placeholder repository, or with the
 /// development updater key, fails here.
+///
+/// The window gets no IPC permissions: tauri.conf.json lists one capability, `none`, which grants
+/// nothing. An empty list wouldn't do, since tauri-build then takes every file in capabilities/;
+/// a non-empty one takes only what it names. That folder is refused anyway, so nobody adds a file
+/// there expecting it to apply.
 fn main() {
+    if fs::exists("capabilities").unwrap_or(true) {
+        panic!(
+            "src-tauri/capabilities/ must not exist: the window's IPC permissions are the capabilities listed in tauri.conf.json, which grant nothing"
+        );
+    }
     println!("cargo:rerun-if-env-changed=PR_QUEST_RELEASE_BUILD");
     println!("cargo:rerun-if-env-changed=PR_QUEST_RELEASE_REPO");
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
