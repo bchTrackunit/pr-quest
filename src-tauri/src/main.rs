@@ -120,7 +120,13 @@ fn main() {
         }));
     }
     let app = builder
-        .plugin(tauri_plugin_opener::init())
+        // The opener's click handler sends target=_blank links over IPC, which the server's page
+        // may not use, so they did nothing; without it they reach on_new_window and the policy.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Shell::default())
         .menu(menu::build)
