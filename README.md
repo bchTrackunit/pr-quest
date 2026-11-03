@@ -301,8 +301,9 @@ sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-
 `--bundles app` (or `appimage`, `deb`, `nsis`) builds fewer. `--skip-build` reuses `apps/web/dist/`, and
 `--layout-only` stops after laying out the sidecar, which `cargo` needs before it can build the
 shell. `--compile-only` stops after compiling the shell, with no signing settings, and
-`--skip-compile` signs and bundles what it compiled; the release workflow compiles without its
-signing secrets that way. Each target takes Node from nodejs.org at a pinned version and SHA-256
+`--skip-compile` signs and bundles what it compiled, after laying out the sidecar's packages and
+Node again; the release workflow compiles in one job, without its signing secrets, and bundles
+in another, from a fresh checkout. Each target takes Node from nodejs.org at a pinned version and SHA-256
 ([`apps/desktop/scripts/desktop/targets.ts`](apps/desktop/scripts/desktop/targets.ts)), and the Cursor SDK's native parts
 (its sandbox, `rg` and the tree-sitter binding) from `node_modules`. `yarn install` fetches only
 this machine's copy of those, so the build stops if the target's `@cursor/sdk-<os>-<cpu>` package
@@ -442,7 +443,7 @@ only for its dry runs. With `TAURI_SIGNING_PRIVATE_KEY` (and
 bundles: `PR Quest.app.tar.gz`, the AppImage and the `-setup.exe`, each with a `.sig`.
 `just desktop-verify-updater <file>` checks a `.sig` against the key. Make a key pair with
 `yarn workspace @pr-quest/desktop exec tauri signer generate`. The release workflow never gives
-its build jobs the private key: it makes the macOS update archive itself and signs the update
+its compile or bundle jobs the private key: it makes the macOS update archive itself and signs the update
 files in a job of their own, then uploads them with a `latest.json` that lists them.
 
 ### Signing

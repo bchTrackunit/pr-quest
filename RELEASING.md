@@ -32,15 +32,15 @@ flowchart LR
      see [Secrets and settings](#secrets-and-settings).
    - The repository variable `PR_QUEST_UPDATER_PUBKEY` must be a Tauri updater public key, and
      not the development key in `tauri.conf.json`. A tag build also needs the variables
-     `APPLE_TEAM_ID` and `WINDOWS_SIGNER_SUBJECT`, which the build jobs check the signatures
+     `APPLE_TEAM_ID` and `WINDOWS_SIGNER_SUBJECT`, which the bundle jobs check the signatures
      against; see [The variables](#the-variables).
 2. **Check.** Type-checks, lints, checks formatting and runs the tests: `just check` without its
-   build, since every build job builds anyway.
+   build, since every compile job builds anyway.
 3. **Check the Rust shell.** `just desktop-check` (rustfmt, Clippy and the Rust tests) and
    `just cargo-deny`, which audits the crates for advisories and licenses. Cargo runs with
    `--locked`, so a `Cargo.lock` that wasn't updated with the version stops it.
-4. **Build**, once per target, each on a runner with that processor, since `yarn install` fetches
-   only the runner's own Cursor SDK binaries:
+4. **Compile**, once per target, each on a runner with that processor, since `yarn install`
+   fetches only the runner's own Cursor SDK binaries:
 
    | Job         | Runner             | Target                      |
    | ----------- | ------------------ | --------------------------- |
@@ -53,42 +53,70 @@ flowchart LR
    Linux builds on Ubuntu 22.04, the oldest image GitHub offers, so the AppImage and `deb` run on
    every distribution with its glibc or newer.
 
-   The macOS and Windows build jobs of a tag build use the `release` environment, so they wait
-   until a reviewer approves them; see [Protect the signing secrets](#protect-the-signing-secrets).
-   The Linux jobs sign nothing and need no secrets, so they don't use it. No build job ever gets
-   the updater's private key.
+   This is where the dependencies' code runs: Vite and its plugins, esbuild, every crate's build
+   script and procedural macro. So the job uses no environment and gets no secrets, and
+   [`scripts/ci/package.sh`](scripts/ci/package.sh) stops if it finds any. It runs
+   `package.sh --compile-only` as a release build (`PR_QUEST_RELEASE_BUILD=1`, with
+   `PR_QUEST_RELEASE_REPO` set to the repository the workflow runs in, and
+   `PR_QUEST_UPDATER_PUBKEY`): `just desktop-package --compile-only` runs `yarn build`, lays out
+   the sidecar and compiles the shell with `tauri build --no-bundle`. Then
+   [`scripts/ci/compiled.sh`](scripts/ci/compiled.sh) uploads only what was built, as a workflow
+   artifact kept for a day: the shell binary, and the sidecar's server bundle (`main.mjs`) and UI
+   (`dist/`), with a manifest of their SHA-256s.
 
-   Each job runs [`scripts/ci/package.sh`](scripts/ci/package.sh) twice, as a release build
-   (`PR_QUEST_RELEASE_BUILD=1`, with `PR_QUEST_RELEASE_REPO` set to the repository the workflow
-   runs in, and `PR_QUEST_UPDATER_PUBKEY`):
-   - **Compile**, with no secrets at all: `just desktop-package --compile-only` runs `yarn build`,
-     lays out the sidecar and compiles the shell with `tauri build --no-bundle`. This is where
-     the dependencies' code runs: Vite and its plugins, every crate's build script and procedural
-     macro. `package.sh` stops if it finds any signing secret here.
-   - **Bundle**, with only its own platform's signing secrets: `--skip-compile` sets up signing,
-     signs the sidecar's native code and runs `tauri bundle`, which signs (and on macOS
-     notarizes) the app and the installer. The Tauri CLI and `package.sh` run here with the
-     secrets, since they do the signing; nothing is compiled. A release build stops on macOS and
-     Windows without signing, and leaves a record of how it was signed next to the bundles.
-
-   Then each job:
+5. **Bundle**, once per target, on the same runners, in a fresh checkout of the same commit. The
+   macOS and Windows jobs of a tag build use the `release` environment, so they wait until a
+   reviewer approves them; see [Protect the signing secrets](#protect-the-signing-secrets). The
+   Linux jobs sign nothing and need no secrets, so they don't use it. No bundle job ever gets the
+   updater's private key. Each job:
+   - installs the packages with `yarn install --immutable`, without Yarn's cache, so nothing
+     another job saved reaches it, and with install scripts off, as everywhere
+     (`.yarnrc.yml`); and Rust, just and, on Linux, the system packages and the pinned AppImage
+     tools. Cargo is there only because the Tauri CLI runs `cargo metadata`: `RUSTC` points at
+     nothing, so any build, and with it any build script, fails before it starts;
+   - checks and places the compile job's artifact with `compiled.sh unpack`: only plain files and
+     folders under those names, exactly the ones in the manifest with its SHA-256s, unpacked into
+     a checkout where nothing was built;
+   - runs `package.sh --skip-compile`, with only its own platform's signing secrets. It copies the
+     sidecar's packages from this checkout's `node_modules`, downloads Node and checks it against
+     its pinned SHA-256, sets up signing, signs the sidecar's native code and runs
+     `tauri bundle`, which signs (and on macOS notarizes) the app and the installer. A release
+     build stops on macOS and Windows without signing, and leaves a record of how it was signed
+     next to the bundles;
+   - stops, with `compiled.sh check-unbuilt`, if cargo or `yarn build` ran, or if `main.mjs` or
+     `dist/` changed;
    - collects the installers and update files under the release's file names, with
      [`scripts/ci/collect-bundles.sh`](scripts/ci/collect-bundles.sh). On macOS it makes the
      update archive itself, a `tar.gz` of the stapled app in the format Tauri's bundler writes
      and the updater unpacks: a GNU tar with `PR Quest.app` as its only top folder, symbolic links
-     kept, and no extended attributes or AppleDouble (`._`) files;
+     kept, every entry owned by user and group 0 without names, and no extended attributes,
+     AppleDouble (`._`) files or hard links;
    - on every tag build, checks the signatures, whatever `package.sh` reported. On macOS: the code
      signature, Gatekeeper's verdict, the stapled notarization and that the team is
      `APPLE_TEAM_ID`, for the app and again for the app unpacked from the update archive. On
      Windows: it installs the app and checks that every `.exe`, `.dll` and `.node` file in it,
      and the installer, is validly signed by `WINDOWS_SIGNER_SUBJECT`, then uninstalls it. The
-     bundled Node, `pr-quest-node.exe`, only has to be validly signed: it keeps the OpenJS
-     Foundation's signature, which Tauri doesn't replace;
+     bundled Node, `pr-quest-node.exe` next to the app, keeps the OpenJS Foundation's signature,
+     which Tauri doesn't replace, so it must be validly signed by
+     `CN=OpenJS Foundation, O=OpenJS Foundation, L=San Francisco, S=California, C=US`, the
+     subject the pinned Node is signed with. Check it again when the Node version changes;
    - smoke-tests every bundle with `just desktop-smoke`: the app and the `dmg` on macOS, the
      AppImage and the `deb` under `--headless` on Linux, and the installer on Windows;
    - uploads the files.
 
-5. **Sign the update files.** The only job that gets the updater's private key. It uses the
+   **What the split protects, and what it doesn't.** Nothing that runs while compiling runs next
+   to the signing secrets. The compile job has none, and whatever a malicious dependency could
+   leave behind there, such as a changed script, a rewritten Tauri CLI in `node_modules` or a
+   process in the background waiting for the keychain, stays on that runner: the bundle job's
+   scripts, tools and packages come from its own checkout and install, and it takes nothing but
+   the binary, `main.mjs` and `dist/` from the compile job. Those three are still made by the
+   dependencies' code, though, and the bundle job signs them, since a release has to sign what
+   it built: a dependency compromised at build time can still put anything into the signed app.
+   And the packages the bundle job installs, the Tauri CLI among them, run there with the
+   secrets; what guards them is `yarn.lock`'s checksums, the minimum age of new versions
+   (`npmMinimalAgeGate`) and install scripts being off, not the split.
+
+6. **Sign the update files.** The only job that gets the updater's private key. It uses the
    `release` environment in a tag build, so it waits for a second approval. It checks out
    nothing but [`scripts/ci/sign-updates.sh`](scripts/ci/sign-updates.sh) and runs no Yarn or
    Cargo: the script downloads the Tauri CLI's own release binary (2.12.4, the version the app
@@ -98,17 +126,17 @@ flowchart LR
    `tauri signer sign --app-version <version>`, as `tauri build` would, so each signature's
    trusted comment ends in `version:<version>`, verifies each with minisign, and uploads only
    the `.sig` files.
-6. **Check the release files.** Gathers what the five builds made and the signatures, and stops
+7. **Check the release files.** Gathers what the five bundle jobs made and the signatures, and stops
    at a missing, unexpected or duplicate file, or at a build record that says a macOS or Windows
    build wasn't signed or used the dry run's opt-out. It checks every update signature against
    `PR_QUEST_UPDATER_PUBKEY` with `just desktop-verify-updater`, and that the signature is bound
    to the release's version, since the app refuses any other. Then it writes `latest.json` and
    `SHA256SUMS.txt`. See [`scripts/ci/release-assets.sh`](scripts/ci/release-assets.sh).
-7. **Publish the draft release.** The only job that can write to the repository, and it runs
+8. **Publish the draft release.** The only job that can write to the repository, and it runs
    none of the repository's code. It stops if the files are marked as a dry run's, if they
    aren't exactly the 16 release files, if `SHA256SUMS.txt` doesn't list and match the other
    15, if the tag no longer points at the commit the builds used, or if the release is published
-   already. On a public repository it then attests the files' build provenance, so anyone can
+   already. Only then, on a public repository, it attests the files' build provenance, so anyone can
    check where an installer came from with
    `gh attestation verify PR-Quest_0.2.0_x64-setup.exe --repo <owner>/<repo>`; only this job
    gets the two permissions that needs. GitHub offers attestations to private repositories only
@@ -215,8 +243,8 @@ approve it, check its draft as below, then delete the draft and the tag. Only th
    ```
 
 3. When the **Release** run asks for a review of the `release` environment, check that it runs
-   for your tag and the commit you merged, then approve it. It asks twice: first for the macOS
-   and Windows builds, which wait until then, and once they are done, for signing the update
+   for your tag and the commit you merged, then approve it. It asks twice: first for bundling
+   on macOS and Windows, which waits until then, and once that is done, for signing the update
    files.
 4. Wait for the workflow to finish. If a build fails because of the runner, re-run the failed
    jobs. If it needs a code change, delete the draft release and the tag, then release a new
@@ -259,7 +287,7 @@ repository or organization secret it can see. Set up the environment first, as d
 | `APPLE_API_ISSUER`                   | macOS    | The issuer ID shown above the list of keys                                             |
 | `APPLE_ID`                           | macOS    | Instead of the API key: the Apple Account that notarizes                               |
 | `APPLE_PASSWORD`                     | macOS    | Instead of the API key: an app-specific password for that account                      |
-| `APPLE_TEAM_ID`                      | macOS    | Instead of the API key: the 10-character team ID                                       |
+| `APPLE_TEAM_ID`                      | macOS    | Instead of the API key: the 10-character team ID; also a variable, see below           |
 | `AZURE_SIGNING_ENDPOINT`             | Windows  | The Artifact Signing account's endpoint, such as `https://weu.codesigning.azure.net`   |
 | `AZURE_SIGNING_ACCOUNT`              | Windows  | The Artifact Signing account name                                                      |
 | `AZURE_SIGNING_PROFILE`              | Windows  | The certificate profile name                                                           |
@@ -311,6 +339,12 @@ gh variable set APPLE_TEAM_ID --body ABCDE12345
 gh variable set WINDOWS_SIGNER_SUBJECT --body 'CN=Octo Cat, O=Octo Cat, L=Copenhagen, C=DK'
 ```
 
+`APPLE_TEAM_ID` is both a variable and, for notarizing with an Apple Account, a secret, with the
+same value. The variable is what the signature check compares the team against, so every tag
+build needs it, however it notarizes. The secret goes only to the macOS bundle jobs, which
+notarize with it; without an Apple Account, leave it out. The version check refuses a
+_repository secret_ named `APPLE_TEAM_ID`, not the repository variable.
+
 For Artifact Signing, the subject is the validated identity's details, in the order the
 certificate lists them. For a file signed with the certificate, PowerShell prints it with
 `(Get-AuthenticodeSignature <file>).SignerCertificate.Subject`; a tag build whose subject is set
@@ -356,11 +390,12 @@ secrets:
      itself, so keep such tokens short-lived and narrowly scoped.
    - **Deployment branches and tags**: **Selected branches and tags**, with one rule of the
      **Tag** type for `v*`. A run for a branch can't use the environment, even with approval.
-   - **Environment secrets**: the secrets in the table above. The build jobs and the signing
-     job ask for approval separately, so whoever approves sees each time what the run is about to
-     get. Delete any repository secret with
+   - **Environment secrets**: the secrets in the table above. Delete any repository secret with
      those names, and make sure no organization secret with those names is shared with this
      repository.
+   - **Two approvals per release**: the macOS and Windows bundle jobs ask for one, and once they
+     are done, the job that signs the update files asks for another, so whoever approves sees each
+     time what the run is about to get.
 2. **A tag ruleset.** Under **Settings**, **Rules**, **Rulesets**, add a **tag ruleset** named
    `release tags`, **Active**, targeting tags that match `v*`, with these rules:
    - **Restrict creations** and **Restrict deletions**.
