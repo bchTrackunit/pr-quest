@@ -648,6 +648,30 @@ jobs:
           fi
           sha256sum --check --strict SHA256SUMS.txt
 
+      # Before anything is attested: the tag could have been moved or recreated while the builds
+      # ran, and a published release is never changed.
+      - name: Check the tag and the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          tagged="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
+          if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+            echo "::error title=Tag moved::$TAG points at $tagged now, but these installers were built from $GITHUB_SHA. Release a new version instead."
+            exit 1
+          fi
+          if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$is_draft" != true ]]; then
+              echo "::error title=Already published::The release for $TAG is published already; tag a new version instead."
+              exit 1
+            fi
+            echo "draft=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "draft=false" >>"$GITHUB_OUTPUT"
+          fi
+
       # Signed by GitHub, so anyone can check an installer came from this workflow and commit with
       # `gh attestation verify`. GitHub offers attestations for public repositories, and for
       # private ones only on GitHub Enterprise Cloud.
@@ -664,25 +688,17 @@ jobs:
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.verify.outputs.version }}
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          DRAFT: ${{ steps.release.outputs.draft }}
         run: |
           assets="$RUNNER_TEMP/assets"
-          # The tag could have been moved or recreated while the builds ran.
-          tagged="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)"
-          if [[ "$tagged" != "$GITHUB_SHA" ]]; then
-            echo "::error title=Tag moved::$TAG points at $tagged now, but these installers were built from $GITHUB_SHA. Release a new version instead."
-            exit 1
-          fi
-          if is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [[ "$is_draft" != true ]]; then
-              echo "::error title=Already published::The release for $TAG is published already; tag a new version instead."
-              exit 1
-            fi
+          if [[ "$DRAFT" == true ]]; then
             gh release upload "$TAG" "$assets"/* --clobber
           else
             flags=()
             if [[ "$PRERELEASE" == true ]]; then
               flags+=(--prerelease)
             fi
+            # --verify-tag: fails rather than creating the tag, should it be gone by now.
             gh release create "$TAG" "$assets"/* --draft --verify-tag --generate-notes \
               --title "PR Quest $VERSION" "${flags[@]}"
           fi
