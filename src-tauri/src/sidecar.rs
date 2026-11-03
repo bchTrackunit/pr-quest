@@ -229,11 +229,34 @@ impl Sidecar {
 
 /// On Unix, puts the sidecar in a process group of its own, so stopping it stops what it started,
 /// such as cursorsandbox and rg. On Windows the job object does that (see `windows_job`).
+///
+/// If the shell is killed, the sidecar sees stdin close and stops the rest of its group itself.
+/// On Linux it also gets SIGTERM once the thread that started it ends, which is the supervising
+/// thread, alive as long as the sidecar is.
 fn isolate(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let shell = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+        // SAFETY: runs between fork and exec, so it only makes async-signal-safe calls and
+        // doesn't allocate.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                // The shell may have died before the line above, which then never fires.
+                if libc::getppid() != shell {
+                    return Err(io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
     }
     #[cfg(windows)]
     {
@@ -469,6 +492,22 @@ mod tests {
             let alive = unsafe { libc::kill(pid, 0) } == 0;
             !alive
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sends_it_sigterm_when_the_thread_that_started_it_ends() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = thread::spawn(|| {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            isolate(&mut command);
+            command.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
     }
 
     #[cfg(unix)]

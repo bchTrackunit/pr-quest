@@ -25,6 +25,7 @@ import { readPreferences, writePreferences } from '../preferences.ts';
 import { type NoticeAction, openWithNotices, type SecretsNotice } from '../secretsNotice.ts';
 import { type Check, runChecks, sdkChecks, serverChecks } from '../smoke.ts';
 import { dataKeyEncryptor } from './dataKeyEncryptor.ts';
+import { ownProcessGroup } from './processGroup.ts';
 import {
   bootstrapLine,
   exitAfterPrinting,
@@ -39,6 +40,16 @@ import {
 } from './protocol.ts';
 
 keepStdoutForProtocol();
+const group = ownProcessGroup();
+/** Ends the stdin loop, which stops the server as closing stdin does. */
+let stopReading = (): void => undefined;
+// Linux sends SIGTERM when the shell dies (see `isolate` in src-tauri/src/sidecar.rs). Stopping the
+// rest of the group sends this process one too, which it ignores.
+process.on('SIGTERM', () => {
+  if (!group?.signalledItself()) {
+    stopReading();
+  }
+});
 
 /** How long stopping waits for the server to close before it gives up on a stuck connection. */
 const CLOSE_TIMEOUT_MS = 5000;
@@ -69,9 +80,9 @@ async function main(): Promise<void> {
   if (smokeTest && process.env.PR_QUEST_STATE_DIR === undefined) {
     throw new Error('The smoke test needs PR_QUEST_STATE_DIR, so it leaves ~/.pr-quest alone');
   }
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })[
-    Symbol.asyncIterator
-  ]();
+  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  stopReading = () => input.close();
+  const lines = input[Symbol.asyncIterator]();
   const next: NextLine = async () => {
     const line = await lines.next();
     return line.done === true ? undefined : line.value;
@@ -218,9 +229,14 @@ function sidecarChecks({ config, server, secrets }: Started, launch: Launch): Ar
   ];
 }
 
+// What the server started would otherwise outlive it when the shell was killed.
 main().then(
-  () => process.exit(0),
+  () => {
+    group?.stopOthers();
+    process.exit(0);
+  },
   (error: unknown) => {
+    group?.stopOthers();
     // Only the message: nothing here may print the launch message, which holds the secrets.
     const message = error instanceof Error ? error.message : String(error);
     warn(`stopped: ${message}`);
