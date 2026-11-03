@@ -112,7 +112,7 @@ beforeAll(() => {
   // The stub just runs the repository's own check, as `just desktop-verify-updater` does.
   writeFileSync(
     join(keys, 'just'),
-    `#!/bin/sh\n[ "$1" = desktop-verify-updater ] || exit 64\nexec "${process.execPath}" "${join(repoRoot, 'scripts', 'verify-updater-signature.ts')}" "$2"\n`,
+    `#!/bin/sh\n[ "$1" = desktop-verify-updater ] || exit 64\nexec "${process.execPath}" "${join(repoRoot, 'apps', 'desktop', 'scripts', 'verify-updater-signature.ts')}" "$2"\n`,
   );
   chmodSync(join(keys, 'just'), 0o755);
 }, 60_000);

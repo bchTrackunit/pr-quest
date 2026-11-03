@@ -96,7 +96,7 @@ done
 if [[ -z "$triple" ]]; then
   fail "Pass --target <triple>, so the build record goes next to that target's bundles."
 fi
-record="${CARGO_TARGET_DIR:-src-tauri/target}/$triple/release/bundle/pr-quest-build.txt"
+record="${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/$triple/release/bundle/pr-quest-build.txt"
 signing_secrets=("${mac_certificate[@]}" "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}")
 
 if any_set "${updater_private[@]}"; then
@@ -234,7 +234,7 @@ windows_azure() {
   tool="$(signtool)"
   dlib="$(cygpath -w "$dir/bin/x64/Azure.CodeSigning.Dlib.dll")"
   metadata="$(cygpath -w "$metadata")"
-  # shellcheck disable=SC2089,SC2090 # for signCommandArgs in scripts/desktop/config.ts, not bash
+  # shellcheck disable=SC2089,SC2090 # for signCommandArgs in apps/desktop/scripts/desktop/config.ts, not bash
   export PR_QUEST_WINDOWS_SIGN_COMMAND="\"$tool\" sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /d \"PR Quest\" /dlib \"$dlib\" /dmdf \"$metadata\" %1"
 }
 
@@ -252,7 +252,7 @@ windows_pfx() {
     fail "Importing WINDOWS_PFX gave no certificate thumbprint."
   fi
   thumbprint="$imported"
-  # shellcheck disable=SC2089,SC2090 # for signCommandArgs in scripts/desktop/config.ts, not bash
+  # shellcheck disable=SC2089,SC2090 # for signCommandArgs in apps/desktop/scripts/desktop/config.ts, not bash
   export PR_QUEST_WINDOWS_SIGN_COMMAND="\"$tool\" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d \"PR Quest\" /sha1 $thumbprint %1"
 }
 

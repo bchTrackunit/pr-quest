@@ -85,14 +85,18 @@ elif [[ -n "${1:-}" ]]; then
   exit 2
 fi
 
-installed="$(jq -r .version node_modules/@tauri-apps/cli/package.json 2>/dev/null)" ||
-  fail "Install the dependencies first; no node_modules/@tauri-apps/cli."
+# The CLI the desktop package resolves, wherever Yarn installed it.
+installed="$(node --input-type=module -e "
+  import { createRequire } from 'node:module';
+  const cli = createRequire('$PWD/apps/desktop/package.json').resolve('@tauri-apps/cli/package.json');
+  console.log(createRequire(import.meta.url)(cli).version);
+" 2>/dev/null)" || fail "Install the dependencies first; apps/desktop can't find @tauri-apps/cli."
 if [[ "$installed" != "$cli_version" ]]; then
   fail "The pins in $0 are for Tauri CLI $cli_version, but $installed is installed. Check what its AppImage bundler downloads and update them."
 fi
 # With it, the bundler keeps its tools in the target folder instead of the cache seeded here.
-if [[ "$(jq -r '.bundle.useLocalToolsDir // false' src-tauri/tauri.conf.json)" != false ]]; then
-  fail "src-tauri/tauri.conf.json sets bundle.useLocalToolsDir, so the bundler wouldn't use the pinned tools."
+if [[ "$(jq -r '.bundle.useLocalToolsDir // false' apps/desktop/src-tauri/tauri.conf.json)" != false ]]; then
+  fail "apps/desktop/src-tauri/tauri.conf.json sets bundle.useLocalToolsDir, so the bundler wouldn't use the pinned tools."
 fi
 
 # Where the bundler looks: dirs::cache_dir() joined with "tauri".

@@ -38,11 +38,11 @@ function stub(name: string, body: string): void {
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'seed-tauri-tools-'));
-  for (const sub of ['bin', 'repo/node_modules/@tauri-apps/cli', 'repo/src-tauri']) {
+  for (const sub of ['bin', 'repo/node_modules/@tauri-apps/cli', 'repo/apps/desktop/src-tauri']) {
     mkdirSync(join(dir, sub), { recursive: true });
   }
   cli('2.12.4');
-  writeFileSync(join(dir, 'repo/src-tauri/tauri.conf.json'), '{"bundle": {}}');
+  writeFileSync(join(dir, 'repo/apps/desktop/src-tauri/tauri.conf.json'), '{"bundle": {}}');
   stub('uname', `echo "\${STUB_ARCH:-x86_64}"`);
   // Each "download" holds its URL; sha256sum looks the URL up among the pins.
   stub(
@@ -139,7 +139,7 @@ describe.skipIf(process.platform === 'win32')('seed-tauri-tools.sh', () => {
 
   test('stops when tauri.conf.json keeps the tools somewhere else', () => {
     writeFileSync(
-      join(dir, 'repo/src-tauri/tauri.conf.json'),
+      join(dir, 'repo/apps/desktop/src-tauri/tauri.conf.json'),
       '{"bundle": {"useLocalToolsDir": true}}',
     );
     const result = run();

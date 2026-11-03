@@ -6,7 +6,7 @@
 set -euo pipefail
 
 triple="${1:?usage: $0 <triple>}"
-bundle="${CARGO_TARGET_DIR:-src-tauri/target}/$triple/release/bundle"
+bundle="${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/$triple/release/bundle"
 
 shopt -s nullglob
 flags=(--target "$triple")

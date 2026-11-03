@@ -22,7 +22,7 @@ elif [[ -n "${4:-}" ]]; then
   echo "usage: $0 <triple> <version> <output folder> [--updater]" >&2
   exit 2
 fi
-bundle="${CARGO_TARGET_DIR:-src-tauri/target}/$triple/release/bundle"
+bundle="${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/$triple/release/bundle"
 
 fail() {
   echo "::error title=Bundles::$1"

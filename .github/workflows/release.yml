@@ -78,24 +78,24 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          version="$(jq -r .version package.json)"
+          version="$(jq -r .version apps/desktop/package.json)"
           # Checked on dry runs too, so a bad version shows up before anyone tags it.
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
           if [[ ! "$version" =~ $semver ]]; then
-            echo "::error title=Bad version::package.json has version $version. Use major.minor.patch, with an optional prerelease part such as 1.2.0-beta.1."
+            echo "::error title=Bad version::apps/desktop/package.json has version $version. Use major.minor.patch, with an optional prerelease part such as 1.2.0-beta.1."
             exit 1
           fi
-          # The app reports its version to the updater, which Tauri takes from package.json. If it
-          # differed from the release's, every install would see the release as new and update to
-          # it forever.
-          tauri="$(jq -r .version src-tauri/tauri.conf.json)"
+          # The app reports its version to the updater, which Tauri takes from
+          # apps/desktop/package.json. If it differed from the release's, every install would see
+          # the release as new and update to it forever.
+          tauri="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           if [[ "$tauri" != ../package.json ]]; then
-            echo "::error title=Version mismatch::src-tauri/tauri.conf.json has version $tauri. Set it to \"../package.json\", so the app's version is the release's."
+            echo "::error title=Version mismatch::apps/desktop/src-tauri/tauri.conf.json has version $tauri. Set it to \"../package.json\", so the app's version is the release's."
             exit 1
           fi
-          cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
+          cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' apps/desktop/src-tauri/Cargo.toml | head -n 1)"
           if [[ "$cargo" != "$version" ]]; then
-            echo "::error title=Version mismatch::package.json has version $version, but src-tauri/Cargo.toml $cargo. Set both, then update Cargo.lock."
+            echo "::error title=Version mismatch::apps/desktop/package.json has version $version, but apps/desktop/src-tauri/Cargo.toml $cargo. Set both, then update Cargo.lock."
             exit 1
           fi
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
@@ -105,7 +105,7 @@ jobs:
               exit 1
             fi
             if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-              echo "::error title=Version mismatch::The tag is $GITHUB_REF_NAME, but package.json has version $version. Tag the commit that sets the version, as v$version."
+              echo "::error title=Version mismatch::The tag is $GITHUB_REF_NAME, but apps/desktop/package.json has version $version. Tag the commit that sets the version, as v$version."
               exit 1
             fi
             # Catches a mistake, not an attacker: a tag build runs the tagged commit's own copy of
@@ -147,8 +147,8 @@ jobs:
             echo "::error title=Updater key::PR_QUEST_UPDATER_PUBKEY isn't a Tauri updater public key: the contents of the .pub file that \`tauri signer generate\` writes."
             exit 1
           fi
-          if [[ "$PUBKEY" == "$(jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json)" ]]; then
-            echo "::error title=Updater key::PR_QUEST_UPDATER_PUBKEY is the local development key from src-tauri/tauri.conf.json. Generate a release key pair; see RELEASING.md."
+          if [[ "$PUBKEY" == "$(jq -r .plugins.updater.pubkey apps/desktop/src-tauri/tauri.conf.json)" ]]; then
+            echo "::error title=Updater key::PR_QUEST_UPDATER_PUBKEY is the local development key from apps/desktop/src-tauri/tauri.conf.json. Generate a release key pair; see RELEASING.md."
             exit 1
           fi
 
@@ -162,7 +162,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           mkdir -p "$RUNNER_TEMP/dry-run-key"
-          node node_modules/@tauri-apps/cli/tauri.js signer generate --ci -p '' \
+          yarn workspace @pr-quest/desktop exec tauri signer generate --ci -p '' \
             -w "$RUNNER_TEMP/dry-run-key/updater.key" >/dev/null
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -266,8 +266,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
     env:
       # A release build, the only kind that checks for updates and gets update files, of the
-      # repository it updates from and the release goes to; see src-tauri/build.rs. Dry runs build
-      # the same, so they test what a release ships.
+      # repository it updates from and the release goes to; see apps/desktop/src-tauri/build.rs.
+      # Dry runs build the same, so they test what a release ships.
       PR_QUEST_RELEASE_BUILD: '1'
       PR_QUEST_RELEASE_REPO: ${{ github.repository }}
       TARGET: ${{ matrix.target }}
@@ -345,7 +345,7 @@ jobs:
       - name: Check the signature and notarization
         if: steps.mac.outputs.signed == 'true'
         run: |
-          app="src-tauri/target/$TARGET/release/bundle/macos/PR Quest.app"
+          app="apps/desktop/src-tauri/target/$TARGET/release/bundle/macos/PR Quest.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           spctl --assess --type execute --verbose=2 "$app"
           xcrun stapler validate "$app"
@@ -357,7 +357,7 @@ jobs:
         if: steps.win.outputs.signed == 'true'
         shell: pwsh
         run: |
-          $installer = Get-Item "src-tauri/target/$env:TARGET/release/bundle/nsis/*-setup.exe"
+          $installer = Get-Item "apps/desktop/src-tauri/target/$env:TARGET/release/bundle/nsis/*-setup.exe"
           $dir = Join-Path $env:RUNNER_TEMP 'installed\PR Quest'
           Start-Process -Wait -FilePath $installer.FullName -ArgumentList '/S', "/D=$dir"
           $files = @($installer) + @(Get-ChildItem -Recurse -File $dir | Where-Object { $_.Extension -in '.exe', '.dll', '.node' })
