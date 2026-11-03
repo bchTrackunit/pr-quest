@@ -4,8 +4,9 @@
 # the names below; see RELEASING.md. A secret that isn't set reaches this script as an empty
 # string, so empty ones are unset first.
 #
-# The release workflow runs it twice: with --compile-only, which builds the app without any
-# secret, then with --skip-compile and the secrets, which only bundles and signs what was built.
+# The release workflow runs it in two jobs: with --compile-only, which builds the app without any
+# secret, then, in a fresh checkout, with --skip-compile and the secrets, which only bundles and
+# signs what was built (scripts/ci/compiled.sh carries it across).
 #
 # - Release builds (PR_QUEST_RELEASE_BUILD=1) need PR_QUEST_UPDATER_PUBKEY, the public key the
 #   app trusts updates from. They never get the private key: the workflow's sign-updates job signs
