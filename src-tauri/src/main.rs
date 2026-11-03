@@ -80,7 +80,7 @@ fn token() -> String {
 }
 
 /// `PR_QUEST_SMOKE_TEST`: `1` runs the smoke test and exits; `idle` keeps the test's isolation but
-/// stays open, so scripts/tauri-measure.ts can measure it and check what quitting stops.
+/// stays open, so scripts/desktop-measure.ts can measure it and check what quitting stops.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     App,
@@ -115,7 +115,20 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(move |app| {
-            start(app.handle(), mode)?;
+            if let Err(error) = start(app.handle(), mode) {
+                let app = app.handle().clone();
+                let log = app.try_state::<Log>().map(|log| log.inner().clone());
+                let detail = format!("{error}.");
+                thread::spawn(move || {
+                    fail(
+                        &app,
+                        mode,
+                        log.as_ref(),
+                        "PR Quest could not start",
+                        &detail,
+                    )
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -162,10 +175,14 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
     // A test run keeps its preferences and log in its throwaway state directory.
     let data_dir = match std::env::var_os("PR_QUEST_STATE_DIR") {
         Some(state_dir) if mode != Mode::App => PathBuf::from(state_dir).join("tauri"),
-        _ => paths.app_config_dir()?,
+        _ => paths
+            .app_config_dir()
+            .map_err(|error| format!("It found no folder for its settings ({error})"))?,
     };
     let log_dir = if mode == Mode::App {
-        paths.app_log_dir()?
+        paths
+            .app_log_dir()
+            .map_err(|error| format!("It found no folder for its log ({error})"))?
     } else {
         data_dir.clone()
     };
@@ -213,14 +230,19 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
     let data_key = data_key
         .inspect_err(|error| log.warn(&format!("no data key: {error}")))
         .ok();
-    fs::create_dir_all(&data_dir)?;
+    fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("It couldn't create {} ({error})", data_dir.display()))?;
+    // Tauri refuses to find its resources when the app's path goes through a symlink on macOS.
+    let resources = paths
+        .resource_dir()
+        .map_err(|error| format!("It couldn't find its own files ({error})"))?;
     let server = Server {
         node: std::env::current_exe()?.with_file_name(if cfg!(windows) {
             "node.exe"
         } else {
             "node"
         }),
-        script: paths.resource_dir()?.join("sidecar").join("main.mjs"),
+        script: resources.join("sidecar").join("main.mjs"),
         request_secret: token(),
         data_key,
         preferences_file: data_dir.join("desktop.json").to_string_lossy().into_owned(),
@@ -282,7 +304,7 @@ fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke:
                 return fail(
                     app,
                     mode,
-                    log,
+                    Some(log),
                     "PR Quest could not start",
                     &format!("Its server didn't start: {error}."),
                 )
@@ -306,12 +328,18 @@ fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke:
         let reason = match session.run(&events_rx, &mut smoke) {
             Outcome::Stopped => return,
             Outcome::Failed(reason) if first => {
-                return fail(app, mode, log, "PR Quest could not start", &reason)
+                return fail(app, mode, Some(log), "PR Quest could not start", &reason)
             }
             Outcome::Failed(reason) | Outcome::Crashed(reason) => reason,
         };
         if mode == Mode::SmokeTest || !restarts.allow(Instant::now()) {
-            return fail(app, mode, log, "PR Quest's server keeps stopping", &reason);
+            return fail(
+                app,
+                mode,
+                Some(log),
+                "PR Quest's server keeps stopping",
+                &reason,
+            );
         }
         log.warn(&format!("{reason} Starting it again."));
         first = false;
@@ -430,7 +458,9 @@ impl Session<'_> {
             };
             if let Err(error) = shown {
                 let detail = format!("Its window didn't open: {error}.");
-                thread::spawn(move || fail(&app, mode, &log, "PR Quest could not start", &detail));
+                thread::spawn(move || {
+                    fail(&app, mode, Some(&log), "PR Quest could not start", &detail)
+                });
             }
         });
     }
@@ -471,10 +501,16 @@ fn confirm_plaintext(app: &AppHandle) -> bool {
 
 /// Tells the player why the app has to stop, then quits. Blocks on the dialog, so it never runs
 /// on the main thread. A test run prints a failed check instead.
-fn fail(app: &AppHandle, mode: Mode, log: &Log, message: &str, detail: &str) {
-    log.warn(&format!("{message}: {detail}"));
+fn fail(app: &AppHandle, mode: Mode, log: Option<&Log>, message: &str, detail: &str) {
+    match log {
+        Some(log) => log.warn(&format!("{message}: {detail}")),
+        None => eprintln!("[pr-quest] {message}: {detail}"),
+    }
     if mode == Mode::App {
-        let detail = format!("{detail}\n\nThe log is in {}.", log.path().display());
+        let detail = match log {
+            Some(log) => format!("{detail}\n\nThe log is in {}.", log.path().display()),
+            None => detail.to_owned(),
+        };
         dialog::error(app, message, &detail);
     } else {
         println!("[smoke] FAIL {message}: {detail}");
