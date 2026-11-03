@@ -17,7 +17,14 @@ pub const WINDOW_SCRIPT: &str = r#"
 (() => {
   if (window.top !== window || location.protocol !== 'http:') return;
   const violations = [];
+  // The IPC probe below is meant to be blocked; that is the ipc check's, not the csp check's.
+  let probingIpc = false;
+  let ipcBlockedByCsp = 0;
   document.addEventListener('securitypolicyviolation', (event) => {
+    if (probingIpc && event.blockedURI.startsWith('ipc:')) {
+      ipcBlockedByCsp += 1;
+      return;
+    }
     violations.push(
       `${event.violatedDirective} ${event.blockedURI} at ${event.sourceFile || '?'}:${event.lineNumber} ${event.sample}`,
     );
@@ -46,6 +53,7 @@ pub const WINDOW_SCRIPT: &str = r#"
     );
     // tauri.conf.json grants no capabilities, so the page can't call the shell or its plugins.
     const internals = window.__TAURI_INTERNALS__;
+    probingIpc = true;
     const ipc = typeof internals?.invoke !== 'function' ? 'absent' : await Promise.race([
       internals.invoke('plugin:opener|open_url', { url: 'https://example.invalid/' }).then(
         () => 'allowed',
@@ -54,6 +62,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       sleep(5000).then(() => 'no answer in 5 s'),
     ]);
     await sleep(500);
+    probingIpc = false;
     const report = {
       path: location.pathname + location.search,
       title: document.title,
@@ -63,6 +72,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       events,
       eventsStatus,
       ipc,
+      ipcBlockedByCsp,
       cookieVisible: document.cookie.includes('pr_quest_secret'),
       violations,
       userAgent: navigator.userAgent,
@@ -211,7 +221,14 @@ fn ipc_check(report: &Value) -> Result<String, String> {
     match report["ipc"].as_str() {
         Some("absent") => Ok("the page has no IPC".into()),
         Some(ipc) if ipc.starts_with("rejected") => {
-            Ok("the shell refused the page's call to the opener plugin".into())
+            let csp = if report["ipcBlockedByCsp"].as_u64().unwrap_or(0) > 0 {
+                "; the page's CSP blocked its ipc:// request first"
+            } else {
+                ""
+            };
+            Ok(format!(
+                "the shell refused the page's call to the opener plugin{csp}"
+            ))
         }
         Some(ipc) => Err(format!("the page's call to the opener plugin was {ipc}")),
         None => Err("the window didn't say whether it can call the shell".into()),
