@@ -1,5 +1,6 @@
 //! The GitHub repository PR Quest is released from. The app checks its releases for updates, and
-//! Help opens it. build.rs includes this file too, to refuse a release build of the placeholder.
+//! Help opens it. build.rs includes this file too, to refuse a release build of the placeholder or
+//! with the development updater key.
 
 /// Stands in for the real owner until the repository is public. Nothing updates from it.
 pub const PLACEHOLDER_OWNER: &str = "CHANGE-ME";
@@ -45,6 +46,36 @@ impl<'a> Repo<'a> {
             "https://github.com/{}/{}/releases/latest/download/latest.json",
             self.owner, self.name
         )
+    }
+}
+
+/// Why a release build's updater key won't do, if it won't: the one in tauri.conf.json (`base`) is
+/// for local builds, whose private half isn't kept secret, so a release must replace it through
+/// the `--config` overlay that `tauri build` passes as `TAURI_CONFIG`.
+#[allow(dead_code)]
+pub fn updater_key_problem(base: &str, overlay: Option<&str>) -> Option<String> {
+    let pubkey = |config: &serde_json::Value| {
+        config
+            .pointer("/plugins/updater/pubkey")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let base = match serde_json::from_str(base) {
+        Ok(config) => pubkey(&config),
+        Err(error) => return Some(format!("tauri.conf.json isn't valid JSON: {error}")),
+    };
+    let release = match overlay.map(serde_json::from_str) {
+        Some(Ok(config)) => pubkey(&config),
+        Some(Err(error)) => return Some(format!("TAURI_CONFIG isn't valid JSON: {error}")),
+        None => None,
+    };
+    match release {
+        Some(key) if Some(&key) != base.as_ref() => None,
+        _ => Some(
+            "A release build needs its own updater key: set PR_QUEST_UPDATER_PUBKEY and package \
+             with scripts/desktop-package.ts; the key in tauri.conf.json is for local builds"
+                .into(),
+        ),
     }
 }
 
@@ -94,6 +125,37 @@ mod tests {
         for value in [DEFAULT_REPO, "change-me/pr-quest", "Change-Me/other"] {
             assert!(!Repo::parse(value).unwrap().is_publishable(), "{value}");
         }
+    }
+
+    const BASE: &str = r#"{"plugins":{"updater":{"pubkey":"DEV"}}}"#;
+
+    #[test]
+    fn a_release_needs_its_own_updater_key() {
+        let release = r#"{"plugins":{"updater":{"pubkey":"RELEASE"}}}"#;
+        assert_eq!(updater_key_problem(BASE, Some(release)), None);
+    }
+
+    #[test]
+    fn refuses_the_development_updater_key() {
+        for overlay in [
+            None,
+            Some(r#"{"bundle":{"createUpdaterArtifacts":true}}"#),
+            Some(r#"{"plugins":{"updater":{"pubkey":"DEV"}}}"#),
+        ] {
+            let problem = updater_key_problem(BASE, overlay);
+            assert!(
+                problem
+                    .as_deref()
+                    .is_some_and(|p| p.contains("PR_QUEST_UPDATER_PUBKEY")),
+                "{overlay:?}: {problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_configuration_it_cant_read() {
+        assert!(updater_key_problem("{", None).is_some());
+        assert!(updater_key_problem(BASE, Some("not json")).is_some());
     }
 
     #[test]

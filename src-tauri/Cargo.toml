@@ -9,6 +9,7 @@ publish = false
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }
+serde_json = "1"
 
 # Exact pins at least seven days old, like .yarnrc.yml's npmMinimalAgeGate; Cargo has no age gate,
 # so transitive crates in Cargo.lock aren't held back the same way. deny.toml audits them.
