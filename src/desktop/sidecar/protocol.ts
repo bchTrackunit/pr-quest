@@ -1,3 +1,4 @@
+import { format } from 'node:util';
 import { z } from 'zod';
 
 import { NOTICE_ACTIONS, type SecretsNotice } from '../secretsNotice.ts';
@@ -10,8 +11,9 @@ import { DATA_KEY_BYTES } from './dataKeyEncryptor.ts';
  *   window, is answered with `BOOTSTRAP_PREFIX` and a new one-time code for the window to open.
  * - stdout, one prefixed JSON line each: `NOTICE_PREFIX` and a `SecretsNotice` for the shell to
  *   show, answered with a `notice` command; `READY_PREFIX` and a `Ready` once the server listens;
- *   `FATAL_PREFIX` and why it couldn't start; then smoke test lines. Logs go to stderr, so nothing
- *   a dependency prints can pass for one of these.
+ *   `FATAL_PREFIX` and why it couldn't start; then smoke test lines. The shell ignores other
+ *   lines. Logs go to stderr, and `keepStdoutForProtocol` sends console.log, info and debug there
+ *   too, so what a dependency logs stays out of the way.
  */
 
 export const READY_PREFIX = 'PRQUEST_READY ';
@@ -82,6 +84,36 @@ export function bootstrapLine(code: string): string {
 /** Why the server couldn't start, which the shell shows in its error dialog. */
 export function fatalLine(message: string): string {
   return `${FATAL_PREFIX}${JSON.stringify({ message })}`;
+}
+
+interface Writable {
+  write: (text: string) => boolean;
+}
+
+/** Points `target`'s methods that write to stdout at `stderr` instead. */
+export function keepStdoutForProtocol(
+  target: Pick<Console, 'log' | 'info' | 'debug'> = console,
+  stderr: Writable = process.stderr,
+): void {
+  const toStderr = (...args: Array<unknown>): void => {
+    stderr.write(`${format(...args)}\n`);
+  };
+  target.log = toStderr;
+  target.info = toStderr;
+  target.debug = toStderr;
+}
+
+/**
+ * Prints `line` and exits once it is written: `process.exit` drops what a pipe hasn't taken yet,
+ * and the shell would then show a crash instead of the reason.
+ */
+export function exitAfterPrinting(
+  line: string,
+  code: number,
+  stdout: { write: (text: string, done: () => void) => boolean } = process.stdout,
+  exit: (code: number) => void = (status) => process.exit(status),
+): void {
+  stdout.write(`${line}\n`, () => exit(code));
 }
 
 function safeParse(line: string): unknown {

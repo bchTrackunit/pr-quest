@@ -27,7 +27,9 @@ import { type Check, runChecks, sdkChecks, serverChecks } from '../smoke.ts';
 import { dataKeyEncryptor } from './dataKeyEncryptor.ts';
 import {
   bootstrapLine,
+  exitAfterPrinting,
   fatalLine,
+  keepStdoutForProtocol,
   type Launch,
   noticeLine,
   parseCommand,
@@ -35,6 +37,8 @@ import {
   readyLine,
   SMOKE_DONE_PREFIX,
 } from './protocol.ts';
+
+keepStdoutForProtocol();
 
 /** How long stopping waits for the server to close before it gives up on a stuck connection. */
 const CLOSE_TIMEOUT_MS = 5000;
@@ -220,7 +224,6 @@ main().then(
     // Only the message: nothing here may print the launch message, which holds the secrets.
     const message = error instanceof Error ? error.message : String(error);
     warn(`stopped: ${message}`);
-    print(fatalLine(message));
-    process.exit(1);
+    exitAfterPrinting(fatalLine(message), 1);
   },
 );

@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
   BOOTSTRAP_PREFIX,
   bootstrapLine,
   FATAL_PREFIX,
+  exitAfterPrinting,
   fatalLine,
+  keepStdoutForProtocol,
   NOTICE_PREFIX,
   noticeLine,
   parseCommand,
@@ -80,6 +82,36 @@ test('fatalLine says why the server could not start, on one line', () => {
 
 test('bootstrapLine hands the shell a new start-up code, as one prefixed JSON line', () => {
   expect(bootstrapLine('c'.repeat(43))).toBe(`${BOOTSTRAP_PREFIX}{"code":"${'c'.repeat(43)}"}`);
+});
+
+test('exitAfterPrinting exits only once the line is written, so the shell reads why', () => {
+  let written: (() => void) | undefined;
+  const stdout = {
+    write: vi.fn((_text: string, done: () => void) => {
+      written = done;
+      return false;
+    }),
+  };
+  const exit = vi.fn();
+
+  exitAfterPrinting(fatalLine('boom'), 1, stdout, exit);
+
+  expect(stdout.write).toHaveBeenCalledWith(`${fatalLine('boom')}\n`, expect.any(Function));
+  expect(exit).not.toHaveBeenCalled();
+  written?.();
+  expect(exit).toHaveBeenCalledWith(1);
+});
+
+test("keepStdoutForProtocol sends console.log, info and debug to stderr, which isn't the protocol", () => {
+  const stderr = { write: vi.fn(() => true) };
+  const target = { log: vi.fn(), info: vi.fn(), debug: vi.fn() };
+
+  keepStdoutForProtocol(target, stderr);
+  target.log('a', 1);
+  target.info('b');
+  target.debug({ c: true });
+
+  expect(stderr.write.mock.calls).toEqual([['a 1\n'], ['b\n'], ['{ c: true }\n']]);
 });
 
 test('readyLine is one prefixed JSON line', () => {
