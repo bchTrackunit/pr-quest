@@ -19,6 +19,9 @@ inputs:
   linux-smoke:
     description: On Linux, also install what the headless smoke test needs.
     default: 'false'
+  appimage-tools:
+    description: On Linux, pin the AppImage tools Tauri downloads, which only bundling needs.
+    default: 'true'
 
 runs:
   using: composite
@@ -72,6 +75,6 @@ runs:
         fi
 
     - name: Pin the AppImage tools Tauri downloads
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && inputs.appimage-tools == 'true'
       shell: bash
       run: bash scripts/ci/seed-tauri-tools.sh
