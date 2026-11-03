@@ -1,5 +1,5 @@
 //! The shell's log file, which the sidecar's stderr goes to as well. Nothing may log the launch
-//! message or the bootstrap URL, which hold the secrets.
+//! message or the bootstrap URL, which hold the secrets. On Unix only the player can read it.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -24,8 +24,8 @@ impl Log {
         rotate(path, MAX_BYTES);
         let file = path
             .parent()
-            .map_or(Ok(()), fs::create_dir_all)
-            .and_then(|()| OpenOptions::new().create(true).append(true).open(path))
+            .map_or(Ok(()), private_dir)
+            .and_then(|()| private_file(path))
             .ok();
         Log {
             echo: echo || file.is_none(),
@@ -62,6 +62,36 @@ impl Log {
     }
 }
 
+#[cfg(unix)]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir)?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
+#[cfg(unix)]
+fn private_file(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)?;
+    // The mode applies only to a new file; an older one may be readable by others.
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn private_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
 fn rotate(path: &Path, max_bytes: u64) {
     if fs::metadata(path).is_ok_and(|meta| meta.len() > max_bytes) {
         let _ = fs::rename(path, path.with_extension("old.log"));
@@ -90,6 +120,25 @@ mod tests {
             text.contains("info one\n") && text.contains("warn two\n"),
             "{text}"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_player_can_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("private");
+        let logs = dir.join("logs");
+        let path = logs.join("main.log");
+        Log::open(&path, false).info("one");
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&logs), 0o700);
+        assert_eq!(mode(&path), 0o600);
+        // A log an earlier build left readable gets tightened too.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        Log::open(&path, false).info("two");
+        assert_eq!(mode(&path), 0o600);
         fs::remove_dir_all(dir).unwrap();
     }
 
