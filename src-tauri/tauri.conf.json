@@ -10,7 +10,8 @@
     "withGlobalTauri": false,
     "windows": [],
     "security": {
-      "csp": "default-src 'none'"
+      "csp": "default-src 'none'",
+      "capabilities": []
     }
   },
   "bundle": {

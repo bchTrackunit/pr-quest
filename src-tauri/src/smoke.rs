@@ -6,7 +6,7 @@
 use serde_json::Value;
 use tauri::Url;
 
-/// The window has no IPC (the page is remote), so its script reports by navigating to this path of
+/// The window may not use IPC (the page is remote), so its script reports by navigating to this path of
 /// the app, which the shell's navigation handler catches and cancels. Every webview reports a
 /// navigation to an http URL; not all of them report one to a scheme nobody handles.
 pub const REPORT_PATH: &str = "/__smoke-report";
@@ -44,6 +44,15 @@ pub const WINDOW_SCRIPT: &str = r#"
       (res) => { res.body?.cancel(); return res.status; },
       (error) => String(error),
     );
+    // tauri.conf.json grants no capabilities, so the page can't call the shell or its plugins.
+    const internals = window.__TAURI_INTERNALS__;
+    const ipc = typeof internals?.invoke !== 'function' ? 'absent' : await Promise.race([
+      internals.invoke('plugin:opener|open_url', { url: 'https://example.invalid/' }).then(
+        () => 'allowed',
+        (error) => `rejected: ${String(error)}`,
+      ),
+      sleep(5000).then(() => 'no answer in 5 s'),
+    ]);
     await sleep(500);
     const report = {
       path: location.pathname + location.search,
@@ -53,6 +62,7 @@ pub const WINDOW_SCRIPT: &str = r#"
       api,
       events,
       eventsStatus,
+      ipc,
       cookieVisible: document.cookie.includes('pr_quest_secret'),
       violations,
       userAgent: navigator.userAgent,
@@ -142,6 +152,7 @@ impl Smoke {
             },
         );
         self.check("request-secret-cookie", cookie_check(&report));
+        self.check("ipc", ipc_check(&report));
     }
 
     pub fn finish(&self, sidecar_ok: bool) -> i32 {
@@ -176,6 +187,18 @@ fn cookie_check(report: &Value) -> Result<String, String> {
              scripts can't read it; EventSource can't open while nobody is signed in to GitHub"
             .into()),
         _ => Err(problem()),
+    }
+}
+
+/// Whether the page was refused when it called the shell, or had no way to.
+fn ipc_check(report: &Value) -> Result<String, String> {
+    match report["ipc"].as_str() {
+        Some("absent") => Ok("the page has no IPC".into()),
+        Some(ipc) if ipc.starts_with("rejected") => {
+            Ok("the shell refused the page's call to the opener plugin".into())
+        }
+        Some(ipc) => Err(format!("the page's call to the opener plugin was {ipc}")),
+        None => Err("the window didn't say whether it can call the shell".into()),
     }
 }
 
@@ -214,6 +237,17 @@ mod tests {
         assert!(cookie_check(&report).is_err());
         let report = json!({ "api": 403, "events": "open", "cookieVisible": false });
         assert!(cookie_check(&report).is_err());
+    }
+
+    #[test]
+    fn the_page_cant_call_the_shell() {
+        for ipc in ["absent", "rejected: plugin:opener|open_url not allowed"] {
+            assert!(ipc_check(&json!({ "ipc": ipc })).is_ok(), "{ipc}");
+        }
+        for ipc in ["allowed", "no answer in 5 s"] {
+            assert!(ipc_check(&json!({ "ipc": ipc })).is_err(), "{ipc}");
+        }
+        assert!(ipc_check(&json!({})).is_err());
     }
 
     #[test]
