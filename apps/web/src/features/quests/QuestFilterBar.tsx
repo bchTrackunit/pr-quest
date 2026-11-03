@@ -59,15 +59,18 @@ const SORT_OPTIONS: ReadonlyArray<{ value: string; label: string; sort: Partial<
   { value: 'smart', label: 'Smart', sort: { mode: 'smart' } },
   { value: 'size-asc', label: 'Smallest first', sort: { mode: 'size', direction: 'asc' } },
   { value: 'size-desc', label: 'Largest first', sort: { mode: 'size', direction: 'desc' } },
+  { value: 'created-desc', label: 'Newest first', sort: { mode: 'created', direction: 'desc' } },
+  { value: 'created-asc', label: 'Oldest first', sort: { mode: 'created', direction: 'asc' } },
 ];
 
 const SORT_TITLES: Record<QuestSort['mode'], string> = {
   smart: 'Direct requests first, then needs attention, then the longest-waiting',
   size: 'Lines changed, then files changed',
+  created: 'When the pull request was opened',
 };
 
 function sortValue(sort: QuestSort): string {
-  return sort.mode === 'smart' ? 'smart' : `size-${sort.direction}`;
+  return sort.mode === 'smart' ? 'smart' : `${sort.mode}-${sort.direction}`;
 }
 
 /** How many of the filters inside the Filters panel are on. */

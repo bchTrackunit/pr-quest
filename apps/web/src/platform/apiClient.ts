@@ -6,7 +6,6 @@ import {
   type ApproveRequest,
   type ApproveResponse,
   type AuthStatusResponse,
-  type DecideFindingsRequest,
   type DeviceFlowResponse,
   type HealthResponse,
   type ListAchievementsResponse,
@@ -22,6 +21,7 @@ import {
   type RouteName,
   type RouteParams,
   type RunResponse,
+  type SelectFindingsRequest,
   type SettingsResponse,
   type StartReviewRequest,
   type UpdateSettingsRequest,
@@ -153,16 +153,16 @@ export function approveQuest(
   return apiRequest('approveQuest', { params: { id: questId }, body });
 }
 
-/** `findingIndexes` are the accepted findings the player confirmed; the server checks them. */
+/** `findingIndexes` are the selected findings the player confirmed; the server checks them. */
 export function postRun(runId: string, body: PostReviewRequest): Promise<PostReviewResponse> {
   return apiRequest('postRun', { params: { id: runId }, body });
 }
 
-export function saveFindingDecisions(
+export function saveFindingSelection(
   runId: string,
-  body: DecideFindingsRequest,
+  body: SelectFindingsRequest,
 ): Promise<RunResponse> {
-  return apiRequest('decideFindings', { params: { id: runId }, body });
+  return apiRequest('selectFindings', { params: { id: runId }, body });
 }
 
 export function discardRun(runId: string): Promise<RunResponse> {

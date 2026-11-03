@@ -226,6 +226,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       cursorApiKey: () => scoped.apiKeys.get('cursor'),
       settings: () => scoped.settings.get(),
       claude: scoped.claude.forGitHub(github),
+      github,
       log: info,
     });
     const quests = new QuestService({
@@ -390,7 +391,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       listRuns: perRequest('listRuns', user),
       getRun: perRequest('getRun', user),
       postRun: perRequest('postRun', user),
-      decideFindings: perRequest('decideFindings', user),
+      selectFindings: perRequest('selectFindings', user),
       discardRun: perRequest('discardRun', user),
       getPlayer: perRequest('getPlayer', user),
       listAchievements: perRequest('listAchievements', user),

@@ -12,7 +12,7 @@ install:
 dev:
     yarn dev
 
-# Run the production build (`just build` first): the API and the UI on one port
+# Build, then run the production build: the API and the UI on one port
 start:
     yarn start
 

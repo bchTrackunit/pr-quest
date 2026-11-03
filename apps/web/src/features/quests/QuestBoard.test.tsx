@@ -314,7 +314,7 @@ describe('QuestBoard filters and sorting', () => {
       within(sortSelect())
         .getAllByRole('option')
         .map((option) => option.textContent),
-    ).toEqual(['Smart', 'Smallest first', 'Largest first']);
+    ).toEqual(['Smart', 'Smallest first', 'Largest first', 'Newest first', 'Oldest first']);
 
     await user.selectOptions(sortSelect(), 'Smallest first');
     expect(direct()).toEqual(['Tiny typo fix', 'Rewrite the map engine']);
@@ -325,6 +325,23 @@ describe('QuestBoard filters and sorting', () => {
 
     await user.selectOptions(sortSelect(), 'Smart');
     expect(sortSelect()).toHaveProperty('value', 'smart');
+  });
+
+  test('sorts by when the PR was created in both directions', async () => {
+    const user = userEvent.setup();
+    renderBoard({
+      quests: [
+        makeQuest({ number: 1, title: 'Older PR', openedAt: '2026-10-01T00:00:00Z' }),
+        makeQuest({ number: 2, title: 'Newer PR', openedAt: '2026-10-05T00:00:00Z' }),
+      ],
+    });
+
+    await user.selectOptions(sortSelect(), 'Newest first');
+    expect(titles()).toEqual(['Newer PR', 'Older PR']);
+    expect(sortSelect()).toHaveProperty('value', 'created-desc');
+
+    await user.selectOptions(sortSelect(), 'Oldest first');
+    expect(titles()).toEqual(['Older PR', 'Newer PR']);
   });
 
   test('moves between toggles with the arrow keys', async () => {
