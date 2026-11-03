@@ -99,6 +99,11 @@ jobs:
             exit 1
           fi
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            # The dry run's opt-out from code signing, set anywhere a tag build would inherit it.
+            if [[ -n "${PR_QUEST_ALLOW_UNSIGNED_RELEASE:-}" ]]; then
+              echo "::error title=Unsigned release::PR_QUEST_ALLOW_UNSIGNED_RELEASE is set for a tag build. Only the dry run may build unsigned."
+              exit 1
+            fi
             if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
               echo "::error title=Version mismatch::The tag is $GITHUB_REF_NAME, but package.json has version $version. Tag the commit that sets the version, as v$version."
               exit 1
@@ -284,10 +289,13 @@ jobs:
           name: dry-run-updater-key
           path: ${{ runner.temp }}/dry-run-key
 
-      # Within the job, each secret reaches only the packaging step of its own platform.
+      # Within the job, each secret reaches only the packaging step of its own platform. A dry run
+      # has no secrets, so it opts out of code signing; package.sh refuses that in a tag build, and
+      # the build record it writes stops release-assets.sh from accepting the bundles for one.
       - name: Package (dry run)
         if: github.event_name == 'workflow_dispatch'
         env:
+          PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1'
           UPDATER_PRIVATE_KEY_FILE: ${{ runner.temp }}/dry-run-key/updater.key
           UPDATER_PUBKEY_FILE: ${{ runner.temp }}/dry-run-key/updater.key.pub
         run: bash scripts/ci/package.sh --target "$TARGET"
@@ -304,7 +312,6 @@ jobs:
         id: mac
         if: github.event_name == 'push' && runner.os == 'macOS'
         env:
-          REQUIRE_SIGNING: ${{ vars.REQUIRE_SIGNING }}
           PR_QUEST_UPDATER_PUBKEY: ${{ vars.PR_QUEST_UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -322,7 +329,6 @@ jobs:
         id: win
         if: github.event_name == 'push' && runner.os == 'Windows'
         env:
-          REQUIRE_SIGNING: ${{ vars.REQUIRE_SIGNING }}
           PR_QUEST_UPDATER_PUBKEY: ${{ vars.PR_QUEST_UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -410,19 +416,21 @@ jobs:
 
       # The update signatures are checked against the key the apps were built with, and
       # latest.json points at where the publish job uploads them. A dry run names the tag its
-      # version would get.
+      # version would get, and is the only run that accepts unsigned macOS and Windows bundles.
       - name: Check the update signatures and write latest.json
         env:
           PUBKEY: ${{ vars.PR_QUEST_UPDATER_PUBKEY }}
           VERSION: ${{ needs.verify.outputs.version }}
           REPO: ${{ github.repository }}
         run: |
+          flags=()
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             PUBKEY="$(cat "$RUNNER_TEMP/dry-run-key/updater.key.pub")"
+            flags+=(--dry-run)
           fi
           PR_QUEST_UPDATER_PUBKEY="$PUBKEY" bash scripts/ci/release-assets.sh \
             "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/assets" "$VERSION" \
-            "https://github.com/$REPO/releases/download/v$VERSION"
+            "https://github.com/$REPO/releases/download/v$VERSION" "${flags[@]}"
           {
             echo '### latest.json'
             echo '```json'
@@ -466,6 +474,10 @@ jobs:
           assets="$RUNNER_TEMP/assets"
           if [[ ! -f "$assets/latest.json" || ! -f "$assets/SHA256SUMS.txt" ]]; then
             echo "::error title=Release assets::The checked release files are incomplete."
+            exit 1
+          fi
+          if [[ -e "$assets/DRY-RUN" ]]; then
+            echo "::error title=Release assets::These are a dry run's files, which may be unsigned."
             exit 1
           fi
           # The tag could have been moved or recreated while the builds ran.
