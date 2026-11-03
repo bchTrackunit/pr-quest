@@ -51,6 +51,8 @@ const RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
 #[derive(Default)]
 struct Shell {
     sidecar: Mutex<Option<Arc<Sidecar>>>,
+    /// Where the running server's session takes its events, such as Reload.
+    events: Mutex<Option<Sender<Event>>>,
     /// The server's origin, the only one the window shows. A restarted server may get another
     /// port.
     origin: Arc<Mutex<Option<Url>>>,
@@ -349,6 +351,9 @@ fn supervise(app: &AppHandle, mode: Mode, server: &Server, log: &Log, mut smoke:
         if let Ok(mut current) = shell.sidecar.lock() {
             *current = Some(Arc::clone(&sidecar));
         }
+        if let Ok(mut current) = shell.events.lock() {
+            *current = Some(events_tx.clone());
+        }
         // Quitting may have started before the server was there to stop.
         if shell.quitting.load(Ordering::SeqCst) {
             return sidecar.stop();
@@ -422,21 +427,29 @@ impl Session<'_> {
                     }
                 }
                 Ok(Event::Bootstrap(code)) => self.reopen(&code),
+                // Before then the server can't answer, and opens the window once it's ready.
+                Ok(Event::Reload) if ready => {
+                    if let Err(error) = self.sidecar.send(REBOOTSTRAP_COMMAND) {
+                        self.log.warn(&format!(
+                            "couldn't ask the server to reload the window: {error}"
+                        ));
+                    }
+                }
+                Ok(Event::Reload) => {}
                 Ok(Event::Fatal(message)) => fatal = Some(message),
                 Ok(Event::WindowReport(report)) => {
                     if let Some(smoke) = smoke.as_mut() {
-                        // The first report is the window's start; it then reloads, as Reload in
-                        // the menu does, and reports again.
-                        let command = if reloaded {
-                            smoke.check("reload", smoke::reload_check(&report));
-                            SMOKE_COMMAND
-                        } else {
+                        // The first report is the window's start; it then reloads through Reload
+                        // in the menu and reports again.
+                        if !reloaded {
                             smoke.window(&report);
                             smoke.check("updater", updates::smoke_check(self.app));
                             reloaded = true;
-                            REBOOTSTRAP_COMMAND
-                        };
-                        if let Err(error) = self.sidecar.send(command) {
+                            reload(self.app);
+                            continue;
+                        }
+                        smoke.check("reload", smoke::reload_check(&report));
+                        if let Err(error) = self.sidecar.send(SMOKE_COMMAND) {
                             smoke.check("sidecar", Err(error.to_string()));
                             self.app.exit(smoke.finish(false));
                             return Outcome::Stopped;
@@ -540,22 +553,18 @@ fn bootstrap_url(origin: &Url, code: &str) -> Url {
     url
 }
 
-/// Reload in the menu. Asks the server for a new start-up link, which the window then opens
-/// (see `Session::reopen`), so a page that lost its cookie gets it back. Nothing happens while the
-/// server is starting, which then opens the window anyway.
+/// Reload in the menu. The running session asks its server for a new start-up link, which the
+/// window then opens (see `Session::reopen`), so a page that lost its cookie gets it back. A
+/// session whose server isn't ready yet drops it.
 fn reload(app: &AppHandle) {
-    let sidecar = app
+    if let Some(events) = app
         .state::<Shell>()
-        .sidecar
+        .events
         .lock()
         .ok()
-        .and_then(|sidecar| sidecar.clone());
-    if let (Some(sidecar), Some(log)) = (sidecar, app.try_state::<Log>()) {
-        if let Err(error) = sidecar.send(REBOOTSTRAP_COMMAND) {
-            log.warn(&format!(
-                "couldn't ask the server to reload the window: {error}"
-            ));
-        }
+        .and_then(|events| events.clone())
+    {
+        let _ = events.send(Event::Reload);
     }
 }
 

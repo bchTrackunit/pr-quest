@@ -87,6 +87,8 @@ pub enum Event {
     SmokeDone(bool),
     /// The window's smoke test report, as JSON.
     WindowReport(String),
+    /// Reload in the menu.
+    Reload,
     Exited(Option<i32>),
 }
 
