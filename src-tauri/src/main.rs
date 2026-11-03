@@ -237,10 +237,11 @@ fn start(app: &AppHandle, mode: Mode) -> Result<(), Box<dyn Error>> {
         .resource_dir()
         .map_err(|error| format!("It couldn't find its own files ({error})"))?;
     let server = Server {
+        // Not `node`, which the deb would put on PATH; see scripts/desktop/targets.ts.
         node: std::env::current_exe()?.with_file_name(if cfg!(windows) {
-            "node.exe"
+            "pr-quest-node.exe"
         } else {
-            "node"
+            "pr-quest-node"
         }),
         script: resources.join("sidecar").join("main.mjs"),
         request_secret: token(),

@@ -168,7 +168,7 @@ function quit(): void {
 
 async function lifecycle(): Promise<void> {
   const sidecarOf = (running: Running): Proc | undefined =>
-    descendants(running.pid, processes()).find((proc) => proc.command.endsWith('/node'));
+    descendants(running.pid, processes()).find((proc) => proc.command.endsWith('/pr-quest-node'));
   const scenario = async (
     name: string,
     check: (running: Running, sidecar: Proc) => Promise<string | undefined>,

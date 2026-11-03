@@ -8,6 +8,12 @@ export const NODE_VERSION = '24.22.1';
 
 export type Os = 'macos' | 'linux' | 'windows';
 
+/**
+ * The bundled Node's name, without the target triple. Not `node`: the deb installs it into
+ * /usr/bin, where it would shadow the system's Node.
+ */
+export const SIDECAR_NODE = 'pr-quest-node';
+
 export interface Target {
   triple: string;
   os: Os;
@@ -15,7 +21,7 @@ export interface Target {
   platformKey: string;
   sdkPackage: string;
   node: { archive: string; sha256: string };
-  /** The name tauri.conf.json's `binaries/node` externalBin has for this target. */
+  /** The name tauri.conf.json's `binaries/pr-quest-node` externalBin has for this target. */
   nodeBinary: string;
   /** What `tauri build --bundles` makes. macOS makes the dmg from the app in a second step. */
   bundles: ReadonlyArray<string>;
@@ -36,7 +42,7 @@ const TARGETS: ReadonlyArray<Target> = [
       archive: `node-v${NODE_VERSION}-win-x64.zip`,
       sha256: 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5',
     },
-    nodeBinary: 'node-x86_64-pc-windows-msvc.exe',
+    nodeBinary: `${SIDECAR_NODE}-x86_64-pc-windows-msvc.exe`,
     bundles: ['nsis'],
   },
 ];
@@ -63,7 +69,7 @@ function unix(
     platformKey: `${platform}-${nodeArch}`,
     sdkPackage: `@cursor/sdk-${platform}-${nodeArch}`,
     node: { archive: `node-v${NODE_VERSION}-${platform}-${nodeArch}.tar.gz`, sha256 },
-    nodeBinary: `node-${triple}`,
+    nodeBinary: `${SIDECAR_NODE}-${triple}`,
     bundles,
   };
 }

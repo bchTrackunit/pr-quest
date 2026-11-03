@@ -18,6 +18,7 @@ import { parseArgs } from 'node:util';
 import { z } from 'zod';
 
 import { stripAppImage } from './desktop/appimage.ts';
+import { debBinaries, sidecarBinaryProblem } from './desktop/artifacts.ts';
 import { configOverlay } from './desktop/config.ts';
 import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
 import { signMacCode, signWindowsCode } from './desktop/sign.ts';
@@ -81,6 +82,7 @@ if (target.os === 'macos') {
 if (bundles.includes('appimage')) {
   stripLibraries();
 }
+checkBinaries();
 for (const artifact of artifacts(bundleDir)) {
   log(`${artifact.path} (${(artifact.bytes / 1024 / 1024).toFixed(1)} MB)`);
 }
@@ -140,6 +142,28 @@ function stripLibraries(): void {
       ? 'the AppImage has no libwayland-client to take out'
       : `took ${strip.join(', ')} out of ${name}`,
   );
+}
+
+/** The app and the deb have the sidecar under its own name, and no `node` (see targets.ts). */
+function checkBinaries(): void {
+  const listings: Array<[string, Array<string>]> = [];
+  const macos = join(bundleDir, 'macos', 'PR Quest.app', 'Contents', 'MacOS');
+  if (target.os === 'macos' && existsSync(macos)) {
+    listings.push([macos, readdirSync(macos)]);
+  }
+  const debDir = join(bundleDir, 'deb');
+  for (const deb of bundles.includes('deb') ? readdirSync(debDir) : []) {
+    if (deb.endsWith('.deb')) {
+      const listing = execFileSync('dpkg-deb', ['-c', join(debDir, deb)], { encoding: 'utf8' });
+      listings.push([deb, debBinaries(listing)]);
+    }
+  }
+  for (const [bundle, files] of listings) {
+    const problem = sidecarBinaryProblem(target.os, files);
+    if (problem !== undefined) {
+      throw new Error(`${bundle}: ${problem}`);
+    }
+  }
 }
 
 function appVersion(): string {

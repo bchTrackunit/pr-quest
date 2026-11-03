@@ -3,7 +3,7 @@
  * - build-tauri/sidecar/: the server bundled from src/desktop/sidecar/main.ts as main.mjs, the
  *   built UI in dist/, and the node_modules the bundle keeps external, the Cursor and Anthropic
  *   SDKs with their dependencies and only the target's Cursor SDK platform package.
- * - src-tauri/binaries/node-<target triple>: the official Node binary, checked against a pinned
+ * - src-tauri/binaries/pr-quest-node-<target triple>: the official Node binary, checked against a pinned
  *   SHA-256, which tauri.conf.json bundles as an externalBin.
  */
 import { build } from 'esbuild';

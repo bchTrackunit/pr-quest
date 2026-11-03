@@ -32,7 +32,10 @@ describe('targetFor', () => {
 
     const windows = targetFor('x86_64-pc-windows-msvc');
     expect(windows.node.archive).toBe('node-v24.22.1-win-x64.zip');
-    expect(windows.nodeBinary).toBe('node-x86_64-pc-windows-msvc.exe');
+    expect(windows.nodeBinary).toBe('pr-quest-node-x86_64-pc-windows-msvc.exe');
+    expect(targetFor('aarch64-unknown-linux-gnu').nodeBinary).toBe(
+      'pr-quest-node-aarch64-unknown-linux-gnu',
+    );
     expect(windows.bundles).toEqual(['nsis']);
 
     expect(targetFor('x86_64-unknown-linux-gnu').bundles).toEqual(['appimage', 'deb']);

@@ -26,7 +26,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/node"],
+    "externalBin": ["binaries/pr-quest-node"],
     "resources": {
       "../build-tauri/sidecar/": "sidecar/"
     },

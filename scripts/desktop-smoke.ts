@@ -16,10 +16,16 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { artifactKind, defaultArtifact } from './desktop/artifacts.ts';
+import {
+  artifactKind,
+  type ArtifactKind,
+  debBinaries,
+  defaultArtifact,
+  sidecarBinaryProblem,
+} from './desktop/artifacts.ts';
 import { hostTriple, targetFor } from './desktop/targets.ts';
 
 const TIMEOUT_MS = 120_000;
@@ -56,7 +62,14 @@ if (artifact === undefined || !existsSync(artifact)) {
 const cleanups: Array<() => void> = [];
 let code = 1;
 try {
-  code = await smoke(prepare(resolve(artifact)));
+  const path = resolve(artifact);
+  const executable = prepare(path);
+  const binariesOk = checkBinaries(artifactKind(path), path, executable);
+  code = await smoke(executable);
+  if (!binariesOk && code === 0) {
+    process.stdout.write('[smoke] FAILED\n');
+    code = 1;
+  }
 } finally {
   for (const cleanup of cleanups.reverse()) {
     cleanup();
@@ -110,6 +123,35 @@ function prepare(path: string): string {
     case 'executable':
     default:
       return path;
+  }
+}
+
+/** The sidecar sits next to the shell under its own name, and nothing there is called `node`. */
+function checkBinaries(kind: ArtifactKind, path: string, executable: string): boolean {
+  const problem = sidecarBinaryProblem(target.os, binariesOf(kind, path, executable));
+  process.stdout.write(
+    problem === undefined
+      ? '[smoke] ok   sidecar-binary: the bundled Node is pr-quest-node, and nothing is called node\n'
+      : `[smoke] FAIL sidecar-binary: ${problem}\n`,
+  );
+  return problem === undefined;
+}
+
+function binariesOf(kind: ArtifactKind, path: string, executable: string): Array<string> {
+  switch (kind) {
+    case 'deb':
+      return debBinaries(execFileSync('dpkg-deb', ['-c', path], { encoding: 'utf8' }));
+    case 'appimage': {
+      const dir = temporaryDir('pr-quest-appimage-bin-');
+      execFileSync(path, ['--appimage-extract', 'usr/bin/*'], { cwd: dir, stdio: 'ignore' });
+      return readdirSync(join(dir, 'squashfs-root', 'usr', 'bin'));
+    }
+    case 'app':
+    case 'dmg':
+    case 'nsis':
+    case 'executable':
+    default:
+      return readdirSync(dirname(executable));
   }
 }
 

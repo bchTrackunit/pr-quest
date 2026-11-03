@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { artifactKind, defaultArtifact } from './artifacts.ts';
+import { artifactKind, debBinaries, defaultArtifact, sidecarBinaryProblem } from './artifacts.ts';
 import { targetFor } from './targets.ts';
 
 describe('artifactKind', () => {
@@ -43,5 +43,34 @@ describe('defaultArtifact', () => {
 
   it('has nothing to offer before packaging', () => {
     expect(defaultArtifact(targetFor('aarch64-apple-darwin'), bundleDir, () => [])).toBe(undefined);
+  });
+});
+
+describe('sidecarBinaryProblem', () => {
+  it('accepts the sidecar under its own name', () => {
+    expect(sidecarBinaryProblem('linux', ['pr-quest', 'pr-quest-node'])).toBeUndefined();
+    expect(sidecarBinaryProblem('windows', ['pr-quest.exe', 'pr-quest-node.exe'])).toBeUndefined();
+  });
+
+  it('refuses a bundle that would put a Node of its own on PATH as node', () => {
+    expect(sidecarBinaryProblem('linux', ['pr-quest', 'node', 'pr-quest-node'])).toMatch(/node/);
+    expect(sidecarBinaryProblem('windows', ['pr-quest.exe', 'node.exe'])).toMatch(/node\.exe/);
+  });
+
+  it('refuses a bundle without the sidecar', () => {
+    expect(sidecarBinaryProblem('macos', ['pr-quest'])).toMatch(/pr-quest-node/);
+  });
+});
+
+describe('debBinaries', () => {
+  it('lists what the package installs into /usr/bin', () => {
+    const listing = [
+      'drwxr-xr-x root/root         0 2026-11-03 09:00 ./',
+      'drwxr-xr-x root/root         0 2026-11-03 09:00 ./usr/bin/',
+      '-rwxr-xr-x root/root  13000000 2026-11-03 09:00 ./usr/bin/pr-quest',
+      '-rwxr-xr-x root/root 120000000 2026-11-03 09:00 ./usr/bin/pr-quest-node',
+      '-rw-r--r-- root/root      1000 2026-11-03 09:00 ./usr/lib/PR Quest/sidecar/main.mjs',
+    ].join('\n');
+    expect(debBinaries(listing)).toEqual(['pr-quest', 'pr-quest-node']);
   });
 });
