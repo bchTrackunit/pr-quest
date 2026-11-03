@@ -26,8 +26,8 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.desktop.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "build": "yarn typecheck && vite build && yarn build:server",
     "build:server": "node -e \"fs.rmSync('dist-server', { recursive: true, force: true })\" && esbuild src/app/server/main.ts src/app/server/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist-server --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
-    "desktop:smoke": "node scripts/desktop-smoke.ts",
-    "tauri:package": "yarn build && node scripts/build-tauri-sidecar.ts && tauri build"
+    "desktop:package": "node scripts/desktop-package.ts",
+    "desktop:smoke": "node scripts/desktop-smoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.2.0",

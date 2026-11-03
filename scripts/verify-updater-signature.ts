@@ -1,7 +1,8 @@
 /*
- * Spike: checks a Tauri updater artifact's .sig against the pubkey in src-tauri/tauri.conf.json,
- * as tauri-plugin-updater does before it installs an update (minisign, prehashed Ed25519). A
- * release job can run it before publishing, so a wrong key never reaches users.
+ * Checks a Tauri updater artifact's .sig against the app's pubkey, PR_QUEST_UPDATER_PUBKEY in a
+ * release build and src-tauri/tauri.conf.json's otherwise, as tauri-plugin-updater does before it
+ * installs an update (minisign, prehashed Ed25519). A release job runs it before publishing, so
+ * a wrong key never reaches users.
  *
  *   node scripts/verify-updater-signature.ts <artifact> [artifact.sig]
  */
@@ -26,8 +27,11 @@ function payload(text: string, line: number): Buffer {
   return Buffer.from(value, 'base64');
 }
 
-const config = ConfigSchema.parse(JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')));
-const keyText = Buffer.from(config.plugins.updater.pubkey, 'base64').toString('utf8');
+const pubkey =
+  process.env.PR_QUEST_UPDATER_PUBKEY ??
+  ConfigSchema.parse(JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'))).plugins.updater
+    .pubkey;
+const keyText = Buffer.from(pubkey, 'base64').toString('utf8');
 const key = payload(keyText, 1);
 const sigText = Buffer.from(readFileSync(sigFile, 'utf8'), 'base64').toString('utf8');
 const signature = payload(sigText, 1);
@@ -38,7 +42,7 @@ if (key.subarray(0, 2).toString() !== 'Ed' || signature.subarray(0, 2).toString(
   throw new Error('Expected an Ed25519 key and a prehashed (ED) signature');
 }
 if (!key.subarray(2, 10).equals(signature.subarray(2, 10))) {
-  throw new Error("The signature was made with another key than tauri.conf.json's pubkey");
+  throw new Error("The signature was made with another key than the app's pubkey");
 }
 const publicKey = createPublicKey({
   key: Buffer.concat([ED25519_SPKI_PREFIX, key.subarray(10)]),

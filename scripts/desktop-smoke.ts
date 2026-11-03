@@ -1,61 +1,177 @@
 /*
- * Runs a packaged desktop app in smoke-test mode (see src/desktop/smoke.ts) with a throwaway state
- * directory, and exits with its result. Without an argument it runs the macOS app `tauri build`
- * made; pass the path of another executable, such as one inside a mounted dmg, to check that.
+ * Runs a packaged desktop app in smoke-test mode (see src-tauri/src/smoke.rs and
+ * src/desktop/smoke.ts) with a throwaway state directory, and exits with its result.
+ *
+ *   node scripts/desktop-smoke.ts [artifact] [--target <triple>] [--headless] [--no-keychain]
+ *
+ * The artifact is a .app, .dmg, .AppImage, .deb, NSIS -setup.exe or the executable itself; by
+ * default the app, AppImage or installer scripts/desktop-package.ts made for the target. A dmg is
+ * mounted, a deb unpacked and an installer installed into a temporary folder, then removed.
+ *
+ * --headless (Linux) runs it under xvfb-run in its own D-Bus session, with an unlocked
+ * gnome-keyring when one is installed. --no-keychain passes the keychain check when the machine
+ * has none, as the app then keeps keys in memory.
  */
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+
+import { artifactKind, defaultArtifact } from './desktop/artifacts.ts';
+import { hostTriple, targetFor } from './desktop/targets.ts';
 
 const TIMEOUT_MS = 120_000;
+const UNLOCK_KEYRING =
+  'if command -v gnome-keyring-daemon >/dev/null; then ' +
+  'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null; fi; exec "$@"';
 
-/** Where `tauri build` puts the macOS app. */
-function defaultExecutable(): string {
-  return join(
-    'src-tauri',
-    'target',
-    'release',
-    'bundle',
-    'macos',
-    'PR Quest.app',
-    'Contents',
-    'MacOS',
-    'pr-quest',
-  );
-}
-
-const executable = process.argv[2] ?? defaultExecutable();
-if (!existsSync(executable)) {
+const { values, positionals } = parseArgs({
+  allowPositionals: true,
+  options: {
+    target: { type: 'string' },
+    headless: { type: 'boolean', default: false },
+    'no-keychain': { type: 'boolean', default: false },
+  },
+});
+const target = targetFor(values.target ?? hostTriple(process.platform, process.arch));
+const bundleDir = join(
+  process.env.CARGO_TARGET_DIR ?? join('src-tauri', 'target'),
+  target.triple,
+  'release',
+  'bundle',
+);
+const artifact =
+  positionals[0] ??
+  defaultArtifact(target, bundleDir, (dir) => (existsSync(dir) ? readdirSync(dir) : []));
+if (artifact === undefined || !existsSync(artifact)) {
   process.stderr.write(
-    `No packaged app at ${executable}; run \`just desktop-package --dir\` first.\n`,
+    `Nothing to check at ${artifact ?? bundleDir}; run \`just desktop-package\` first.\n`,
   );
   process.exit(1);
 }
 
-// The checks expect made-up keys to be refused, and real ones have no business in a test run.
-const {
-  CURSOR_API_KEY: _cursor,
-  ANTHROPIC_API_KEY: _anthropic,
-  LINEAR_API_KEY: _linear,
-  ...env
-} = process.env;
-const stateDir = mkdtempSync(join(tmpdir(), 'pr-quest-smoke-state-'));
-const child = spawn(executable, [], {
-  stdio: 'inherit',
-  env: {
-    ...env,
-    PR_QUEST_SMOKE_TEST: '1',
-    PR_QUEST_STATE_DIR: stateDir,
-    PR_QUEST_DISABLE_UPDATES: '1',
-  },
-});
-const timer = setTimeout(() => {
-  process.stderr.write(`The app didn't finish within ${TIMEOUT_MS / 1000} s; stopping it.\n`);
-  child.kill('SIGKILL');
-}, TIMEOUT_MS);
-child.on('exit', (code, signal) => {
-  clearTimeout(timer);
-  rmSync(stateDir, { recursive: true, force: true });
-  process.exit(signal === null ? (code ?? 1) : 1);
-});
+const cleanups: Array<() => void> = [];
+let code = 1;
+try {
+  code = await smoke(prepare(resolve(artifact)));
+} finally {
+  for (const cleanup of cleanups.reverse()) {
+    cleanup();
+  }
+}
+process.exit(code);
+
+/** The executable to run for `path`, after mounting, unpacking or installing it. */
+function prepare(path: string): string {
+  const kind = artifactKind(path);
+  process.stdout.write(`[smoke] info checking the ${kind} ${path}\n`);
+  switch (kind) {
+    case 'app':
+      return join(path, 'Contents', 'MacOS', 'pr-quest');
+    case 'dmg': {
+      const mount = temporaryDir('pr-quest-dmg-');
+      execFileSync('hdiutil', [
+        'attach',
+        '-nobrowse',
+        '-readonly',
+        '-noautoopen',
+        '-mountpoint',
+        mount,
+        path,
+      ]);
+      cleanups.push(() => detach(mount));
+      const app = readdirSync(mount).find((name) => name.endsWith('.app'));
+      if (app === undefined) {
+        throw new Error(`No app in ${path}`);
+      }
+      return join(mount, app, 'Contents', 'MacOS', 'pr-quest');
+    }
+    case 'deb': {
+      const root = temporaryDir('pr-quest-deb-');
+      execFileSync('dpkg-deb', ['-x', path, root]);
+      return join(root, 'usr', 'bin', 'pr-quest');
+    }
+    case 'nsis': {
+      const dir = join(temporaryDir('pr-quest-nsis-'), 'PR Quest');
+      // /D must come last and unquoted, spaces and all.
+      execFileSync(path, ['/S', `/D=${dir}`], { stdio: 'inherit' });
+      cleanups.push(() => {
+        const uninstaller = join(dir, 'uninstall.exe');
+        if (existsSync(uninstaller)) {
+          execFileSync(uninstaller, ['/S'], { stdio: 'inherit' });
+        }
+      });
+      return join(dir, 'pr-quest.exe');
+    }
+    case 'appimage':
+    case 'executable':
+    default:
+      return path;
+  }
+}
+
+/** A real path: Tauri refuses to find its resources through a symlink on macOS, as /tmp is. */
+function temporaryDir(prefix: string): string {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), prefix));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+/** A dmg can stay busy for a moment after the app quits. */
+function detach(mount: string): void {
+  for (const args of [
+    ['detach', mount],
+    ['detach', mount],
+    ['detach', '-force', mount],
+  ]) {
+    try {
+      execFileSync('hdiutil', args, { stdio: 'ignore' });
+      return;
+    } catch {
+      execFileSync('sleep', ['2']);
+    }
+  }
+  process.stderr.write(`Couldn't detach ${mount}\n`);
+}
+
+async function smoke(executable: string): Promise<number> {
+  if (!existsSync(executable)) {
+    throw new Error(`No executable at ${executable}`);
+  }
+  // The checks expect made-up keys to be refused, and real ones have no business in a test run.
+  const {
+    CURSOR_API_KEY: _cursor,
+    ANTHROPIC_API_KEY: _anthropic,
+    LINEAR_API_KEY: _linear,
+    ...env
+  } = process.env;
+  const stateDir = temporaryDir('pr-quest-smoke-state-');
+  const headless = values.headless && process.platform === 'linux';
+  const command = headless ? 'xvfb-run' : executable;
+  const args = headless
+    ? ['-a', 'dbus-run-session', '--', 'sh', '-c', UNLOCK_KEYRING, 'sh', executable]
+    : [];
+  const child = spawn(command, args, {
+    stdio: 'inherit',
+    env: {
+      ...env,
+      PR_QUEST_SMOKE_TEST: '1',
+      PR_QUEST_STATE_DIR: stateDir,
+      PR_QUEST_DISABLE_UPDATES: '1',
+      // No FUSE in containers; the runtime then unpacks the AppImage instead of mounting it.
+      APPIMAGE_EXTRACT_AND_RUN: '1',
+      ...(values['no-keychain'] ? { PR_QUEST_SMOKE_NO_KEYCHAIN: '1' } : {}),
+    },
+  });
+  const timer = setTimeout(() => {
+    process.stderr.write(`The app didn't finish within ${TIMEOUT_MS / 1000} s; stopping it.\n`);
+    child.kill('SIGKILL');
+  }, TIMEOUT_MS);
+  return new Promise((done) => {
+    child.on('exit', (exitCode, signal) => {
+      clearTimeout(timer);
+      done(signal === null ? (exitCode ?? 1) : 1);
+    });
+  });
+}
