@@ -27,6 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { z } from 'zod';
 
 import { configOverlay } from './desktop/config.ts';
 import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
@@ -171,10 +172,11 @@ function stripAppImage(): void {
       env: { ...process.env, ARCH: arch, APPIMAGE_EXTRACT_AND_RUN: '1' },
     });
     log(`took ${strip.join(', ')} out of ${name}`);
-    // The updater's signature was for the AppImage as Tauri made it.
+    // The updater's signature was for the AppImage as Tauri made it. The app requires the
+    // version it was signed for, as Tauri's own signatures have it.
     if (existsSync(`${appImage}.sig`)) {
       rmSync(`${appImage}.sig`);
-      tauri(['signer', 'sign', appImage]);
+      tauri(['signer', 'sign', '--app-version', appVersion(), appImage]);
     }
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -197,6 +199,13 @@ function appImageTool(arch: string): string {
   }
   chmodSync(file, 0o755);
   return file;
+}
+
+function appVersion(): string {
+  const config = z
+    .object({ version: z.string() })
+    .parse(JSON.parse(readFileSync(join('src-tauri', 'tauri.conf.json'), 'utf8')));
+  return config.version;
 }
 
 function artifacts(dir: string): Array<{ path: string; bytes: number }> {
