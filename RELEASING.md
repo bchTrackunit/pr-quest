@@ -1,8 +1,9 @@
 # Releasing the desktop app
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the Tauri desktop app on
-every platform, signs and checks it, writes the updater's `latest.json`, and puts it all in a
-draft GitHub Release. Nothing reaches users until you publish that draft by hand.
+every platform, signs and checks it, signs its update files, writes the updater's `latest.json`,
+and puts it all in a draft GitHub Release. Nothing reaches users until you publish that draft by
+hand.
 
 ## How a release runs
 
@@ -13,22 +14,26 @@ flowchart LR
   verify["Check the version"] --> build
   check["Check"] --> build
   checkDesktop["Check the Rust shell"] --> build
-  build["Build x5"] --> assets["Check the release files"]
+  build["Build x5"] --> signUpdates["Sign the update files"]
+  signUpdates --> assets["Check the release files"]
   assets --> publish["Publish the draft release"]
 ```
 
 1. **Check the version.**
-   - The `version` in `package.json` must look like `0.2.0`, or `0.2.0-beta.1` for a prerelease,
-     and `src-tauri/Cargo.toml` must have the same one. `src-tauri/tauri.conf.json` must take its
-     version from `package.json` (`"version": "../package.json"`), which is the version the app
-     reports to its updater. Dry runs check this too.
+   - The `version` in `apps/desktop/package.json` must look like `0.2.0`, or `0.2.0-beta.1` for a
+     prerelease, and `apps/desktop/src-tauri/Cargo.toml` must have the same one.
+     `apps/desktop/src-tauri/tauri.conf.json` must take its version from that `package.json`
+     (`"version": "../package.json"`), which is the version the app reports to its updater. Dry
+     runs check this too.
    - The tag must be `v` followed by that version, and the tagged commit must be on the default
      branch. The dry run's opt-out from code signing, `PR_QUEST_ALLOW_UNSIGNED_RELEASE`, must not
      be set.
    - It stops if any signing secret's name is a repository or organization secret it can see;
      see [Secrets and settings](#secrets-and-settings).
    - The repository variable `PR_QUEST_UPDATER_PUBKEY` must be a Tauri updater public key, and
-     not the development key in `tauri.conf.json`.
+     not the development key in `tauri.conf.json`. A tag build also needs the variables
+     `APPLE_TEAM_ID` and `WINDOWS_SIGNER_SUBJECT`, which the build jobs check the signatures
+     against; see [The variables](#the-variables).
 2. **Check.** Type-checks, lints, checks formatting and runs the tests: `just check` without its
    build, since every build job builds anyway.
 3. **Check the Rust shell.** `just desktop-check` (rustfmt, Clippy and the Rust tests) and
@@ -48,44 +53,79 @@ flowchart LR
    Linux builds on Ubuntu 22.04, the oldest image GitHub offers, so the AppImage and `deb` run on
    every distribution with its glibc or newer.
 
-   Every build job uses the `release` environment, so it waits until a reviewer approves it; see
-   [Protect the signing secrets](#protect-the-signing-secrets). Linux needs it too, for the
-   updater's private key.
+   The macOS and Windows build jobs of a tag build use the `release` environment, so they wait
+   until a reviewer approves them; see [Protect the signing secrets](#protect-the-signing-secrets).
+   The Linux jobs sign nothing and need no secrets, so they don't use it. No build job ever gets
+   the updater's private key.
 
-   Each job:
-   - runs [`scripts/ci/package.sh`](scripts/ci/package.sh), which sets up signing from the
-     secrets and runs `just desktop-package --target <triple>` as a release build
-     (`PR_QUEST_RELEASE_BUILD=1`, with `PR_QUEST_RELEASE_REPO` set to the repository the workflow
-     runs in). A release build stops on macOS and Windows without signing, and leaves a record of
-     how it was signed next to the bundles;
-   - checks the signatures: on macOS, the code signature, Gatekeeper's verdict and the stapled
-     notarization; on Windows, every `.exe`, `.dll` and `.node` file of the installed app, and
-     the installer;
+   Each job runs [`scripts/ci/package.sh`](scripts/ci/package.sh) twice, as a release build
+   (`PR_QUEST_RELEASE_BUILD=1`, with `PR_QUEST_RELEASE_REPO` set to the repository the workflow
+   runs in, and `PR_QUEST_UPDATER_PUBKEY`):
+   - **Compile**, with no secrets at all: `just desktop-package --compile-only` runs `yarn build`,
+     lays out the sidecar and compiles the shell with `tauri build --no-bundle`. This is where
+     the dependencies' code runs: Vite and its plugins, every crate's build script and procedural
+     macro. `package.sh` stops if it finds any signing secret here.
+   - **Bundle**, with only its own platform's signing secrets: `--skip-compile` sets up signing,
+     signs the sidecar's native code and runs `tauri bundle`, which signs (and on macOS
+     notarizes) the app and the installer. The Tauri CLI and `package.sh` run here with the
+     secrets, since they do the signing; nothing is compiled. A release build stops on macOS and
+     Windows without signing, and leaves a record of how it was signed next to the bundles.
+
+   Then each job:
+   - collects the installers and update files under the release's file names, with
+     [`scripts/ci/collect-bundles.sh`](scripts/ci/collect-bundles.sh). On macOS it makes the
+     update archive itself, a `tar.gz` of the stapled app in the format Tauri's bundler writes
+     and the updater unpacks: a GNU tar with `PR Quest.app` as its only top folder, symbolic links
+     kept, and no extended attributes or AppleDouble (`._`) files;
+   - on every tag build, checks the signatures, whatever `package.sh` reported. On macOS: the code
+     signature, Gatekeeper's verdict, the stapled notarization and that the team is
+     `APPLE_TEAM_ID`, for the app and again for the app unpacked from the update archive. On
+     Windows: it installs the app and checks that every `.exe`, `.dll` and `.node` file in it,
+     and the installer, is validly signed by `WINDOWS_SIGNER_SUBJECT`, then uninstalls it. The
+     bundled Node, `pr-quest-node.exe`, only has to be validly signed: it keeps the OpenJS
+     Foundation's signature, which Tauri doesn't replace;
    - smoke-tests every bundle with `just desktop-smoke`: the app and the `dmg` on macOS, the
      AppImage and the `deb` under `--headless` on Linux, and the installer on Windows;
-   - uploads the installers and update files under the release's file names.
+   - uploads the files.
 
-5. **Check the release files.** Gathers what the five builds made, and stops at a missing,
-   unexpected or duplicate file, or at a build record that says a macOS or Windows build wasn't
-   signed or used the dry run's opt-out. It checks every update signature against
+5. **Sign the update files.** The only job that gets the updater's private key. It uses the
+   `release` environment in a tag build, so it waits for a second approval. It checks out
+   nothing but [`scripts/ci/sign-updates.sh`](scripts/ci/sign-updates.sh) and runs no Yarn or
+   Cargo: the script downloads the Tauri CLI's own release binary (2.12.4, the version the app
+   builds with) and minisign 0.12, each checked against a pinned SHA-256. It first signs and
+   verifies a probe, so a private key that doesn't match `PR_QUEST_UPDATER_PUBKEY`, or a wrong
+   password, stops it before anything is signed. Then it signs the five update files with
+   `tauri signer sign --app-version <version>`, as `tauri build` would, so each signature's
+   trusted comment ends in `version:<version>`, verifies each with minisign, and uploads only
+   the `.sig` files.
+6. **Check the release files.** Gathers what the five builds made and the signatures, and stops
+   at a missing, unexpected or duplicate file, or at a build record that says a macOS or Windows
+   build wasn't signed or used the dry run's opt-out. It checks every update signature against
    `PR_QUEST_UPDATER_PUBKEY` with `just desktop-verify-updater`, and that the signature is bound
    to the release's version, since the app refuses any other. Then it writes `latest.json` and
    `SHA256SUMS.txt`. See [`scripts/ci/release-assets.sh`](scripts/ci/release-assets.sh).
-6. **Publish the draft release.** The only job that can write to the repository, and it runs
-   none of the repository's code. It stops if the tag no longer points at the commit the builds
-   used, if the files are marked as a dry run's, or if the release is published already. Otherwise it creates the draft release with
-   generated notes, marked as a prerelease when the version has a prerelease part. Re-running it
-   uploads to the same draft again, replacing its files. Because only this job creates the
-   release, the builds can't race to create several.
+7. **Publish the draft release.** The only job that can write to the repository, and it runs
+   none of the repository's code. It stops if the files are marked as a dry run's, if they
+   aren't exactly the 16 release files, if `SHA256SUMS.txt` doesn't list and match the other
+   15, if the tag no longer points at the commit the builds used, or if the release is published
+   already. On a public repository it then attests the files' build provenance, so anyone can
+   check where an installer came from with
+   `gh attestation verify PR-Quest_0.2.0_x64-setup.exe --repo <owner>/<repo>`; only this job
+   gets the two permissions that needs. GitHub offers attestations to private repositories only
+   on GitHub Enterprise Cloud, so a private repository skips that step. Then it creates the draft
+   release with generated notes, marked as a prerelease when the version has a prerelease part.
+   Re-running it uploads to the same draft again, replacing its files. Because only this job
+   creates the release, the builds can't race to create several.
 
 Running the workflow by hand from the **Actions** tab (**Release**, then **Run workflow**) is a
 **dry run**. It runs every job but the last, the same way as a release, except that:
 
 - it uses no environment and no secrets, so it sets `PR_QUEST_ALLOW_UNSIGNED_RELEASE=1`, the
   only way a release build may skip code signing on macOS and Windows. The macOS app is signed
-  ad hoc instead, as every unsigned build is;
-- it makes a throwaway updater key pair, kept as a workflow artifact for a day, so the update
-  files and `latest.json` are made and checked as in a release;
+  ad hoc instead, as every unsigned build is, and the signature checks are skipped;
+- it makes a throwaway updater key pair. The builds trust its public key, and the private key,
+  kept as a workflow artifact for a day, reaches only the job that signs the update files, so
+  they and `latest.json` are made and checked as in a release;
 - it keeps the files as the `release-assets` workflow artifact for 7 days, marked with a
   `DRY-RUN` file, and publishes nothing.
 
@@ -94,8 +134,9 @@ opt-out can't reach a release: `package.sh` and the version check stop a tag bui
 and the check of the release files refuses bundles whose build record says they used it, or that
 a macOS or Windows build wasn't signed.
 
-As written, the workflow lets only the publish job write to the repository, and passes each
-secret only to the packaging step of its own platform in a tag build. That alone protects nothing
+As written, the workflow lets only the publish job write to the repository, passes each code
+signing secret only to the bundling step of its own platform in a tag build, and the updater's
+private key only to the job that signs the update files. That alone protects nothing
 from someone who can push: a tag build runs the workflow file of the tagged commit, which anyone
 with write access can change. The secrets are kept safe by repository settings instead, described
 under [Protect the signing secrets](#protect-the-signing-secrets). The workflow never runs for
@@ -161,9 +202,10 @@ Before the first real release, make a dry run, then a prerelease such as `0.1.0-
 approve it, check its draft as below, then delete the draft and the tag. Only then release
 `0.1.0`.
 
-1. Set the new version in `package.json` and `src-tauri/Cargo.toml`, update `Cargo.lock` with
-   `cargo update --manifest-path src-tauri/Cargo.toml -p pr-quest`, and merge the change to the
-   default branch. The app takes its version from `package.json`.
+1. Set the new version in `apps/desktop/package.json` and `apps/desktop/src-tauri/Cargo.toml`,
+   update `Cargo.lock` with
+   `cargo update --manifest-path apps/desktop/src-tauri/Cargo.toml -p pr-quest`, and merge the
+   change to the default branch. The app takes its version from `apps/desktop/package.json`.
 2. Tag the merged commit and push the tag:
 
    ```sh
@@ -173,7 +215,9 @@ approve it, check its draft as below, then delete the draft and the tag. Only th
    ```
 
 3. When the **Release** run asks for a review of the `release` environment, check that it runs
-   for your tag and the commit you merged, then approve it. The builds wait until then.
+   for your tag and the commit you merged, then approve it. It asks twice: first for the macOS
+   and Windows builds, which wait until then, and once they are done, for signing the update
+   files.
 4. Wait for the workflow to finish. If a build fails because of the runner, re-run the failed
    jobs. If it needs a code change, delete the draft release and the tag, then release a new
    patch version. Don't move a tag that has been pushed.
@@ -206,8 +250,8 @@ repository or organization secret it can see. Set up the environment first, as d
 
 | Secret                               | Platform | What it is                                                                             |
 | ------------------------------------ | -------- | -------------------------------------------------------------------------------------- |
-| `TAURI_SIGNING_PRIVATE_KEY`          | All      | The updater's private key: the contents of the key file `tauri signer generate` writes |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | All      | Its password                                                                           |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Updates  | The updater's private key: the contents of the key file `tauri signer generate` writes |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Updates  | Its password                                                                           |
 | `APPLE_CERTIFICATE`                  | macOS    | The Developer ID Application certificate as a `.p12`, base64-encoded                   |
 | `APPLE_CERTIFICATE_PASSWORD`         | macOS    | The password of that `.p12`                                                            |
 | `APPLE_API_KEY_P8`                   | macOS    | The contents of the App Store Connect API key file, `AuthKey_<id>.p8`                  |
@@ -225,13 +269,14 @@ repository or organization secret it can see. Set up the environment first, as d
 | `WINDOWS_PFX`                        | Windows  | Instead of Artifact Signing: a code signing certificate as a `.pfx`, base64-encoded    |
 | `WINDOWS_PFX_PASSWORD`               | Windows  | The password of that `.pfx`                                                            |
 
-- **The updater key** is required: a tag build stops without it.
+- **The updater key** is required: signing the update files stops without it, and only that
+  job gets it.
 - **macOS** needs both certificate secrets and either the three `APPLE_API_*` secrets
   (recommended) or the three Apple Account ones, not both.
 - **Windows** needs either the six `AZURE_*` secrets or both `.pfx` ones, not both.
 - A tag build stops on macOS or Windows without that platform's secrets, so there are no unsigned
   releases, and it stops when only some of them are set instead of shipping something
-  half-signed. Linux isn't code signed and needs only the updater key.
+  half-signed. Linux isn't code signed and its builds get no secrets.
 - The macOS certificate goes into a temporary keychain with a random password, and the API key
   into a file in the runner's temporary folder. `package.sh` deletes both when it ends, and
   removes the `.pfx` certificate from the Windows certificate store.
@@ -242,22 +287,34 @@ Publishing uses the workflow's own `GITHUB_TOKEN`, so it needs no token of yours
 shell history; `--env release` makes it an environment secret:
 
 ```sh
-gh secret set TAURI_SIGNING_PRIVATE_KEY --env release < pr-quest-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY --env release < ~/pr-quest-updater.key
 gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release   # asks for the value
 base64 -i DeveloperID.p12 | gh secret set APPLE_CERTIFICATE --env release
 gh secret set APPLE_API_KEY_P8 --env release < AuthKey_ABC123DEFG.p8
 gh secret list                                                   # repository secrets: none of the above
 ```
 
-### The variable
+### The variables
 
-One repository variable (**Settings**, **Secrets and variables**, **Actions**, **Variables**),
-which isn't secret: `PR_QUEST_UPDATER_PUBKEY`, the updater's public key, the contents of the
-`.pub` file `tauri signer generate` writes. A tag build stops without it.
+Three repository variables (**Settings**, **Secrets and variables**, **Actions**,
+**Variables**), none of them secret. A tag build stops without them.
+
+| Variable                  | What it is                                                                                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PR_QUEST_UPDATER_PUBKEY` | The updater's public key: the contents of the `.pub` file `tauri signer generate` writes                                                            |
+| `APPLE_TEAM_ID`           | The 10-character team ID of the Developer ID certificate, under **Membership details** in your developer account; the macOS signatures must name it |
+| `WINDOWS_SIGNER_SUBJECT`  | The subject of the Windows signing certificate, such as `CN=Octo Cat, O=Octo Cat, L=Copenhagen, C=DK`; every file the release signs must name it    |
 
 ```sh
-gh variable set PR_QUEST_UPDATER_PUBKEY < pr-quest-updater.key.pub
+gh variable set PR_QUEST_UPDATER_PUBKEY < ~/pr-quest-updater.key.pub
+gh variable set APPLE_TEAM_ID --body ABCDE12345
+gh variable set WINDOWS_SIGNER_SUBJECT --body 'CN=Octo Cat, O=Octo Cat, L=Copenhagen, C=DK'
 ```
+
+For Artifact Signing, the subject is the validated identity's details, in the order the
+certificate lists them. For a file signed with the certificate, PowerShell prints it with
+`(Get-AuthenticodeSignature <file>).SignerCertificate.Subject`; a tag build whose subject is set
+wrong stops at **Check the signatures**, which prints each file's subject.
 
 ### The updater key pair
 
@@ -266,11 +323,12 @@ if the update's `.sig` was made with the matching private key. Make the key pair
 own machine:
 
 ```sh
-node node_modules/@tauri-apps/cli/tauri.js signer generate -w ~/pr-quest-updater.key
+yarn workspace @pr-quest/desktop exec tauri signer generate -w ~/pr-quest-updater.key
 ```
 
-Give it a strong password when asked. It writes `pr-quest-updater.key` (the private key, itself
-encrypted with the password) and `pr-quest-updater.key.pub`. Store the private key and its
+Give it a strong password when asked. It writes `~/pr-quest-updater.key` (the private key,
+itself encrypted with the password) and `~/pr-quest-updater.key.pub`, which the `gh` commands
+above read. Store the private key and its
 password as the two `TAURI_SIGNING_*` secrets, and the public key as `PR_QUEST_UPDATER_PUBKEY`.
 
 Then back up the private key and its password **offline**, apart from each other, for example
@@ -281,7 +339,7 @@ sign an update that every installed app accepts, though they would still need to
 this repository's releases. To replace a key, release a version built with the new public key,
 signed with the old private key, then switch the secrets to the new one.
 
-The key in `src-tauri/tauri.conf.json` is a development key whose private half isn't kept safe;
+The key in `apps/desktop/src-tauri/tauri.conf.json` is a development key whose private half isn't kept safe;
 the version check refuses it.
 
 ### Protect the signing secrets
@@ -298,7 +356,9 @@ secrets:
      itself, so keep such tokens short-lived and narrowly scoped.
    - **Deployment branches and tags**: **Selected branches and tags**, with one rule of the
      **Tag** type for `v*`. A run for a branch can't use the environment, even with approval.
-   - **Environment secrets**: the secrets in the table above. Delete any repository secret with
+   - **Environment secrets**: the secrets in the table above. The build jobs and the signing
+     job ask for approval separately, so whoever approves sees each time what the run is about to
+     get. Delete any repository secret with
      those names, and make sure no organization secret with those names is shared with this
      repository.
 2. **A tag ruleset.** Under **Settings**, **Rules**, **Rulesets**, add a **tag ruleset** named
@@ -391,13 +451,20 @@ its own `PR_QUEST_WINDOWS_SIGN_COMMAND` in `package.sh`, which isn't written.
 Releases are always signed on macOS and Windows; what follows is what a dry run's or a local
 build's unsigned bundles show, for anyone who passes them around.
 
-**macOS.** An unsigned build is signed ad hoc as a whole, without the hardened runtime, so its
-signature is valid (`codesign --verify --deep --strict` passes) but it isn't notarized. Gatekeeper
-refuses a downloaded (quarantined) copy for that reason alone: `spctl --assess` says `rejected`,
-not that the signature is invalid, so macOS should show its "Apple could not verify" prompt rather
-than calling the app damaged. On macOS 15 and later, the user then chooses **Open Anyway** under
-**System Settings**, **Privacy & Security**, and confirms with their password; on macOS 14 and
-earlier, right-clicking the app and choosing **Open** works. Only the `spctl` verdict has been
+**macOS.** An unsigned build is signed ad hoc as a whole, with the hardened runtime and exactly
+two entitlements, `allow-jit` and `disable-library-validation`
+([`entitlements-ad-hoc.plist`](apps/desktop/scripts/desktop/entitlements-ad-hoc.plist)): Node
+needs the first to run JavaScript, and the second to load the server's native modules, which an
+ad-hoc signature can't vouch for. Without `get-task-allow`, the hardened runtime keeps a debugger
+from attaching to Node even where Developer Tools access is turned on. Tauri signs every binary
+in the app with the same settings, so the shell's own binary gets the two entitlements too;
+signing Node alone differently would be undone when Tauri bundles the app. The signature is valid
+(`codesign --verify --deep --strict` passes) but the app isn't notarized. Gatekeeper refuses a
+downloaded (quarantined) copy for that reason alone: `spctl --assess` says `rejected`, not that
+the signature is invalid, so macOS should show its "Apple could not verify" prompt rather than
+calling the app damaged. On macOS 15 and later, the user should then be able to choose **Open
+Anyway** under **System Settings**, **Privacy & Security**, and confirm with their password; on
+macOS 14 and earlier, right-clicking the app and choosing **Open** should work. Only the `spctl` verdict has been
 checked, not the prompt itself. The `dmg` isn't signed at all, which doesn't stop it opening.
 Every new build also asks for the login password when it first reads the keychain entry an
 earlier build made.
@@ -429,12 +496,21 @@ instead, and the user installs the new `deb` the same way.
 - **The AppImage tools.** To make an AppImage, Tauri's bundler downloads `linuxdeploy`, `AppRun`
   and `linuxdeploy-plugin-appimage` into `~/.cache/tauri` unless they are there already. The
   first two come from fixed releases, but the plugin comes from its `continuous` release, which
-  changes without notice and isn't checked. On every Linux runner,
-  [`scripts/ci/seed-tauri-tools.sh`](scripts/ci/seed-tauri-tools.sh) puts all three there first,
-  each from a fixed release and checked against a pinned SHA-256, so the bundler downloads
-  nothing. The plugin is pinned to its last numbered release, `1-alpha-20250213-1`. The script
-  stops if `@tauri-apps/cli` isn't the version its file names were taken from (2.12.4); after
-  upgrading the CLI, check the bundler's `linuxdeploy.rs` for new names and update the pins.
+  changes without notice and isn't checked. The `appimagetool` inside the plugin then downloads
+  the AppImage runtime, the program at the start of every AppImage that runs when a user opens
+  it, from AppImage/type2-runtime's `continuous` release, also unchecked, unless it is given
+  one. On every Linux runner, [`scripts/ci/seed-tauri-tools.sh`](scripts/ci/seed-tauri-tools.sh)
+  puts the three tools there first and downloads the runtime, each from a fixed release and
+  checked against a pinned SHA-256: the plugin's last numbered release, `1-alpha-20250213-1`,
+  and the runtime's release `20251108`. It exports the runtime's path as `LDAI_RUNTIME_FILE`,
+  which the plugin passes to `appimagetool` as `--runtime-file`, and `package.sh` stops a Linux
+  release build unless that is a file matching the pin. An AppImage bundled that way with the
+  network disconnected came out with the pinned runtime, so nothing else is downloaded. The
+  script stops if `@tauri-apps/cli` isn't the version its file names were taken from (2.12.4),
+  or if `tauri.conf.json` sets `bundle.useLocalToolsDir`, which would make the bundler look
+  elsewhere; after upgrading the CLI, check the bundler's `linuxdeploy.rs` for new names and
+  update the pins.
 - **Not yet run.** The workflow has been checked with actionlint and its scripts tested locally,
-  but it hasn't run on GitHub. Make a dry run and a prerelease first, as described under
+  including a macOS dry run's build, update signing and release files, but it hasn't run on
+  GitHub, and no Windows build or notarization has been tried. Make a dry run and a prerelease first, as described under
   [Make a release](#make-a-release).
