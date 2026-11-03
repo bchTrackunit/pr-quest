@@ -259,61 +259,137 @@ reconnecting the live stream never forces a GitHub call; both use the server's c
 
 ## Desktop app
 
-The desktop app is the same server and UI in an [Electron](https://www.electronjs.org) window.
-The server runs inside the app in local mode, and the window shows only PR Quest: links to
-anywhere else, such as a PR on GitHub, open in your browser. Opening the app a second time
-brings the open window to the front.
+The desktop app is the same server and UI in a native window. A small [Tauri](https://tauri.app)
+shell (Rust, in [`src-tauri/`](src-tauri)) opens the operating system's own web view (WebKit on
+macOS and Linux, WebView2 on Windows) and starts the server as a sidecar: a Node binary bundled
+with the app runs [`src/desktop/sidecar/main.ts`](src/desktop/sidecar/main.ts) in local mode.
+The window shows only PR Quest. `http`, `https` and `mailto` links, such as a PR on GitHub, open
+in your browser; links with any other scheme and navigation away from the app are blocked.
+Opening the app a second time brings the open window to the front.
 
 ```sh
-just desktop-dev              # build the UI and the desktop bundle, then open it in Electron
-just desktop-package          # build the installers for this machine into release/
-just desktop-package --dir    # only the unpacked app, which is faster
-just desktop-smoke            # check the unpacked app in release/
+just desktop-dev        # run the shell from source (a debug build) with its log in the terminal
+just desktop-package    # build the app and installers for this machine
+just desktop-smoke      # check what desktop-package made
+just desktop-check      # Rust format check, Clippy and unit tests
+just cargo-deny         # audit the Rust crates (needs `cargo install cargo-deny --locked`)
 ```
 
-`just desktop-package` builds for the operating system and processor it runs on: a `dmg` and a
-`zip` on macOS, an NSIS installer on Windows, and an AppImage and a `deb` on Linux. Each
-processor needs its own build machine, because `yarn install` fetches only this machine's copy of
-the Cursor SDK's native parts (its sandbox, `rg` and the tree-sitter bindings); the build stops
-if they're missing. Those parts and every `.node` binding are unpacked next to `app.asar`, since
-a program inside the archive can't be started.
+Building needs [Rust](https://rustup.rs) (stable) as well as Node and Yarn, and on Linux the
+WebKitGTK development packages; on Debian and Ubuntu:
 
-`just desktop-smoke` starts the packaged app with a throwaway state directory and without your
-`CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and `LINEAR_API_KEY`. It checks that the server refuses a
-request without the app's secret, that the UI renders with nothing blocked by its Content Security
-Policy, that both SDKs load with their native parts, and that a call with a made-up key reaches
-Cursor and Anthropic and is refused as unauthenticated, then quits with the result and deletes
-the directory. Pass the path of another executable, such as the one inside a mounted `dmg`, to
-check that instead. It needs a display; on a Linux server, run it under `xvfb-run`. The app's
-smoke mode (`PR_QUEST_SMOKE_TEST=1`) refuses to start without `PR_QUEST_STATE_DIR`, so it never
-touches your real state.
+```sh
+sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
+  libdbus-1-dev libssl-dev libxdo-dev patchelf file
+```
 
-**The window.** The app's server only answers requests carrying a secret made fresh at each
-start, which the window gets as an `HttpOnly`, `SameSite=Strict` cookie, so other programs and
-pages on your machine can't call it even though it listens on `127.0.0.1`. `GET /api/health`
-is the exception. A packaged app has no DevTools and refuses to start with
-`--remote-debugging-port` or `--remote-debugging-pipe`. If the page crashes, the window reloads
-it, at most once every 10 seconds. Quitting waits at most 5 seconds for the server to stop.
+### Packaging
 
-**Unsigned builds.** Without signing settings the app is unsigned (on macOS, ad-hoc signed), so
-macOS Gatekeeper and Windows SmartScreen warn before the first start; on macOS, right-click the
-app and choose **Open**. macOS also asks for your login password when a rebuilt app reads the
-keychain entry an earlier build created, because each unsigned build has a different signature.
+`just desktop-package` builds for the operating system and processor it runs on, or for
+`--target <triple>`. The bundles land in `src-tauri/target/<triple>/release/bundle/` (under
+`$CARGO_TARGET_DIR` when that is set):
 
-**State.** The app uses the same `~/.pr-quest` (or `PR_QUEST_STATE_DIR`) and `.env` as `yarn
-start`; see [Where state lives](#where-state-lives). Don't run both on the same state directory
-at once: each keeps its own copy in memory and overwrites the other's writes. The app picks a
-free port the first time and reuses it, so the board's filters and presets, which the browser
-keeps per address, survive a restart; if another program has taken the port since, the app picks
-a new one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and
-`PR_QUEST_UI_PORT`, and refuses to start with `PR_QUEST_MODE=hosted`. The port is kept in
-`desktop.json` in the app's own folder (on macOS
-`~/Library/Application Support/PR Quest`), and the log in `main.log` (on macOS
-`~/Library/Logs/PR Quest`), which starts over as `main.old.log` past 5 MB.
+| Target                      | Bundles                                                       |
+| --------------------------- | ------------------------------------------------------------- |
+| `aarch64-apple-darwin`      | `macos/PR Quest.app` and `dmg/PR Quest_<version>_aarch64.dmg` |
+| `x86_64-apple-darwin`       | `macos/PR Quest.app` and `dmg/PR Quest_<version>_x64.dmg`     |
+| `x86_64-unknown-linux-gnu`  | `appimage/*.AppImage` and `deb/*.deb`                         |
+| `aarch64-unknown-linux-gnu` | `appimage/*.AppImage` and `deb/*.deb`                         |
+| `x86_64-pc-windows-msvc`    | `nsis/PR Quest_<version>_x64-setup.exe`                       |
+
+`--bundles app` (or `appimage`, `deb`, `nsis`) builds fewer. `--skip-build` reuses `dist/`, and
+`--layout-only` stops after laying out the sidecar, which `cargo` needs before it can build the
+shell. Each target takes Node from nodejs.org at a pinned version and SHA-256
+([`scripts/desktop/targets.ts`](scripts/desktop/targets.ts)), and the Cursor SDK's native parts
+(its sandbox, `rg` and the tree-sitter binding) from `node_modules`. `yarn install` fetches only
+this machine's copy of those, so the build stops if the target's `@cursor/sdk-<os>-<cpu>` package
+is missing or another platform's would be bundled. On an Intel Mac, or an Intel CI runner, a
+plain `yarn install` gets the right one. To build `x86_64-apple-darwin` on Apple silicon, add
+`supportedArchitectures` with `cpu: [current, x64]` to `.yarnrc.yml` for the install, without
+committing it.
+
+The macOS dmg step retries up to 3 times: `hdiutil create` often fails with "Resource busy" the
+first time, and a leftover mount of the volume would break every later attempt, so each attempt
+detaches it first. On Linux, the AppImage must not bundle `libwayland-client`, which breaks the
+app on newer Wayland desktops ([tauri#15665](https://github.com/tauri-apps/tauri/issues/15665)).
+The linuxdeploy that Tauri CLI 2.12 uses leaves it out already; if a later one doesn't, the
+package step takes it out and repacks with a pinned `appimagetool` and runtime.
+
+### Smoke test
+
+`just desktop-smoke [artifact]` starts the packaged app in smoke mode (`PR_QUEST_SMOKE_TEST=1`)
+with a throwaway state directory and without your `CURSOR_API_KEY`, `ANTHROPIC_API_KEY` and
+`LINEAR_API_KEY`, prints one `[smoke] ok` or `[smoke] FAIL` line per check, quits, and exits
+non-zero if any failed. Without an artifact it checks the app, AppImage or installer that
+`desktop-package` made for this machine (or `--target`). It also takes a `.dmg` (mounted and
+detached again), a `.deb` (unpacked), a `-setup.exe` (installed silently into a temporary
+folder and uninstalled) or an executable.
+
+The checks: the OS keychain can make, read and delete a data key; the UI renders with nothing
+blocked by its Content Security Policy; the start-up link leaves the window on `/` and works only
+once; the request secret travels as an `HttpOnly` cookie scripts can't read; the updater builds
+with its key; the server refuses a request without the secret; a saved key is encrypted on disk;
+both SDKs load with their native parts; and a call with a made-up key reaches Cursor and
+Anthropic and is refused as unauthenticated. The live event stream needs a GitHub sign-in too,
+so without one, as on CI, the cookie check confirms the events route accepts the cookie instead
+of opening the stream.
+
+`--headless` (Linux) runs it under `xvfb-run` in its own D-Bus session with a throwaway unlocked
+gnome-keyring, so it needs `xvfb`, `xauth`, `dbus` and `gnome-keyring`. `--no-keychain` is for a
+machine without a keychain: the keychain check is skipped and the encryption check instead
+confirms that saved keys stay in memory. The app's smoke mode refuses to start without
+`PR_QUEST_STATE_DIR`, so it never touches your real state. On macOS, `just desktop-measure`
+reports the packaged app's idle memory per process and checks that quitting stops the server,
+that a crashed server is restarted, and that the app gives up after 3 crashes.
+
+### The window and the server
+
+The server only answers requests carrying a secret made fresh at each start, which the window
+gets as an `HttpOnly`, `SameSite=Strict` cookie from a one-time start-up link, so other programs
+and pages on your machine can't call it even though it listens on `127.0.0.1`. `GET /api/health`
+is the exception. The web view has no developer tools in a packaged app, and every browser
+permission is denied except notifications for the app's own pages.
+
+If the server stops unexpectedly, the app starts it again and reloads the window, up to 3 times in
+10 minutes; after that, or if it can't start at all, the app shows what went wrong and where its
+log is, then quits. Quitting waits at most 5 seconds for the server to stop. On Windows the server
+runs without a console window, in a job object that ends it with the app.
+
+**Unsigned builds.** Without signing settings the app is unsigned, so macOS Gatekeeper and
+Windows SmartScreen warn before the first start. On macOS 15 and later, open the app once, then
+choose **Open Anyway** in **System Settings > Privacy & Security**; on earlier versions,
+right-click the app and choose **Open**. macOS may also ask for your login password when a
+rebuilt app reads the keychain entry an earlier build made. On Windows, choose **More info** and
+**Run anyway**. An AppImage needs to be made executable (`chmod +x`) and FUSE; without FUSE, set
+`APPIMAGE_EXTRACT_AND_RUN=1`.
+
+**Linux graphics.** With the proprietary NVIDIA driver, WebKitGTK can show a blank or flickering
+window. Start the app with `WEBKIT_DISABLE_DMABUF_RENDERER=1` in its environment to work around
+it.
+
+### State
+
+The app uses the same `~/.pr-quest` (or `PR_QUEST_STATE_DIR`) and `.env` as `yarn start`; see
+[Where state lives](#where-state-lives). Don't run both on the same state directory at once: each
+keeps its own copy in memory and overwrites the other's writes. The app picks a free port the
+first time and reuses it, so the board's filters and presets, which the web view keeps per
+address, survive a restart; if another program has taken the port since, the app picks a new
+one and the board starts from its defaults. It ignores `PR_QUEST_PORT` and `PR_QUEST_UI_PORT`,
+and refuses to start with `PR_QUEST_MODE=hosted`.
+
+The port and the choices you make in the app's dialogs are kept in `desktop.json`, and the log in
+`main.log`, which starts over as `main.old.log` past 5 MB:
+
+| OS      | `desktop.json`                                      | `main.log`                                |
+| ------- | --------------------------------------------------- | ----------------------------------------- |
+| macOS   | `~/Library/Application Support/com.prquest.desktop` | `~/Library/Logs/com.prquest.desktop`      |
+| Linux   | `~/.config/com.prquest.desktop`                     | `~/.local/share/com.prquest.desktop/logs` |
+| Windows | `%APPDATA%\com.prquest.desktop`                     | `%LOCALAPPDATA%\com.prquest.desktop\logs` |
 
 **Saved keys.** The app keeps the GitHub token and the API keys from Settings in
-`secrets.encrypted.json`, encrypted with a key held by the OS keychain (the macOS Keychain, the
-Windows user's DPAPI, or the Secret Service or KWallet on Linux). Whenever it finds a
+`secrets.encrypted.json`, encrypted (AES-GCM) with a data key it keeps in the OS keychain as
+`com.prquest.desktop` / `secrets-data-key`: the macOS Keychain, the Windows Credential Manager,
+or the Secret Service on Linux (GNOME Keyring, or KWallet 5.97 and later). Whenever it finds a
 `secrets.json`, it imports it. If that file is newer than the encrypted one, as when `yarn start`
 saved a key since, its keys replace the encrypted ones; otherwise only keys the encrypted file
 lacks are taken. The log names any key that was replaced or kept, never its value. The app
@@ -322,60 +398,65 @@ check fails, both files stay as they are and the app offers to try again or to c
 saved keys. From then on, `yarn start` no longer sees those keys, so set them in `.env` or the
 environment for it.
 
-Without a usable keychain, such as on Linux without a keyring or with only Chromium's
-`basic_text` store, the app reads `secrets.json` but keeps new keys in memory until it quits,
-and says so once in a dialog. Deleting a key, as **Sign out** does, removes it from
-`secrets.json` too, so it doesn't come back on the next start. Choosing **Save Them Unencrypted** there writes `secrets.json` from
-then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the
-keychain isn't available, the app starts without saved keys and never writes `secrets.json`,
-so the encrypted file stays the only copy. If the keychain can't decrypt the file, for example
-after the keychain entry was deleted, or the file is damaged, the app says which and offers to
-try again or to continue without saved keys; the file is left in place until you save a key,
-which replaces it.
+Without a usable keychain, such as on Linux without a Secret Service, the app reads
+`secrets.json` but keeps new keys in memory until it quits, and says so once in a dialog.
+Deleting a key, as **Sign out** does, removes it from `secrets.json` too, so it doesn't come back
+on the next start. Choosing **Save Them Unencrypted** there, and confirming it, writes
+`secrets.json` from then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the keychain isn't
+available, the app starts without saved keys and never writes `secrets.json`, so the encrypted
+file stays the only copy. If the keychain can't decrypt the file, for example after the keychain
+entry was deleted, or the file is damaged, the app says which and offers to try again or to
+continue without saved keys; the file is left in place until you save a key, which replaces it.
 
-**Updates.** A release build checks GitHub Releases for a newer version at start and every 6
-hours, downloads it in the background and installs it when you quit. Set
-`PR_QUEST_DISABLE_UPDATES=1` to turn this off. The repository it checks, and that **Help** opens,
-is `RELEASE_REPO` in [`src/desktop/release.ts`](src/desktop/release.ts); macOS installs updates
-only into a signed app.
+### Updates
 
-A release build is one built with `PR_QUEST_RELEASE_BUILD=1` in the environment of both
-`yarn build` (which bakes the flag into the desktop bundle) and electron-builder (which then
-adds the GitHub publish settings and the `app-update.yml` the updater reads). That build stops if
-`RELEASE_REPO` still names the placeholder owner. Any other build, including
-`just desktop-package`, never checks for updates.
+A release build checks `https://github.com/<repo>/releases/latest/download/latest.json` at start
+and every 6 hours. A newer version downloads in the background, and the updater checks its
+signature against the public key built into the app before keeping it; the app then offers to
+restart into it, or installs it when you quit. It never installs an older or the same version.
+Set `PR_QUEST_DISABLE_UPDATES=1` to turn updates off. The `.deb` never updates itself, since the
+package manager owns it; **Help > Download the Latest Version** opens the latest release. Any
+other build, including a plain `just desktop-package`, never checks for updates.
 
-**Signing and publishing.** [`electron-builder.config.ts`](electron-builder.config.ts) reads its
-secrets from the environment and lists them at the top: `CSC_LINK` and `CSC_KEY_PASSWORD` sign
-for macOS, and `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` (or `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`) notarize. Windows signs with Azure Trusted
-Signing (`AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`,
-`AZURE_SIGNING_PUBLISHER` and the `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET`
-it authenticates with) or with a certificate (`WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`). With
-`GH_TOKEN` and `PR_QUEST_RELEASE_BUILD=1` set, `yarn build && yarn electron-builder --config
-electron-builder.config.ts --publish always` uploads the installers and the update files to a
-draft release.
-`CSC_IDENTITY_AUTO_DISCOVERY=false` skips signing on a Mac with a signing certificate in its
-keychain.
+A release build is one packaged with `PR_QUEST_RELEASE_BUILD=1`, `PR_QUEST_RELEASE_REPO` set to
+the GitHub `owner/name` it checks and that **Help** opens, and `PR_QUEST_UPDATER_PUBKEY` set to
+the updater's public key. It stops if the repository is still the `CHANGE-ME` placeholder (in any
+case) or the key is missing. With `TAURI_SIGNING_PRIVATE_KEY` (and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one) it also writes the update files next to the
+bundles: `PR Quest.app.tar.gz`, the AppImage and the `-setup.exe`, each with a `.sig`.
+`just desktop-verify-updater <file>` checks a `.sig` against the key. Make a key pair with
+`node node_modules/@tauri-apps/cli/tauri.js signer generate`. The release pipeline uploads those
+files and a `latest.json` that lists them.
+
+### Signing
+
+Signing is off unless these are set in the environment of `just desktop-package`:
+
+| Variable                                                  | What it does                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_SIGNING_IDENTITY`                                  | The Developer ID Application identity, already imported into a keychain. Every Mach-O file in the sidecar and Node are signed with the hardened runtime first (Node with JIT allowed and no `get-task-allow`), then Tauri signs the app. Ad-hoc (`-`) is refused, because library validation would stop Node from loading the SDK's native parts. |
+| `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH` | Notarize with an App Store Connect API key.                                                                                                                                                                                                                                                                                                       |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`             | Or notarize with an Apple ID and an app-specific password.                                                                                                                                                                                                                                                                                        |
+| `PR_QUEST_WINDOWS_SIGN_COMMAND`                           | A command with `%1` for the file, such as `trusted-signing-cli -e <endpoint> -a <account> -c <profile> %1` or `signtool sign /fd SHA256 /tr <url> /td SHA256 /sha1 <thumbprint> %1`. It signs the sidecar's `.node`, `.exe` and `.dll` files, then Tauri uses it for the app and the installer.                                                   |
 
 ## Checks
 
-| Command              | What it does                                                             |
-| -------------------- | ------------------------------------------------------------------------ |
-| `yarn typecheck`     | Type-checks the UI, server, desktop and test projects                    |
-| `yarn lint`          | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
-| `yarn lint:fix`      | Applies oxlint's safe fixes                                              |
-| `yarn format`        | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
-| `yarn format:check`  | Fails if a file isn't formatted                                          |
-| `yarn test`          | Runs the Vitest suite once (`yarn test:watch` keeps it open)             |
-| `yarn build`         | Type-checks, then builds the UI, the server and the desktop bundle       |
-| `yarn build:server`  | Bundles only the server into `dist-server/`                              |
-| `yarn build:desktop` | Bundles only the desktop main process into `dist-desktop/`               |
-| `yarn start`         | Runs the production build; see [Run it](#run-it)                         |
-| `yarn desktop:dev`   | Opens the desktop app; see [Desktop app](#desktop-app) for packaging     |
+| Command                | What it does                                                             |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `yarn typecheck`       | Type-checks the UI, server, desktop and test projects                    |
+| `yarn lint`            | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware  |
+| `yarn lint:fix`        | Applies oxlint's safe fixes                                              |
+| `yarn format`          | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter) |
+| `yarn format:check`    | Fails if a file isn't formatted                                          |
+| `yarn test`            | Runs the Vitest suite once (`yarn test:watch` keeps it open)             |
+| `yarn build`           | Type-checks, then builds the UI and the server                           |
+| `yarn build:server`    | Bundles only the server into `dist-server/`                              |
+| `yarn start`           | Runs the production build; see [Run it](#run-it)                         |
+| `yarn desktop:package` | Packages the desktop app; see [Desktop app](#desktop-app)                |
 
 With [just](https://just.systems) installed, `just check` runs the type check, lint, format check,
-tests and build, as CI does on every pull request and every push to `main`.
+tests and build, as CI does on every pull request and every push to `main`. It doesn't build the
+Rust shell of the desktop app; `just desktop-check` and `just cargo-deny` check that.
 
 oxlint reads `.oxlintrc.json`. Type-aware rules such as `no-floating-promises` run through
 `oxlint-tsgolint`. The repo's own rules (no type assertions, no barrel files, no enums and the
@@ -409,7 +490,8 @@ src/
                 sessions and state dirs
     ui/         main.tsx (entry), App.tsx, the header controls and preferences, the game
                 controller hook and the live event stream
-  desktop/      the Electron main process: starts the server in-process and opens its window
+  desktop/      the desktop app's server side: the sidecar the Tauri shell starts, its secrets
+                and smoke checks (the shell itself is in src-tauri/)
   features/
     auth/       GitHub device flow, token resolution, the GitHub account control
     settings/   API keys, review provider and model settings, the settings dialog
@@ -437,8 +519,8 @@ Dependency rules, enforced by `yarn lint`:
   `test-utils/`.
 - Only `src/app` and `src/desktop` import from `src/app`, and they also go through each feature's
   `index.ts`. `src/desktop` embeds the server through `src/app/server/server.ts`.
-- Only `src/desktop` imports from `src/desktop`. It is server code: it runs in Electron's Node
-  main process, never in the UI.
+- Only `src/desktop` imports from `src/desktop`. It is server code: it runs in the sidecar's Node
+  process, never in the UI.
 - UI code and server code never import each other; they share only `src/shared`.
 - There are no import cycles (`import/no-cycle`). The features form one direction: `reviews`
   uses `quests`, `game` and `settings`; `quests` uses `game` and `settings`; `game` uses
@@ -790,8 +872,7 @@ Everything is under `~/.pr-quest` (or `PR_QUEST_STATE_DIR`). Directories are cre
         └── quests.json the last quest list, when it was fetched, any rate-limit backoff
 ```
 
-The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`. It
-also deletes a `secrets.json.bak` that earlier builds of it left behind.
+The [desktop app](#desktop-app) explains when the encrypted file replaces `secrets.json`.
 `secrets.json` and `settings.json` are shared; the game and the quest cache belong to whoever
 the current token is. Signing in as someone else opens their own folder, starting fresh. Keys
 set in the environment or an env file are never written to `secrets.json`.
@@ -897,9 +978,10 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
   allow any `startingRef`, but they don't say whether a SHA is accepted. If the agent starts
   elsewhere, the prompt has it check out the commit, and a mismatched `reviewedSha` fails the run.
 - **Approving costs one extra GitHub call** to re-check the head commit.
-- **The desktop app has no release yet.** `RELEASE_REPO` names a placeholder owner, so **Help**
-  opens a missing page and a release build can't be packaged until it's set, the version is
-  `0.0.0`, there is no app icon, and builds are unsigned. Only the macOS arm64 build has been started and checked so far.
+- **The desktop app has no release yet.** The release repository is a placeholder until
+  `PR_QUEST_RELEASE_REPO` is set, so **Help** opens a missing page; the version is `0.0.0`, there
+  is no app icon, and local builds are unsigned. The Windows build and the x86_64 Linux build
+  have only been checked by compiling the shell, and the Intel Mac build only by packaging it.
 - **The desktop app and `yarn start` don't share a running state.** Run one at a time on a
   state directory, as described in [Desktop app](#desktop-app).
 

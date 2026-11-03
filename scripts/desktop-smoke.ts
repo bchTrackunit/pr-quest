@@ -9,8 +9,9 @@
  * mounted, a deb unpacked and an installer installed into a temporary folder, then removed.
  *
  * --headless (Linux) runs it under xvfb-run in its own D-Bus session, with a throwaway unlocked
- * gnome-keyring when one is installed; its keyrings and WebKit's data go in the state directory. --no-keychain passes the keychain check when the machine
- * has none, as the app then keeps keys in memory.
+ * gnome-keyring when one is installed; its keyrings and WebKit's data go in the state directory.
+ * --no-keychain passes the keychain checks when the machine has none, as the app then keeps keys
+ * in memory.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
