@@ -4,9 +4,13 @@
 # the names below; see RELEASING.md. A secret that isn't set reaches this script as an empty
 # string, so empty ones are unset first.
 #
-# - Release builds (PR_QUEST_RELEASE_BUILD=1) need the updater key pair on every platform:
-#   PR_QUEST_UPDATER_PUBKEY and TAURI_SIGNING_PRIVATE_KEY (or, for a dry run, the files
-#   UPDATER_PUBKEY_FILE and UPDATER_PRIVATE_KEY_FILE).
+# The release workflow runs it twice: with --compile-only, which builds the app without any
+# secret, then with --skip-compile and the secrets, which only bundles and signs what was built.
+#
+# - Release builds (PR_QUEST_RELEASE_BUILD=1) need PR_QUEST_UPDATER_PUBKEY, the public key the
+#   app trusts updates from. They never get the private key: the workflow's sign-updates job signs
+#   the update files (scripts/ci/sign-updates.sh). Linux release bundles need LDAI_RUNTIME_FILE,
+#   the AppImage runtime scripts/ci/seed-tauri-tools.sh pinned.
 # - macOS: APPLE_CERTIFICATE (a base64 .p12) and APPLE_CERTIFICATE_PASSWORD are imported into a
 #   temporary keychain, which sets APPLE_SIGNING_IDENTITY; notarization takes APPLE_API_ISSUER,
 #   APPLE_API_KEY_ID and APPLE_API_KEY_P8 (the .p8 file's contents), or APPLE_ID, APPLE_PASSWORD
@@ -23,8 +27,7 @@
 # pr-quest-build.txt, which says how they were signed for scripts/ci/release-assets.sh.
 set -euo pipefail
 
-updater=(TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD PR_QUEST_UPDATER_PUBKEY)
-updater_files=(UPDATER_PRIVATE_KEY_FILE UPDATER_PUBKEY_FILE)
+updater_private=(TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_SIGNING_PRIVATE_KEY_PATH)
 mac_certificate=(APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD)
 mac_api_key=(APPLE_API_ISSUER APPLE_API_KEY_ID APPLE_API_KEY_P8)
 mac_account=(APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID)
@@ -42,8 +45,8 @@ derived=(APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_KEY_PATH PR_QUEST_WINDOW
 dlib_version=1.0.146
 dlib_sha256=7761e5d8f31e54b764da21d33cd8b0a2940e1b05526c7dfcb5e94b0431426f70
 
-for name in "${updater[@]}" "${updater_files[@]}" "${mac_certificate[@]}" "${mac_api_key[@]}" \
-  "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}"; do
+for name in "${updater_private[@]}" PR_QUEST_UPDATER_PUBKEY "${mac_certificate[@]}" \
+  "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     unset "$name"
   fi
@@ -82,16 +85,35 @@ require_all() {
 }
 
 triple=""
+compile_only=false
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
-  if [[ "${args[i]}" == --target ]]; then
-    triple="${args[i + 1]:-}"
-  fi
+  case "${args[i]}" in
+    --target) triple="${args[i + 1]:-}" ;;
+    --compile-only) compile_only=true ;;
+  esac
 done
 if [[ -z "$triple" ]]; then
   fail "Pass --target <triple>, so the build record goes next to that target's bundles."
 fi
 record="${CARGO_TARGET_DIR:-src-tauri/target}/$triple/release/bundle/pr-quest-build.txt"
+signing_secrets=("${mac_certificate[@]}" "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}")
+
+if any_set "${updater_private[@]}"; then
+  fail "The updater's private key reached the packaging. It must not: the release workflow's sign-updates job signs the update files."
+fi
+if [[ "${PR_QUEST_RELEASE_BUILD:-}" == 1 && -z "${PR_QUEST_UPDATER_PUBKEY:-}" ]]; then
+  fail "A release build needs PR_QUEST_UPDATER_PUBKEY, the public key of the updater key pair."
+fi
+
+# Compiling runs yarn build and every crate's build script, so it gets no secrets at all.
+if [[ "$compile_only" == true ]]; then
+  if any_set "${signing_secrets[@]}"; then
+    fail "Signing secrets reached the compile step, which must run without them."
+  fi
+  just desktop-package "$@"
+  exit 0
+fi
 
 allow_unsigned=false
 case "${PR_QUEST_ALLOW_UNSIGNED_RELEASE:-}" in
@@ -103,7 +125,7 @@ if [[ "$allow_unsigned" == true ]]; then
   if [[ "${GITHUB_EVENT_NAME:-}" == push ]]; then
     fail "PR_QUEST_ALLOW_UNSIGNED_RELEASE is set in a tag build, which must be signed. Only the dry run may set it."
   fi
-  if any_set "${mac_certificate[@]}" "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}"; then
+  if any_set "${signing_secrets[@]}"; then
     fail "PR_QUEST_ALLOW_UNSIGNED_RELEASE asks for an unsigned build, but signing secrets are set."
   fi
 fi
@@ -135,30 +157,6 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-
-# The updater key pair. Tauri signs every update file with the private key, and the app trusts only
-# the public key it was built with, so a release build stops here rather than half-way through.
-if [[ "${PR_QUEST_RELEASE_BUILD:-}" == 1 ]]; then
-  if any_set "${updater_files[@]}"; then
-    if any_set TAURI_SIGNING_PRIVATE_KEY PR_QUEST_UPDATER_PUBKEY; then
-      fail "Use the updater key from the secrets or the dry run's key files, not both."
-    fi
-    require_all "the dry run's updater key" "${updater_files[@]}"
-    TAURI_SIGNING_PRIVATE_KEY="$(cat "$UPDATER_PRIVATE_KEY_FILE")"
-    PR_QUEST_UPDATER_PUBKEY="$(cat "$UPDATER_PUBKEY_FILE")"
-    export TAURI_SIGNING_PRIVATE_KEY PR_QUEST_UPDATER_PUBKEY
-  fi
-  if [[ -z "${PR_QUEST_UPDATER_PUBKEY:-}" ]]; then
-    fail "A release build needs the repository variable PR_QUEST_UPDATER_PUBKEY, the public half of the updater key."
-  fi
-  if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-    fail "A release build needs TAURI_SIGNING_PRIVATE_KEY, a secret of the release environment, to sign the update files."
-  fi
-  # Without it, a key that has a password makes Tauri ask for one, which nobody can answer.
-  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
-elif any_set "${updater[@]}" "${updater_files[@]}"; then
-  fail "The updater key is set, but PR_QUEST_RELEASE_BUILD isn't 1, so nothing would use it."
-fi
 
 mac_keychain() {
   local password line identities count
@@ -301,8 +299,16 @@ case "$(uname -s)" in
     fi
     ;;
   *)
-    if any_set "${mac_certificate[@]}" "${mac_api_key[@]}" "${mac_account[@]}" "${win_azure[@]}" "${win_pfx[@]}"; then
+    if any_set "${signing_secrets[@]}"; then
       fail "Linux builds aren't code signed, but macOS or Windows signing secrets reached this one."
+    fi
+    # The runtime becomes the start of every AppImage, which updates itself, so a release uses
+    # only the pinned one; without LDAI_RUNTIME_FILE, appimagetool downloads its latest build.
+    if [[ "${PR_QUEST_RELEASE_BUILD:-}" == 1 ]]; then
+      [[ -n "${LDAI_RUNTIME_FILE:-}" && -f "$LDAI_RUNTIME_FILE" && -r "$LDAI_RUNTIME_FILE" ]] ||
+        fail "A Linux release build needs LDAI_RUNTIME_FILE, the AppImage runtime scripts/ci/seed-tauri-tools.sh pins and exports."
+      bash "$(dirname "${BASH_SOURCE[0]}")/seed-tauri-tools.sh" --check-runtime "$LDAI_RUNTIME_FILE" ||
+        fail "LDAI_RUNTIME_FILE ($LDAI_RUNTIME_FILE) isn't the pinned AppImage runtime."
     fi
     ;;
 esac

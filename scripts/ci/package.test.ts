@@ -17,11 +17,8 @@ const script = resolve(import.meta.dirname, 'package.sh');
 
 const IDENTITY = 'Developer ID Application: Jane Doe (TEAM123456)';
 const THUMBPRINT = '0123456789ABCDEF0123456789ABCDEF01234567';
-const release = {
-  PR_QUEST_RELEASE_BUILD: '1',
-  PR_QUEST_UPDATER_PUBKEY: 'pubkey',
-  TAURI_SIGNING_PRIVATE_KEY: 'private key',
-};
+const release = { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: 'pubkey' };
+const RUNTIME_SHA256 = '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d';
 const macCertificate = {
   APPLE_CERTIFICATE: Buffer.from('p12').toString('base64'),
   APPLE_CERTIFICATE_PASSWORD: 'pw',
@@ -73,7 +70,7 @@ beforeEach(() => {
 } >"$STUB_DIR/just-env"
 exit "\${STUB_JUST_STATUS:-0}"`,
   );
-  stub('uname', 'echo "$STUB_UNAME"');
+  stub('uname', '[ "$1" = -m ] && echo x86_64 || echo "$STUB_UNAME"');
   stub(
     'security',
     `echo "security $*" >>"$STUB_DIR/calls"
@@ -92,7 +89,12 @@ case "$*" in *Import-PfxCertificate*) echo "${THUMBPRINT}" ;; esac`,
   );
   stub('dotnet', 'echo "Microsoft.NETCore.App 8.0.21 [C:\\dotnet]"');
   stub('curl', 'while [ "$1" != --output ]; do shift; done; echo "not the dlib" >"$2"');
-  stub('sha256sum', 'echo "0000  $1"');
+  // The pinned AppImage runtime's SHA-256 for a file named runtime, and a wrong one otherwise.
+  stub(
+    'sha256sum',
+    `case "$1" in */runtime) echo "${RUNTIME_SHA256}  $1" ;; *) echo "0000  $1" ;; esac`,
+  );
+  writeFileSync(join(dir, 'runtime'), 'runtime');
 });
 
 afterEach(() => {
@@ -134,6 +136,7 @@ function run(
 }
 
 const dryRun = { ...release, PR_QUEST_ALLOW_UNSIGNED_RELEASE: '1' };
+const linuxRelease = () => ({ ...release, LDAI_RUNTIME_FILE: join(dir, 'runtime') });
 
 describe.skipIf(process.platform === 'win32')('package.sh', () => {
   test('passes its arguments to desktop-package', () => {
@@ -217,70 +220,70 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
   });
 
   describe('the updater key', () => {
-    test('a release build gets it, with an empty password when the key has none', () => {
-      const result = run('Linux', release);
+    test('a release build gets the public key, and nothing of the private one', () => {
+      const result = run('Darwin', { ...dryRun });
 
       expect(result.status).toBe(0);
-      expect(result.env).toContain('TAURI_SIGNING_PRIVATE_KEY=[private key]');
-      expect(result.env).toContain('TAURI_SIGNING_PRIVATE_KEY_PASSWORD=[]');
       expect(result.env).toContain('PR_QUEST_UPDATER_PUBKEY=[pubkey]');
+      expect(result.env).toContain('TAURI_SIGNING_PRIVATE_KEY=\n');
+      expect(result.env).toContain('TAURI_SIGNING_PRIVATE_KEY_PASSWORD=\n');
     });
 
     test.each([
-      [
-        'the private key',
-        { PR_QUEST_RELEASE_BUILD: '1', PR_QUEST_UPDATER_PUBKEY: 'pubkey' },
-        'TAURI_SIGNING_PRIVATE_KEY',
-      ],
-      [
-        'the public key',
-        { PR_QUEST_RELEASE_BUILD: '1', TAURI_SIGNING_PRIVATE_KEY: 'key' },
-        'PR_QUEST_UPDATER_PUBKEY',
-      ],
-      [
-        'both, when they are empty',
-        { ...release, TAURI_SIGNING_PRIVATE_KEY: '', PR_QUEST_UPDATER_PUBKEY: '' },
-        'PR_QUEST_UPDATER_PUBKEY',
-      ],
-    ])('a release build stops without %s', (_case, env, message) => {
-      const result = run('Linux', env);
+      'TAURI_SIGNING_PRIVATE_KEY',
+      'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+      'TAURI_SIGNING_PRIVATE_KEY_PATH',
+    ])('refuses %s, which only the sign-updates job may have', (name) => {
+      for (const args of [
+        ['--target', 'aarch64-apple-darwin'],
+        ['--target', 'aarch64-apple-darwin', '--compile-only'],
+      ]) {
+        const result = run('Darwin', { ...dryRun, [name]: 'key' }, args);
+
+        expect(result.status).toBe(1);
+        expect(result.packaged).toBe(false);
+        expect(result.stdout).toContain("The updater's private key reached the packaging");
+      }
+    });
+
+    test('a release build stops without the public key', () => {
+      const pubkeys: Array<Record<string, string>> = [{}, { PR_QUEST_UPDATER_PUBKEY: '' }];
+      for (const pubkey of pubkeys) {
+        const result = run('Darwin', { PR_QUEST_RELEASE_BUILD: '1', ...pubkey });
+
+        expect(result.status).toBe(1);
+        expect(result.packaged).toBe(false);
+        expect(result.stdout).toContain('needs PR_QUEST_UPDATER_PUBKEY');
+      }
+    });
+  });
+
+  describe('--compile-only', () => {
+    const compile = ['--target', 'aarch64-apple-darwin', '--compile-only'];
+
+    test('compiles a release build without any signing secret, and writes no record', () => {
+      const result = run('Darwin', release, compile);
+
+      expect(result.status).toBe(0);
+      expect(result.env).toContain(
+        'args=desktop-package --target aarch64-apple-darwin --compile-only',
+      );
+      expect(result.env).toContain('APPLE_SIGNING_IDENTITY=\n');
+      expect(result.output).toBe('');
+      expect(result.record).toBe('');
+      expect(result.calls).toBe('');
+    });
+
+    test.each([
+      ['macOS', 'Darwin', { ...macCertificate, ...macApiKey }],
+      ['Windows', 'MINGW64_NT-10.0', azure],
+    ] as const)('refuses the %s signing secrets', (_platform, os, secrets) => {
+      const result = run(os, { ...release, ...secrets }, compile);
 
       expect(result.status).toBe(1);
       expect(result.packaged).toBe(false);
-      expect(result.stdout).toContain(message);
-    });
-
-    test('a dry run reads its throwaway key pair from files', () => {
-      writeFileSync(join(dir, 'dry.key'), 'dry private');
-      writeFileSync(join(dir, 'dry.key.pub'), 'dry public');
-      const result = run('Linux', {
-        PR_QUEST_RELEASE_BUILD: '1',
-        UPDATER_PRIVATE_KEY_FILE: join(dir, 'dry.key'),
-        UPDATER_PUBKEY_FILE: join(dir, 'dry.key.pub'),
-      });
-
-      expect(result.status).toBe(0);
-      expect(result.env).toContain('TAURI_SIGNING_PRIVATE_KEY=[dry private]');
-      expect(result.env).toContain('PR_QUEST_UPDATER_PUBKEY=[dry public]');
-    });
-
-    test('refuses the key files and the secrets together', () => {
-      writeFileSync(join(dir, 'dry.key'), 'dry private');
-      const result = run('Linux', {
-        ...release,
-        UPDATER_PRIVATE_KEY_FILE: join(dir, 'dry.key'),
-        UPDATER_PUBKEY_FILE: join(dir, 'dry.key'),
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain('not both');
-    });
-
-    test('refuses a key for a build that would ignore it', () => {
-      const result = run('Linux', { TAURI_SIGNING_PRIVATE_KEY: 'key' });
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain("PR_QUEST_RELEASE_BUILD isn't 1");
+      expect(result.stdout).toContain('Signing secrets reached the compile step');
+      expect(result.calls).toBe('');
     });
   });
 
@@ -464,11 +467,30 @@ describe.skipIf(process.platform === 'win32')('package.sh', () => {
 
   describe('Linux', () => {
     test('is never code signed, so a release build needs no signing secrets', () => {
-      const result = run('Linux', release);
+      const result = run('Linux', linuxRelease());
 
       expect(result.status).toBe(0);
       expect(result.output).toBe('signed=false\n');
       expect(result.record).toContain('signed=false\nunsigned_release=false\n');
+    });
+
+    test('a release build needs the pinned AppImage runtime in LDAI_RUNTIME_FILE', () => {
+      writeFileSync(join(dir, 'other-runtime'), 'runtime');
+      for (const [runtime, message] of [
+        ['', 'needs LDAI_RUNTIME_FILE'],
+        [join(dir, 'missing'), 'needs LDAI_RUNTIME_FILE'],
+        [join(dir, 'other-runtime'), "isn't the pinned AppImage runtime"],
+      ] as const) {
+        const result = run('Linux', { ...release, LDAI_RUNTIME_FILE: runtime });
+
+        expect(result.status).toBe(1);
+        expect(result.packaged).toBe(false);
+        expect(result.stdout).toContain(message);
+      }
+    });
+
+    test('a local build bundles without the runtime pin', () => {
+      expect(run('Linux').status).toBe(0);
     });
 
     test("refuses other platforms' signing secrets", () => {
