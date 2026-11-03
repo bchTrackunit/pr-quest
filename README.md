@@ -391,7 +391,11 @@ The port and the choices you make in the app's dialogs are kept in `desktop.json
 **Saved keys.** The app keeps the GitHub token and the API keys from Settings in
 `secrets.encrypted.json`, encrypted (AES-GCM) with a data key it keeps in the OS keychain as
 `com.prquest.desktop` / `secrets-data-key`: the macOS Keychain, the Windows Credential Manager,
-or the Secret Service on Linux (GNOME Keyring, or KWallet 5.97 and later). Whenever it finds a
+or the Secret Service on Linux (GNOME Keyring, or KWallet 5.97 and later). Only the macOS
+Keychain asks you before another app reads the entry. The Windows Credential Manager and the Secret
+Service have no per-app access control, so any program running as you can read the data key
+there, and with it decrypt the file; on those systems the encryption keeps the keys out of
+backups and other users' reach, not away from your own programs. Whenever it finds a
 `secrets.json`, it imports it. If that file is newer than the encrypted one, as when `yarn start`
 saved a key since, its keys replace the encrypted ones; otherwise only keys the encrypted file
 lacks are taken. The log names any key that was replaced or kept, never its value. The app
@@ -925,7 +929,8 @@ anyone.
 - **Outside the desktop app, secrets are stored in plain text.** `secrets.json` is protected by
   its `0600` mode and the `0700` directory, not encrypted. Backups of your home folder include
   it. The desktop app encrypts them with a key from the OS keychain instead and deletes the plain
-  file once it has checked the encrypted copy. Without a keychain it writes them in plain text
+  file once it has checked the encrypted copy; on Windows and Linux, though, any program running
+  as you can read that key from the keychain. Without a keychain it writes them in plain text
   only if you agree to (see [Desktop app](#desktop-app)).
 - **The OAuth token is broad.** The `repo` scope grants access to every repo you can access (see
   [Scopes](#scopes)); moving to a GitHub App with narrower, expiring tokens is a possible
