@@ -36,16 +36,26 @@ export interface Encryptor {
 export interface DesktopSecretsOptions {
   /** The OS keychain, or `undefined` when it can't be used, as on Linux without a keyring. */
   encryptor: Encryptor | undefined;
-  /** Without a keychain, keep saved keys in plain `secrets.json`, which the player agreed to. */
+  /**
+   * Without a keychain, keep saved keys in plain `secrets.json`, which the player agreed to. Only
+   * where `plaintextAllowedOn` the platform.
+   */
   allowPlaintext: boolean;
+  /** The OS, `process.platform` unless a test says otherwise. */
+  platform?: NodeJS.Platform;
   info: (message: string) => void;
   warn: (message: string) => void;
+}
+
+/** Whether saved keys may go unencrypted in `secrets.json`: on Linux and Windows, never on macOS. */
+export function plaintextAllowedOn(platform: NodeJS.Platform): boolean {
+  return platform === 'linux' || platform === 'win32';
 }
 
 /**
  * Where saved keys go:
  * - `keychain`: encrypted in `secrets.encrypted.json`.
- * - `plaintext`: no keychain, so plain `secrets.json`, as the player agreed.
+ * - `plaintext`: no keychain, so plain `secrets.json`, as the player agreed, on Linux or Windows.
  * - `memory`: no keychain, so new keys last only until the app quits. Keys in `secrets.json` are
  *   read, and deleting one removes it from there too, so signing out lasts.
  * - `locked`: encrypted keys exist but the keychain is gone, so the app starts without them, keeps
@@ -194,7 +204,7 @@ async function openWithoutKeychain(
     return { store: new MemorySecretStore({}), storage: 'locked' };
   }
   const plain = await FileSecretStore.open(stateDir, { onWarning: options.warn });
-  if (options.allowPlaintext) {
+  if (options.allowPlaintext && plaintextAllowedOn(options.platform ?? process.platform)) {
     options.warn(
       `The OS keychain isn't available, so saved keys are stored unencrypted in ${join(stateDir, PLAIN_SECRETS_FILE)}, as you chose`,
     );

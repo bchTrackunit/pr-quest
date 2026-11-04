@@ -34,8 +34,12 @@ const fakeKeychain = (keyId = 'fake-key'): Encryptor => ({
 
 const log = () => ({ info: vi.fn(), warn: vi.fn() });
 
-const open = (encryptor: Encryptor | undefined, logger = log(), allowPlaintext = false) =>
-  openDesktopSecrets(dir, { encryptor, allowPlaintext, ...logger });
+const open = (
+  encryptor: Encryptor | undefined,
+  logger = log(),
+  allowPlaintext = false,
+  platform: NodeJS.Platform = 'linux',
+) => openDesktopSecrets(dir, { encryptor, allowPlaintext, platform, ...logger });
 
 const modeOf = async (path: string): Promise<number> => (await stat(path)).mode & 0o777;
 
@@ -354,6 +358,15 @@ describe('openDesktopSecrets without the OS keychain', () => {
     expect(await readdir(dir)).toEqual(['secrets.json']);
     expect(await readFile(plainFile(), 'utf8')).toContain('lin_plain');
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unencrypted'));
+  });
+
+  test('never writes secrets.json on macOS, even when told the player agreed to it', async () => {
+    const { store, storage } = await open(undefined, log(), true, 'darwin');
+    await store.set('linear', 'lin_memory');
+
+    expect(storage).toBe('memory');
+    expect(store.get('linear')).toBe('lin_memory');
+    expect(await readdir(dir)).toEqual([]);
   });
 
   test('never writes secrets.json while encrypted keys wait for the keychain', async () => {

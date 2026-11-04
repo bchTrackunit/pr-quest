@@ -617,10 +617,16 @@ fn answer(app: &AppHandle, notice: &Notice) -> String {
         .buttons
         .get(chosen)
         .map_or("continue", |button| button.action.as_str());
-    if action == "savePlaintext" && !confirm_plaintext(app) {
-        return "keepInMemory".into();
+    notice_action(action, cfg!(target_os = "macos"), || confirm_plaintext(app)).into()
+}
+
+/// The action for the chosen button. Keys never go unencrypted on disk on macOS, and elsewhere
+/// only once the player confirms it.
+fn notice_action(action: &str, macos: bool, confirm: impl FnOnce() -> bool) -> &str {
+    if action == "savePlaintext" && (macos || !confirm()) {
+        return "keepInMemory";
     }
-    action.into()
+    action
 }
 
 /// Closing this dialog keeps the keys in memory, so they're never saved unencrypted by accident.
@@ -799,6 +805,24 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn keys_go_unencrypted_only_off_macos_and_once_the_player_confirms() {
+        let unasked = || panic!("asked to confirm");
+        assert_eq!(
+            notice_action("savePlaintext", true, unasked),
+            "keepInMemory"
+        );
+        assert_eq!(
+            notice_action("savePlaintext", false, || true),
+            "savePlaintext"
+        );
+        assert_eq!(
+            notice_action("savePlaintext", false, || false),
+            "keepInMemory"
+        );
+        assert_eq!(notice_action("startOver", true, unasked), "startOver");
     }
 
     #[test]

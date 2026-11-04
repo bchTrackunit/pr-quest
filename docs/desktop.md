@@ -149,8 +149,9 @@ environment for it.
 Without a usable keychain, such as on Linux without a Secret Service, the app reads
 `secrets.json` but keeps new keys in memory until it quits, and says so once in a dialog.
 Deleting a key, as **Sign out** does, removes it from `secrets.json` too, so it doesn't come back
-on the next start. Choosing **Save Them Unencrypted** there, and confirming it, writes
-`secrets.json` from then on, and the choice is kept in `desktop.json`. If `secrets.encrypted.json` exists but the keychain isn't
+on the next start. On Linux and Windows, choosing **Save Them Unencrypted** there, and confirming
+it, writes `secrets.json` from then on, and the choice is kept in `desktop.json`. macOS never
+offers that, and never writes `secrets.json`. If `secrets.encrypted.json` exists but the keychain isn't
 available, the app starts without saved keys and never writes `secrets.json`, so the encrypted
 file stays the only copy. Each value is bound to its key's name, and the file names the data key
 it was encrypted with by a short hash. If that isn't the keychain's data key, as after the
