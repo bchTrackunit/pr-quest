@@ -39,10 +39,11 @@ export const DEFAULT_GITHUB_CLIENT_ID = '';
 export interface DatabaseConfig {
   /** `DATABASE_URL`, a `postgres://` connection string. */
   url: string;
-  /** `PR_QUEST_MASTER_KEY`: base64 of 32 random bytes. */
-  masterKey: string;
-  /** `PR_QUEST_PREVIOUS_MASTER_KEYS`: comma-separated keys being rotated out. */
-  previousMasterKeys?: string;
+  /**
+   * `PR_QUEST_MASTER_KEY` and `PR_QUEST_PREVIOUS_MASTER_KEYS`, held only as a keyring, so logging
+   * or serialising the config never shows them.
+   */
+  keyring: MasterKeyring;
   /** `PR_QUEST_DATABASE_POOL_MAX`: most connections per server process, 1 to 100; default 10. */
   poolMax?: number;
 }
@@ -231,19 +232,20 @@ function databaseConfig(read: (name: string) => string | undefined): DatabaseCon
       `${MASTER_KEY_VARIABLE} is required with DATABASE_URL: it encrypts every user's API keys. Create one with \`openssl rand -base64 32\` and keep it in the platform's secrets.`,
     );
   }
-  const previousMasterKeys = read(PREVIOUS_MASTER_KEYS_VARIABLE);
   const poolMax = read('PR_QUEST_DATABASE_POOL_MAX');
   const database: DatabaseConfig = {
     url,
-    masterKey,
-    ...(previousMasterKeys ? { previousMasterKeys } : {}),
+    keyring: MasterKeyring.fromConfig({
+      current: masterKey,
+      previous: read(PREVIOUS_MASTER_KEYS_VARIABLE),
+    }),
     ...(poolMax === undefined ? {} : { poolMax: Number(poolMax) }),
   };
   assertDatabase(database);
   return database;
 }
 
-/** Fails at startup rather than on the first sign-in, and never echoes a key. */
+/** Fails at startup rather than on the first sign-in; the keyring has already checked the keys. */
 function assertDatabase(database: DatabaseConfig): void {
   if (!/^postgres(?:ql)?:\/\//.test(database.url)) {
     throw new Error('DATABASE_URL must be a postgres:// connection string');
@@ -252,7 +254,12 @@ function assertDatabase(database: DatabaseConfig): void {
   if (poolMax !== undefined && (!Number.isInteger(poolMax) || poolMax < 1 || poolMax > 100)) {
     throw new Error('PR_QUEST_DATABASE_POOL_MAX must be an integer between 1 and 100');
   }
-  MasterKeyring.fromConfig({ current: database.masterKey, previous: database.previousMasterKeys });
+  const { keyring }: { keyring: unknown } = database;
+  if (!(keyring instanceof MasterKeyring)) {
+    throw new Error(
+      `The database config needs a keyring from MasterKeyring.fromConfig, which reads ${MASTER_KEY_VARIABLE}`,
+    );
+  }
 }
 
 /** Who may reach the server: loopback only in local mode, the public origin's hosts when hosted. */

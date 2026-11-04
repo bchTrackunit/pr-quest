@@ -11,7 +11,6 @@ import {
   type DatabaseConfig,
   LOOPBACK_HOSTNAMES,
 } from '../platform/config.ts';
-import { MasterKeyring } from '../platform/envelope.ts';
 import { connectPostgres, type Database, transportWarning } from '../platform/postgres/database.ts';
 import { openPostgresStorage } from './postgresStorage.ts';
 import { createRouter, type RequestListener, trustedRequests } from '../platform/router.ts';
@@ -25,6 +24,7 @@ export {
   loadConfig,
   type LocalConfig,
 } from '../platform/config.ts';
+export { MasterKeyring } from '../platform/envelope.ts';
 export type { SecretName, SecretStore } from '../platform/secrets.ts';
 export type {
   DeviceSignIn,
@@ -196,17 +196,13 @@ async function openDatabase(
   config: DatabaseConfig,
   warn: (message: string) => void,
 ): Promise<{ db: Database; storage: AppStorage }> {
-  const keyring = MasterKeyring.fromConfig({
-    current: config.masterKey,
-    previous: config.previousMasterKeys,
-  });
   const transport = transportWarning(config.url);
   if (transport) {
     warn(transport);
   }
   const db = connectPostgres(config.url, { max: config.poolMax, onError: warn });
   try {
-    return { db, storage: await openPostgresStorage(db, { keyring, warn }) };
+    return { db, storage: await openPostgresStorage(db, { keyring: config.keyring, warn }) };
   } catch (error) {
     await db.close();
     throw error;

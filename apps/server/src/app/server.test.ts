@@ -12,6 +12,7 @@ import { HOSTED_CONFIG, LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import {
   type IdentityFactory,
   MACHINE_SCOPE,
+  MasterKeyring,
   type RunningServer,
   startServer,
   type ServerOverrides,
@@ -246,7 +247,7 @@ describe('startServer', () => {
     test('opens the configured database, and fails to start when it is unreachable', async () => {
       const database = {
         url: 'postgres://nobody@127.0.0.1:1/pr_quest',
-        masterKey: randomBytes(32).toString('base64'),
+        keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
       };
 
       await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow(
@@ -258,7 +259,7 @@ describe('startServer', () => {
     test('warns when the database is on a public host without TLS', async () => {
       const database = {
         url: 'postgres://nobody:s3cret@pr-quest-db.invalid:1/pr_quest',
-        masterKey: randomBytes(32).toString('base64'),
+        keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
       };
 
       await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow();

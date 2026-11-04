@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { MasterKeyring, newDataKey } from './envelope.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from './test-utils/config.ts';
 import { DEFAULT_SERVER_PORT } from '@pr-quest/contract/ports';
 
@@ -264,12 +266,38 @@ describe('loadConfig', () => {
           env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
           envFilePath,
         });
+        const dataKey = newDataKey();
+        const wrappedByPrevious = MasterKeyring.fromConfig({ current: previous }).wrap(
+          dataKey,
+          'x',
+        );
 
         expect(config.database).toEqual({
           url: 'postgres://pr_quest@db.internal:5432/pr_quest',
-          masterKey,
-          previousMasterKeys: previous,
+          keyring: expect.any(MasterKeyring),
         });
+        expect(config.database?.keyring.currentId).toBe(
+          MasterKeyring.fromConfig({ current: masterKey }).currentId,
+        );
+        expect(config.database?.keyring.unwrap(wrappedByPrevious, 'x')).toEqual(dataKey);
+      });
+
+      test('never shows the master keys when the config is logged or serialised', () => {
+        const config = loadConfig({
+          env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
+          envFilePath,
+        });
+
+        for (const shown of [
+          JSON.stringify(config),
+          inspect(config, { depth: Infinity, showHidden: true }),
+        ]) {
+          for (const key of [masterKey, previous]) {
+            expect(shown).not.toContain(key);
+            expect(shown).not.toContain(Buffer.from(key, 'base64').toString('hex'));
+          }
+          expect(shown).not.toMatch(/Buffer/);
+        }
       });
 
       test('reads the pool size', () => {
@@ -341,23 +369,24 @@ describe('assertSafeConfig', () => {
 });
 
 describe('assertSafeConfig with a database', () => {
+  const masterKey = randomBytes(32).toString('base64');
   const database = {
     url: 'postgres://pr_quest@db.internal:5432/pr_quest',
-    masterKey: randomBytes(32).toString('base64'),
+    keyring: MasterKeyring.fromConfig({ current: masterKey }),
   };
 
-  test('accepts a hosted config with a Postgres URL and a master key', () => {
+  test('accepts a hosted config with a Postgres URL and a master keyring', () => {
     expect(() => assertSafeConfig({ ...HOSTED_CONFIG, database })).not.toThrow();
   });
 
-  test('refuses a hosted config whose master key is malformed, without echoing it', () => {
-    const config: AppConfig = {
-      ...HOSTED_CONFIG,
-      database: { ...database, masterKey: 'c2hvcnQ=' },
-    };
+  test('refuses a hosted config with a plain master key instead of a keyring, without echoing it', () => {
+    const config: AppConfig = Object.assign(
+      { ...HOSTED_CONFIG },
+      { database: { url: database.url, masterKey } },
+    );
 
-    expect(() => assertSafeConfig(config)).toThrow(/32 random bytes/);
-    expect(() => assertSafeConfig(config)).not.toThrow(/c2hvcnQ=/);
+    expect(() => assertSafeConfig(config)).toThrow(/MasterKeyring\.fromConfig/);
+    expect(() => assertSafeConfig(config)).not.toThrow(masterKey);
   });
 
   test('refuses a hosted config with a non-Postgres URL', () => {
