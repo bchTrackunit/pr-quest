@@ -124,11 +124,11 @@ each run in one transaction (so no `CREATE INDEX CONCURRENTLY`), without the poo
 timeout and with a 60-second lock timeout. The server doesn't run them; it refuses to start until
 they have run.
 
-| Command               | In a deployment                           | What it does                                         |
-| --------------------- | ----------------------------------------- | ---------------------------------------------------- |
-| `just db-migrate`     | `node apps/server/dist/db.js migrate`     | Runs the pending migrations, each in one transaction |
-| `just db-status`      | `node apps/server/dist/db.js status`      | Lists pending migrations; fails while any is         |
-| `just db-rewrap-keys` | `node apps/server/dist/db.js rewrap-keys` | Rewraps every data key under the current master key  |
+| Command               | In a deployment                           | What it does                                                                       |
+| --------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `just db-migrate`     | `node apps/server/dist/db.js migrate`     | Runs the pending migrations, each in one transaction                               |
+| `just db-status`      | `node apps/server/dist/db.js status`      | Lists pending migrations; fails while any is, or while a newer build's is breaking |
+| `just db-rewrap-keys` | `node apps/server/dist/db.js rewrap-keys` | Rewraps every data key under the current master key                                |
 
 The commands take `DATABASE_URL` and the master keys from the environment only, never from
 arguments, so they stay out of shell history, and never print them. Results go to stdout, failures

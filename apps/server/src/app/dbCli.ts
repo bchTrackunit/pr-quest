@@ -25,7 +25,7 @@ export interface DbCliOptions {
 /**
  * Hosted mode's database chores, resolving to the exit code:
  * - `migrate` runs the pending schema migrations; run it before starting a new build.
- * - `status` lists them, failing while any is pending.
+ * - `status` lists them, failing while any is pending or a newer build's migration is breaking.
  * - `rewrap-keys` rewraps every data key under `PR_QUEST_MASTER_KEY`, after a rotation, so the
  *   keys in `PR_QUEST_PREVIOUS_MASTER_KEYS` can be dropped. It fails if any data key couldn't be
  *   rewrapped, after trying them all.
@@ -93,7 +93,7 @@ const COMMANDS = {
     if (pending.length === 0 && unknown.length === 0) {
       out('The database schema is up to date');
     }
-    return pending.length > 0 || unknown.length > 0 ? 1 : 0;
+    return pending.length > 0 || breaking.length > 0 ? 1 : 0;
   },
   'rewrap-keys': async (db, { out, err }, keyring) => {
     if (!keyring) {

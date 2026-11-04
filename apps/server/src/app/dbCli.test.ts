@@ -80,6 +80,28 @@ describe('runDbCommand', () => {
     expect(output).toEqual(['The database schema is up to date']);
   });
 
+  test("status lists a newer build's additive migration but passes, since this build starts", async () => {
+    await run(['migrate']);
+    await database.db.query("INSERT INTO schema_migrations (id) VALUES ('9999_added_table')");
+    output = [];
+
+    expect(await run(['status'])).toBe(0);
+    expect(output).toEqual(['Run by a newer build: 9999_added_table']);
+  });
+
+  test("status fails on a newer build's breaking migration", async () => {
+    await run(['migrate']);
+    await database.db.query(
+      "INSERT INTO schema_migrations (id, breaking) VALUES ('9999_dropped_column', true)",
+    );
+    output = [];
+
+    expect(await run(['status'])).toBe(1);
+    expect(output.join('\n')).toMatch(
+      /Breaking for this build, which won't start: 9999_dropped_column/,
+    );
+  });
+
   test('rewrap-keys rewraps data keys from a previous master key', async () => {
     await run(['migrate']);
     const oldKey = randomBytes(32).toString('base64');
