@@ -1,6 +1,7 @@
 import {
   type DesktopSecrets,
   ENCRYPTED_SECRETS_FILE,
+  plaintextAllowedOn,
   type SecretsStorage,
 } from './keychainSecrets.ts';
 
@@ -20,8 +21,19 @@ export interface SecretsNotice {
   buttons: Array<{ label: string; action: NoticeAction }>;
 }
 
-const NO_KEYCHAIN =
-  'On Linux, install and unlock a keyring such as GNOME Keyring or KWallet, then restart PR Quest.';
+/** How to get a working keychain on `platform`. */
+function noKeychain(platform: NodeJS.Platform): string {
+  switch (platform) {
+    case 'darwin':
+      return 'Unlock your login keychain in Keychain Access, and allow PR Quest to use it if macOS asks, then restart PR Quest.';
+    case 'win32':
+      return 'Make sure the Windows Credential Manager works for your account, then restart PR Quest.';
+    case 'linux':
+      return 'Install and unlock a keyring such as GNOME Keyring or KWallet, then restart PR Quest.';
+    default:
+      return 'Make sure the OS keychain is available, then restart PR Quest.';
+  }
+}
 
 const RETRY_OR_CONTINUE: SecretsNotice['buttons'] = [
   { label: 'Try Again', action: 'retry' },
@@ -35,31 +47,46 @@ const RETRY_OR_CONTINUE: SecretsNotice['buttons'] = [
 export function secretsNotice(
   storage: SecretsStorage,
   plaintextChoice: boolean | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): SecretsNotice | undefined {
   switch (storage) {
-    case 'memory':
-      return plaintextChoice === undefined
+    case 'memory': {
+      const plaintext = plaintextAllowedOn(platform);
+      // Where saving them unencrypted isn't offered, an earlier choice to do so doesn't count.
+      if (plaintextChoice === false || (plaintextChoice === true && plaintext)) {
+        return undefined;
+      }
+      const message = "PR Quest can't use the OS keychain to encrypt your saved keys";
+      return plaintext
         ? {
-            message: "PR Quest can't use the OS keychain to encrypt your saved keys",
-            detail: `Keys and the GitHub sign-in you save last only until you quit, unless you save them unencrypted in the state folder, where any program running as you can read them. ${NO_KEYCHAIN}`,
+            message,
+            detail: `Keys and the GitHub sign-in you save last only until you quit, unless you save them unencrypted in the state folder, where any program running as you can read them. ${noKeychain(platform)}`,
             buttons: [
               { label: 'Keep Them Until I Quit', action: 'keepInMemory' },
               { label: 'Save Them Unencrypted', action: 'savePlaintext' },
             ],
           }
-        : undefined;
+        : {
+            message,
+            detail: `Keys and the GitHub sign-in you save last only until you quit. ${noKeychain(platform)}`,
+            buttons: [{ label: 'Keep Them Until I Quit', action: 'keepInMemory' }],
+          };
+    }
     case 'locked':
       return {
         message: "Your saved keys are encrypted with the OS keychain, which isn't available",
-        detail: `PR Quest starts without them, and keys you save now won't be saved. ${NO_KEYCHAIN}`,
+        detail: `PR Quest starts without them, and keys you save now won't be saved. ${noKeychain(platform)}`,
         buttons: [{ label: 'Continue', action: 'continue' }],
       };
     case 'undecryptable':
       return {
-        message: "The OS keychain couldn't decrypt your saved keys",
-        detail:
-          "This happens when keychain access was denied, or the keys were saved on another computer or account. Try again to allow access. If you continue, PR Quest starts without saved keys, and saving a key replaces the ones it couldn't decrypt.",
-        buttons: RETRY_OR_CONTINUE,
+        message: 'The file with your saved keys was changed or damaged',
+        detail: `${ENCRYPTED_SECRETS_FILE} in the state folder names the OS keychain's data key, but doesn't decrypt with it. Restore it from a backup and restart PR Quest to get your keys back. If you continue, PR Quest starts without saved keys, and saving a key moves that file aside. Start Over moves it aside in the state folder and saves keys with the current data key.`,
+        // Closing the dialog chooses the last button, which leaves the file alone.
+        buttons: [
+          { label: 'Start Over', action: 'startOver' },
+          { label: 'Continue Without Saved Keys', action: 'continue' },
+        ],
       };
     case 'wrongKey':
       return {
@@ -74,7 +101,7 @@ export function secretsNotice(
     case 'corrupt':
       return {
         message: 'The file with your saved keys is damaged',
-        detail: `PR Quest can't read ${ENCRYPTED_SECRETS_FILE} in the state folder. Restore it from a backup and try again. If you continue, PR Quest starts without saved keys, and saving a key replaces the damaged file.`,
+        detail: `PR Quest can't read ${ENCRYPTED_SECRETS_FILE} in the state folder. Restore it from a backup and try again. If you continue, PR Quest starts without saved keys, and saving a key moves the damaged file aside in the state folder.`,
         buttons: RETRY_OR_CONTINUE,
       };
     case 'importFailed':
@@ -102,6 +129,8 @@ export interface OpenWithNoticesOptions {
   startOver: () => Promise<void>;
   /** Whether to tell the player anything; off after a restart, which they already heard about. */
   notices?: boolean;
+  /** The OS, `process.platform` unless a test says otherwise. */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -109,11 +138,14 @@ export interface OpenWithNoticesOptions {
  * once whether to save them unencrypted without a keychain.
  */
 export async function openWithNotices(options: OpenWithNoticesOptions): Promise<DesktopSecrets> {
+  const platform = options.platform ?? process.platform;
   let plaintextChoice = options.plaintextChoice;
   for (;;) {
-    const opened = await options.open(plaintextChoice === true);
+    const opened = await options.open(plaintextChoice === true && plaintextAllowedOn(platform));
     const notice =
-      options.notices === false ? undefined : secretsNotice(opened.storage, plaintextChoice);
+      options.notices === false
+        ? undefined
+        : secretsNotice(opened.storage, plaintextChoice, platform);
     if (!notice) {
       return opened;
     }

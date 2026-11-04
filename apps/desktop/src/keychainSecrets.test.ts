@@ -34,8 +34,12 @@ const fakeKeychain = (keyId = 'fake-key'): Encryptor => ({
 
 const log = () => ({ info: vi.fn(), warn: vi.fn() });
 
-const open = (encryptor: Encryptor | undefined, logger = log(), allowPlaintext = false) =>
-  openDesktopSecrets(dir, { encryptor, allowPlaintext, ...logger });
+const open = (
+  encryptor: Encryptor | undefined,
+  logger = log(),
+  allowPlaintext = false,
+  platform: NodeJS.Platform = 'linux',
+) => openDesktopSecrets(dir, { encryptor, allowPlaintext, platform, ...logger });
 
 const modeOf = async (path: string): Promise<number> => (await stat(path)).mode & 0o777;
 
@@ -51,12 +55,24 @@ const age = (path: string, seconds: number): Promise<void> => {
   return utimes(path, time, time);
 };
 
-/** An encrypted file this keychain can't decrypt, as one from another computer would be. */
+/** An encrypted file that names this keychain's key but doesn't decrypt with it, as if changed. */
 const writeForeignEncrypted = (): Promise<void> =>
   writeFile(
     encryptedFile(),
-    JSON.stringify({ version: 1, secrets: { cursor: Buffer.from('sk-leak').toString('base64') } }),
+    JSON.stringify({
+      version: 2,
+      keyId: 'fake-key',
+      secrets: { cursor: Buffer.from('sk-leak').toString('base64') },
+    }),
   );
+
+/** The file a damaged or changed `secrets.encrypted.json` was moved aside to. */
+const asideFile = async (keyId: string): Promise<string> => {
+  const pattern = new RegExp(`^secrets\\.encrypted\\.${keyId}\\.\\d+\\.json$`);
+  const name = (await readdir(dir)).find((file) => pattern.test(file));
+  expect(name).toBeDefined();
+  return join(dir, name ?? '');
+};
 
 describe('openDesktopSecrets with the OS keychain', () => {
   test('starts empty and writes nothing until a secret is saved', async () => {
@@ -146,9 +162,9 @@ describe('openDesktopSecrets with the OS keychain', () => {
     const forgetful: Encryptor = {
       ...fakeKeychain(),
       decryptString: (data, name) =>
-        fakeKeychain().decryptString(data, name, false) === 'gho_cli'
+        fakeKeychain().decryptString(data, name) === 'gho_cli'
           ? 'garbled'
-          : fakeKeychain().decryptString(data, name, false),
+          : fakeKeychain().decryptString(data, name),
     };
 
     const { storage } = await open(forgetful);
@@ -206,7 +222,7 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect(await readdir(dir)).toEqual(['secrets.encrypted.json']);
   });
 
-  test("leaves a file the keychain can't decrypt in place and saves nothing until a key is set", async () => {
+  test("leaves a file the keychain can't decrypt in place until a key is set, then moves it aside", async () => {
     await writeForeignEncrypted();
     const original = await readFile(encryptedFile(), 'utf8');
     const logger = log();
@@ -222,22 +238,21 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.not.stringContaining('sk-leak'));
 
     await store.set('linear', 'lin_new');
+    expect(await readFile(await asideFile('fake-key'), 'utf8')).toBe(original);
     expect((await open(fakeKeychain())).store.get('linear')).toBe('lin_new');
   });
 
-  test('reads a file from before key ids and writes it with one on the next save', async () => {
+  test('takes a file from before key ids, which PR Quest never shipped, for a damaged one', async () => {
     const value = fakeKeychain().encryptString('gho_old', 'github').toString('base64');
-    await writeFile(encryptedFile(), JSON.stringify({ version: 1, secrets: { github: value } }));
+    const text = JSON.stringify({ version: 1, secrets: { github: value } });
+    await writeFile(encryptedFile(), text);
 
     const { store, storage } = await open(fakeKeychain());
     await store.set('linear', 'lin_new');
 
-    expect(storage).toBe('keychain');
-    expect(store.get('github')).toBe('gho_old');
-    expect(JSON.parse(await readFile(encryptedFile(), 'utf8'))).toMatchObject({
-      version: 2,
-      keyId: 'fake-key',
-    });
+    expect(storage).toBe('corrupt');
+    expect(store.get('github')).toBeUndefined();
+    expect(await readFile(await asideFile('unknown-key'), 'utf8')).toBe(text);
   });
 
   test("won't read a value moved to another secret's name", async () => {
@@ -286,8 +301,11 @@ describe('openDesktopSecrets with the OS keychain', () => {
 
   test.each([
     ['not JSON', '{ not json'],
-    ['not a secrets file', JSON.stringify({ version: 1, secrets: { cursor: 5 } })],
-  ])('reports a file that is %s as damaged and leaves it in place', async (_name, text) => {
+    [
+      'not a secrets file',
+      JSON.stringify({ version: 2, keyId: 'fake-key', secrets: { cursor: 5 } }),
+    ],
+  ])('reports a file that is %s as damaged and keeps it', async (_name, text) => {
     await writeFile(encryptedFile(), text);
     const logger = log();
 
@@ -299,6 +317,7 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('damaged'));
 
     await store.set('linear', 'lin_new');
+    expect(await readFile(await asideFile('unknown-key'), 'utf8')).toBe(text);
     expect((await open(fakeKeychain())).store.get('linear')).toBe('lin_new');
   });
 
@@ -354,6 +373,15 @@ describe('openDesktopSecrets without the OS keychain', () => {
     expect(await readdir(dir)).toEqual(['secrets.json']);
     expect(await readFile(plainFile(), 'utf8')).toContain('lin_plain');
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unencrypted'));
+  });
+
+  test('never writes secrets.json on macOS, even when told the player agreed to it', async () => {
+    const { store, storage } = await open(undefined, log(), true, 'darwin');
+    await store.set('linear', 'lin_memory');
+
+    expect(storage).toBe('memory');
+    expect(store.get('linear')).toBe('lin_memory');
+    expect(await readdir(dir)).toEqual([]);
   });
 
   test('never writes secrets.json while encrypted keys wait for the keychain', async () => {

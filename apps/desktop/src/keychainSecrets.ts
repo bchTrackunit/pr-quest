@@ -29,34 +29,46 @@ export interface Encryptor {
   /** Names the key without giving it away, so a file encrypted with another key is told apart. */
   keyId: string;
   encryptString: (plainText: string, name: SecretName) => Buffer;
-  /** `acceptV1`: whether to read values from before they were bound to a name, as in v1 files. */
-  decryptString: (encrypted: Buffer, name: SecretName, acceptV1: boolean) => string;
+  decryptString: (encrypted: Buffer, name: SecretName) => string;
 }
 
 export interface DesktopSecretsOptions {
   /** The OS keychain, or `undefined` when it can't be used, as on Linux without a keyring. */
   encryptor: Encryptor | undefined;
-  /** Without a keychain, keep saved keys in plain `secrets.json`, which the player agreed to. */
+  /**
+   * Without a keychain, keep saved keys in plain `secrets.json`, which the player agreed to. Only
+   * where `plaintextAllowedOn` the platform.
+   */
   allowPlaintext: boolean;
+  /** The OS, `process.platform` unless a test says otherwise. */
+  platform?: NodeJS.Platform;
   info: (message: string) => void;
   warn: (message: string) => void;
+}
+
+/** Whether saved keys may go unencrypted in `secrets.json`: on Linux and Windows, never on macOS. */
+export function plaintextAllowedOn(platform: NodeJS.Platform): boolean {
+  return platform === 'linux' || platform === 'win32';
 }
 
 /**
  * Where saved keys go:
  * - `keychain`: encrypted in `secrets.encrypted.json`.
- * - `plaintext`: no keychain, so plain `secrets.json`, as the player agreed.
+ * - `plaintext`: no keychain, so plain `secrets.json`, as the player agreed, on Linux or Windows.
  * - `memory`: no keychain, so new keys last only until the app quits. Keys in `secrets.json` are
  *   read, and deleting one removes it from there too, so signing out lasts.
  * - `locked`: encrypted keys exist but the keychain is gone, so the app starts without them, keeps
  *   new ones in memory and leaves both files alone.
- * - `undecryptable`: the keychain couldn't read the encrypted file. The app starts without saved
- *   keys and leaves the file alone until a key is saved, which replaces it.
+ * - `undecryptable`: the encrypted file names the keychain's data key but doesn't decrypt with it,
+ *   so it was changed or damaged. The app starts without saved keys and leaves the file alone
+ *   until a key is saved, which moves it aside (see `setAsideEncryptedSecrets`) and writes a new
+ *   one, unless the player chooses to start over.
  * - `wrongKey`: the encrypted file names another data key than the keychain's, as when the
  *   keychain entry was deleted and a new one made. The app starts without saved keys, keeps new
  *   ones in memory and leaves the file alone, unless the player chooses to start over (see
  *   `setAsideEncryptedSecrets`).
- * - `corrupt`: the encrypted file isn't valid, and is handled as `undecryptable` is.
+ * - `corrupt`: the encrypted file isn't valid, such as one in a format PR Quest never shipped, and
+ *   is handled as `undecryptable` is.
  * - `importFailed`: the encrypted copy of `secrets.json` didn't check out, so the app starts
  *   without saved keys, keeps new ones in memory and leaves both files alone.
  */
@@ -77,21 +89,12 @@ export interface DesktopSecrets {
 
 const FILE_VERSION = 2;
 
-/**
- * Each value is the base64 of its `Encryptor` ciphertext. Version 1, which is still read, didn't
- * name its key.
- */
-const EncryptedFileSchema = z.discriminatedUnion('version', [
-  z.object({
-    version: z.literal(1),
-    secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
-  }),
-  z.object({
-    version: z.literal(FILE_VERSION),
-    keyId: z.string().min(1),
-    secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
-  }),
-]);
+/** Each value is the base64 of its `Encryptor` ciphertext. */
+const EncryptedFileSchema = z.object({
+  version: z.literal(FILE_VERSION),
+  keyId: z.string().min(1),
+  secrets: z.partialRecord(z.enum(SECRET_NAMES), z.string()),
+});
 
 interface EncryptedFile {
   version: typeof FILE_VERSION;
@@ -127,15 +130,21 @@ export async function openDesktopSecrets(
     if (decrypted !== 'corrupt' && decrypted !== 'undecryptable') {
       secrets = decrypted;
     } else {
-      // Someone denied keychain access, the file came from another computer or user, or it was
-      // damaged. It may read again once that's fixed, so nothing touches it until a key is saved.
+      // The file was changed or damaged. It may read again once it's restored from a backup, so
+      // nothing touches it until a key is saved, which keeps it aside.
       options.warn(
         decrypted === 'corrupt'
-          ? `Your saved keys in ${encryptedFile} are damaged, so PR Quest starts without them. Saving a key replaces that file.`
-          : `The OS keychain couldn't decrypt your saved keys in ${encryptedFile}, so PR Quest starts without them. Saving a key replaces that file.`,
+          ? `Your saved keys in ${encryptedFile} are damaged, so PR Quest starts without them. Saving a key moves that file aside.`
+          : `Your saved keys in ${encryptedFile} don't decrypt with the OS keychain's data key they name, so the file was changed or damaged, and PR Quest starts without them. Saving a key moves that file aside.`,
       );
+      const setAside = async () => {
+        const name = await setAsideEncryptedSecrets(stateDir);
+        if (name !== undefined) {
+          options.info(`Moved the saved keys PR Quest couldn't read aside to ${name}`);
+        }
+      };
       return {
-        store: new KeychainSecretStore(encryptedFile, options.encryptor, {}),
+        store: new KeychainSecretStore(encryptedFile, options.encryptor, {}, setAside),
         storage: decrypted,
       };
     }
@@ -170,9 +179,7 @@ export async function setAsideEncryptedSecrets(stateDir: string): Promise<string
   }
   const parsed = EncryptedFileSchema.safeParse(safeJson(text));
   const keyId =
-    parsed.success && parsed.data.version === FILE_VERSION && /^[\w-]+$/.test(parsed.data.keyId)
-      ? parsed.data.keyId
-      : 'unknown-key';
+    parsed.success && /^[\w-]+$/.test(parsed.data.keyId) ? parsed.data.keyId : 'unknown-key';
   const name = `secrets.encrypted.${keyId}.${Date.now()}.json`;
   await rename(file, join(stateDir, name));
   return name;
@@ -193,7 +200,7 @@ async function openWithoutKeychain(
     return { store: new MemorySecretStore({}), storage: 'locked' };
   }
   const plain = await FileSecretStore.open(stateDir, { onWarning: options.warn });
-  if (options.allowPlaintext) {
+  if (options.allowPlaintext && plaintextAllowedOn(options.platform ?? process.platform)) {
     options.warn(
       `The OS keychain isn't available, so saved keys are stored unencrypted in ${join(stateDir, PLAIN_SECRETS_FILE)}, as you chose`,
     );
@@ -208,11 +215,19 @@ class KeychainSecretStore implements SecretStore {
   private readonly encryptor: Encryptor;
   private readonly writes = new WriteQueue();
   private secrets: Secrets;
+  /** Moves aside the file it couldn't read, which the first save would otherwise replace. */
+  private setAside: (() => Promise<void>) | undefined;
 
-  public constructor(file: string, encryptor: Encryptor, secrets: Secrets) {
+  public constructor(
+    file: string,
+    encryptor: Encryptor,
+    secrets: Secrets,
+    setAside?: () => Promise<void>,
+  ) {
     this.file = file;
     this.encryptor = encryptor;
     this.secrets = secrets;
+    this.setAside = setAside;
   }
 
   public get(name: SecretName): string | undefined {
@@ -302,6 +317,10 @@ class KeychainSecretStore implements SecretStore {
   }
 
   private async save(secrets: Secrets): Promise<void> {
+    if (this.setAside) {
+      await this.setAside();
+      this.setAside = undefined;
+    }
     await writePrivateJson(this.file, this.encrypt(secrets));
   }
 
@@ -361,7 +380,7 @@ function decrypt(
   if (!parsed.success) {
     return 'corrupt';
   }
-  if (parsed.data.version === FILE_VERSION && parsed.data.keyId !== encryptor.keyId) {
+  if (parsed.data.keyId !== encryptor.keyId) {
     return 'wrongKey';
   }
   const secrets: Secrets = {};
@@ -369,11 +388,7 @@ function decrypt(
     for (const name of SECRET_NAMES) {
       const value = parsed.data.secrets[name];
       if (value !== undefined) {
-        secrets[name] = encryptor.decryptString(
-          Buffer.from(value, 'base64'),
-          name,
-          parsed.data.version === 1,
-        );
+        secrets[name] = encryptor.decryptString(Buffer.from(value, 'base64'), name);
       }
     }
   } catch {

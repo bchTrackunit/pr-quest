@@ -12,13 +12,39 @@ describe('secretsNotice', () => {
     expect(secretsNotice('plaintext', true)).toBeUndefined();
   });
 
-  test('asks once, without a keychain, whether to keep keys in memory or save them unencrypted', () => {
-    const notice = secretsNotice('memory', undefined);
+  test.each(['linux', 'win32'] as const)(
+    'asks once on %s, without a keychain, whether to keep keys in memory or save them unencrypted',
+    (platform) => {
+      const notice = secretsNotice('memory', undefined, platform);
 
-    expect(notice?.message).toMatch(/keychain/);
+      expect(notice?.message).toMatch(/keychain/);
+      expect(notice?.detail).toMatch(/until you quit/);
+      expect(actions(notice)).toEqual(['keepInMemory', 'savePlaintext']);
+      expect(secretsNotice('memory', false, platform)).toBeUndefined();
+      expect(secretsNotice('memory', true, platform)).toBeUndefined();
+    },
+  );
+
+  test('never offers to save keys unencrypted on macOS', () => {
+    const notice = secretsNotice('memory', undefined, 'darwin');
+
     expect(notice?.detail).toMatch(/until you quit/);
-    expect(actions(notice)).toEqual(['keepInMemory', 'savePlaintext']);
-    expect(secretsNotice('memory', false)).toBeUndefined();
+    expect(notice?.detail).not.toMatch(/unencrypted/);
+    expect(actions(notice)).toEqual(['keepInMemory']);
+    expect(secretsNotice('memory', false, 'darwin')).toBeUndefined();
+  });
+
+  test('on macOS, asks again instead of taking an earlier choice to save keys unencrypted', () => {
+    expect(actions(secretsNotice('memory', true, 'darwin'))).toEqual(['keepInMemory']);
+  });
+
+  test.each([
+    ['linux', /GNOME Keyring/],
+    ['win32', /Credential Manager/],
+    ['darwin', /Keychain Access/],
+  ] as const)('says how to get a keychain on %s', (platform, help) => {
+    expect(secretsNotice('memory', undefined, platform)?.detail).toMatch(help);
+    expect(secretsNotice('locked', undefined, platform)?.detail).toMatch(help);
   });
 
   test('warns every time encrypted keys wait for a keychain that is gone', () => {
@@ -27,11 +53,13 @@ describe('secretsNotice', () => {
     expect(actions(secretsNotice('locked', undefined))).toEqual(['continue']);
   });
 
-  test("offers to try again when the keychain couldn't decrypt the saved keys", () => {
+  test("says a file that doesn't decrypt with its own data key was changed, and offers no retry", () => {
     const notice = secretsNotice('undecryptable', undefined);
 
-    expect(notice?.detail).toMatch(/replaces/);
-    expect(actions(notice)).toEqual(['retry', 'continue']);
+    expect(notice?.message).toMatch(/changed or damaged/);
+    expect(notice?.detail).not.toMatch(/denied|try again/i);
+    expect(notice?.detail).toMatch(/Start Over moves it aside/);
+    expect(actions(notice)).toEqual(['startOver', 'continue']);
   });
 
   test('says a damaged file is damaged, not that the keychain failed', () => {
@@ -94,7 +122,7 @@ describe('openWithNotices', () => {
   });
 
   test('opens again for Try Again, until the keys read', async () => {
-    const open = opening('undecryptable', 'undecryptable', 'keychain');
+    const open = opening('corrupt', 'corrupt', 'keychain');
     const ask = answering('retry', 'retry');
 
     const opened = await openWithNotices({
@@ -168,6 +196,7 @@ describe('openWithNotices', () => {
       plaintextChoice: undefined,
       startOver: vi.fn(),
       save,
+      platform: 'linux',
     });
 
     expect(opened.storage).toBe('plaintext');
@@ -184,9 +213,30 @@ describe('openWithNotices', () => {
       plaintextChoice: true,
       startOver: vi.fn(),
       save: vi.fn(),
+      platform: 'win32',
     });
 
     expect(open).toHaveBeenCalledWith(true);
+  });
+
+  test('on macOS, keeps keys in memory despite an earlier answer to save them unencrypted', async () => {
+    const open = opening('memory');
+    const ask = answering('keepInMemory');
+    const save = vi.fn(() => Promise.resolve());
+
+    const opened = await openWithNotices({
+      open,
+      ask,
+      plaintextChoice: true,
+      startOver: vi.fn(),
+      save,
+      platform: 'darwin',
+    });
+
+    expect(opened.storage).toBe('memory');
+    expect(open.mock.calls).toEqual([[false]]);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(false);
   });
 
   test('asks nothing when notices are off, as after a restart', async () => {

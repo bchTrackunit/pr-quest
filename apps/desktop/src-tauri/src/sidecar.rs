@@ -25,10 +25,12 @@ const SMOKE_LINE_PREFIX: &str = "[smoke] ";
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Variables that could make the sidecar run code that isn't the app's: `NODE_OPTIONS` and the
-/// other `NODE_*` ones, and the dynamic loaders' `DYLD_*` (macOS) and `LD_*` (Linux), such as
-/// `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD`.
-const DROPPED_PREFIXES: [&str; 3] = ["NODE_", "DYLD_", "LD_"];
-/// Kept for the sidecar: a corporate proxy's CA, which only adds trust.
+/// other `NODE_*` ones, OpenSSL's `OPENSSL_*`, as Node reads `OPENSSL_CONF`, which can load
+/// provider and engine modules, and the dynamic loaders' `DYLD_*` (macOS) and `LD_*` (Linux),
+/// such as `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD`.
+const DROPPED_PREFIXES: [&str; 4] = ["NODE_", "OPENSSL_", "DYLD_", "LD_"];
+/// Kept for the sidecar, for players behind a corporate TLS proxy. It adds a CA that every
+/// outbound API call trusts, which is why only the player's own environment can set it.
 const KEPT_VARIABLES: [&str; 1] = ["NODE_EXTRA_CA_CERTS"];
 
 #[derive(Serialize)]
@@ -572,6 +574,14 @@ mod tests {
         }
         assert!(!is_dropped_variable(&OsString::from("LANG")));
         assert!(!is_dropped_variable(&OsString::from("HOME")));
+    }
+
+    #[test]
+    fn drops_openssl_variables_that_could_load_modules() {
+        for name in ["OPENSSL_CONF", "OPENSSL_MODULES", "OPENSSL_ENGINES"] {
+            assert!(is_dropped_variable(&OsString::from(name)), "{name}");
+        }
+        assert!(!is_dropped_variable(&OsString::from("SSL_CERT_FILE")));
     }
 
     #[test]
