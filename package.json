@@ -27,7 +27,9 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && yarn workspaces foreach --all --exclude pr-quest run typecheck",
-    "build": "yarn typecheck && yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build"
+    "build": "yarn typecheck && yarn workspace @pr-quest/web build && yarn workspace @pr-quest/server build",
+    "desktop:package": "node apps/desktop/scripts/desktop-package.ts",
+    "desktop:smoke": "node apps/desktop/scripts/desktop-smoke.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",

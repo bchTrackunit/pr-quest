@@ -2,22 +2,24 @@
 
 ## Checks
 
-| Command             | What it does                                                                                  |
-| ------------------- | --------------------------------------------------------------------------------------------- |
-| `yarn typecheck`    | Type-checks each package and its tests                                                        |
-| `yarn lint`         | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware                       |
-| `yarn lint:fix`     | Applies oxlint's safe fixes                                                                   |
-| `yarn format`       | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)                      |
-| `yarn format:check` | Fails if a file isn't formatted                                                               |
-| `yarn test`         | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
-| `yarn build`        | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
-| `yarn start`        | Builds, then runs the [production build](#production-build)                                   |
+| Command                | What it does                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `yarn typecheck`       | Type-checks each package and its tests                                                        |
+| `yarn lint`            | Lints with [oxlint](https://oxc.rs/docs/guide/usage/linter), type-aware                       |
+| `yarn lint:fix`        | Applies oxlint's safe fixes                                                                   |
+| `yarn format`          | Formats the repo with [oxfmt](https://oxc.rs/docs/guide/usage/formatter)                      |
+| `yarn format:check`    | Fails if a file isn't formatted                                                               |
+| `yarn test`            | Runs every package's Vitest suite once (`yarn test:watch` keeps it open)                      |
+| `yarn build`           | Type-checks, then builds the UI into `apps/web/dist/` and the server into `apps/server/dist/` |
+| `yarn start`           | Builds, then runs the [production build](#production-build)                                   |
+| `yarn desktop:package` | Packages the [desktop app](desktop.md)                                                        |
 
 Each package also has its own `test` and `typecheck` scripts, and the two apps a `dev` script,
 for example `yarn workspace @pr-quest/server test`. `yarn workspace @pr-quest/server build`
 bundles only the server. With [just](https://just.systems) installed, `just check` runs the type
 check, lint, format check, tests and build, as CI does on every pull request and every push to
-`main`.
+`main`. It doesn't build the desktop app's Rust shell; `just desktop-check` and `just cargo-deny`
+check that.
 
 ## Production build
 
@@ -79,6 +81,11 @@ they share code only through `@pr-quest/contract`. Tests sit next to the code th
 
 ```text
 apps/
+  desktop/        @pr-quest/desktop, the desktop app (see desktop.md)
+    src/          the server side: the sidecar the Tauri shell starts (sidecar/), its secrets,
+                  preferences and smoke checks; it embeds @pr-quest/server
+    src-tauri/    the Tauri shell, in Rust
+    scripts/      packaging, signing, smoke tests and measurements of the desktop app
   server/         @pr-quest/server, the API (Node: tsx in development, an esbuild bundle in
                   production)
     src/
@@ -103,7 +110,8 @@ packages/
                   gate, the existing-comments filter and finding selection
 scripts/
   restructure.ts  moves a branch's files from the old src/ layout; see below
-docs/             this file, how PR Quest works, the API spike and the README screenshots
+docs/             this file, how PR Quest works, the desktop app, the API spike and the README
+                  screenshots
 ```
 
 Both apps split their code into the same features, so a feature has a server half and a UI half:
@@ -125,9 +133,11 @@ exports its TypeScript source.
 `yarn lint` enforces these:
 
 - `@pr-quest/server` and `@pr-quest/web` use `@pr-quest/contract`, which uses no other package.
+  `@pr-quest/desktop` uses `@pr-quest/server`, which exports only what embedding it takes
+  (`@pr-quest/server/server`, `/privateFiles` and `/secrets`); nothing uses `@pr-quest/desktop`.
   The allowed edges are `PACKAGE_GRAPH` in `oxlint-plugins/local.js`, and each must also be a
-  dependency in the importing package's `package.json`. Neither app exports anything, and a
-  relative import never leaves its package.
+  dependency in the importing package's `package.json`. The web app and the desktop app export
+  nothing, and a relative import never leaves its package.
 - Inside an app, `platform/` never imports from a feature or `app/`.
 - A feature imports its own files, its app's `platform/` and `@pr-quest/contract`. It reaches
   another feature only through that feature's `index.ts`. Tests may also use another feature's

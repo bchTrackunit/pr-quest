@@ -223,7 +223,12 @@ check, so links and bookmarks still open the page. Only GET and HEAD are served,
 alone: paths with `..`, a backslash or a dotfile segment get `404`. A path without a file
 extension that isn't a file gets `index.html`, so the app's own routes load. Hashed files under
 `assets/` are cached for a year as `immutable`; `index.html` and the rest are `no-cache`, so a new
-build shows up on the next load.
+build shows up on the next load. HTML pages carry a Content Security Policy that allows only PR
+Quest's own scripts, styles, fonts and API, plus avatars from `avatars.githubusercontent.com`,
+and forbids plugins, framing and forms that post elsewhere.
+
+The [desktop app](desktop.md) also requires a per-start secret cookie on every request but
+`GET /api/health`. `yarn start` and `yarn dev` don't.
 
 In [hosted mode](development.md#hosted-mode) the Host must be one of `PR_QUEST_ALLOWED_HOSTS` and
 the Origin must be `PR_QUEST_PUBLIC_ORIGIN`. `GET /api/health` skips the Host check there, so a
@@ -236,9 +241,10 @@ process running on this computer, under any user, can call it and act as you.
 
 Secrets stay in the server process. The UI only learns whether a key is set, its source and, for
 keys of 12 characters or more, its last four characters. The server doesn't log keys or the
-token, and `gh auth token` runs without the API keys in its environment. `secrets.json` is
-protected by its `0600` mode and the `0700` directory, not encrypted or kept in the macOS
-keychain, so backups of your home folder include it.
+token, and `gh auth token` runs without the API keys in its environment. Outside the desktop app,
+`secrets.json` is protected by its `0600` mode and the `0700` directory, not encrypted, so
+backups of your home folder include it. The [desktop app](desktop.md#state) encrypts the keys with
+a key from the OS keychain instead.
 
 ## Where state lives
 

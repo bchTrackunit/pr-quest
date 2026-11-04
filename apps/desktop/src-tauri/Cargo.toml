@@ -1,0 +1,59 @@
+[package]
+name = "pr-quest"
+version = "0.0.0"
+description = "PR Quest's desktop shell: a Tauri window over the PR Quest server, which runs as a Node sidecar"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+serde_json = "1"
+
+# Exact pins at least seven days old, like .yarnrc.yml's npmMinimalAgeGate; Cargo has no age gate,
+# so transitive crates in Cargo.lock aren't held back the same way. deny.toml audits them.
+[dependencies]
+# No `devtools` feature: release builds have no developer tools.
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-opener = "=2.7.2"
+tauri-plugin-single-instance = "=2.5.4"
+# Without the zip feature, which only v1-style Windows updates (.nsis.zip) need and whose zip
+# crate has extraction advisories (RUSTSEC-2026-0367/0368/0369/0429); PR Quest ships bare installers.
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = [
+  "rustls-tls",
+  "system-proxy",
+] }
+# The macOS Keychain, the Windows Credential Manager and the Linux Secret Service (encrypted
+# over D-Bus with crypto-rust). Linux's kernel keyring isn't persistent, so it's left out.
+keyring = { version = "=3.6.3", features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+  "crypto-rust",
+] }
+# Message dialogs, as tauri-plugin-dialog shows them (GTK on Linux, comctl 6 on Windows).
+rfd = { version = "=0.16.1", default-features = false, features = ["gtk3", "common-controls-v6"] }
+base64 = "0.22"
+getrandom = "0.3"
+semver = "1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

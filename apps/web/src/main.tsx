@@ -1,3 +1,4 @@
+import './app/zodConfig.ts';
 import '@fontsource/press-start-2p/latin-400.css';
 import './platform/styles.css';
 

@@ -7,6 +7,19 @@ import { pipeline } from 'node:stream/promises';
 /** Vite gives every file it writes here a content hash in its name, so a changed file is a new URL. */
 const HASHED_DIR = 'assets/';
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+/**
+ * The built UI loads only its own scripts, styles and fonts and calls only its own API. Avatars
+ * come from GitHub. React sets inline styles through the DOM, which `style-src` doesn't restrict.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "img-src 'self' data: https://avatars.githubusercontent.com",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+].join('; ');
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -131,7 +144,9 @@ async function sendFile(
     'Content-Length': String(file.size),
     'Cache-Control': path.startsWith(HASHED_DIR) ? IMMUTABLE : 'no-cache',
     'X-Content-Type-Options': 'nosniff',
-    ...(contentType.startsWith('text/html') ? { 'X-Frame-Options': 'DENY' } : {}),
+    ...(contentType.startsWith('text/html')
+      ? { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': CONTENT_SECURITY_POLICY }
+      : {}),
   });
   if (req.method === 'HEAD') {
     res.end();

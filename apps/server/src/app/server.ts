@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { inspect } from 'node:util';
 import { type AppOptions, createApp, type UserServices } from './app.ts';
 import { readGhToken } from '../features/auth/index.ts';
 import { type AppConfig, assertSafeConfig, LOOPBACK_HOSTNAMES } from '../platform/config.ts';
+import { type BootstrapRoute, bootstrapRoute } from '../platform/bootstrap.ts';
 import { createRouter, type RequestListener, trustedRequests } from '../platform/router.ts';
 import type { SecretStore } from '../platform/secrets.ts';
 import type { IdentityFactory } from './identity.ts';
@@ -24,7 +26,8 @@ export type {
   IdentityFactory,
   IdentityResolver,
 } from './identity.ts';
-export type { RawRoute } from '../platform/router.ts';
+export { type RawRoute, REQUEST_SECRET_COOKIE, trustedRequests } from '../platform/router.ts';
+export { BOOTSTRAP_PATH, BOOTSTRAP_TTL_MS } from '../platform/bootstrap.ts';
 export {
   type AppStorage,
   createFileStorage,
@@ -55,6 +58,18 @@ export interface ServerOverrides extends Pick<
    * `/api` here. Without it, the server trusts only its own origin.
    */
   devUiOrigin?: boolean;
+  /**
+   * Answers only requests whose `REQUEST_SECRET_COOKIE` cookie holds this value, apart from the
+   * health check, so other programs and users on the machine can't call the server. For an app
+   * that embeds the server and sets the cookie in its own browser; `yarn start` leaves it unset.
+   */
+  requestSecret?: string;
+  /**
+   * Local mode, with `requestSecret`: opening `BOOTSTRAP_PATH?code=<this>` once, within
+   * `BOOTSTRAP_TTL_MS`, sets the request secret's cookie, for an app that can't set it in its
+   * webview itself. Never put it where other programs can read it, such as argv or the environment.
+   */
+  bootstrapCode?: string;
   /** Defaults to running `gh auth token`. */
   ghToken?: () => Promise<string | undefined>;
   info?: (message: string) => void;
@@ -67,6 +82,11 @@ export interface RunningServer {
   port: number;
   /** Stops polling and background work, then closes every connection. */
   close: () => Promise<void>;
+  /**
+   * With a `bootstrapCode`: makes a new one-time code for `BOOTSTRAP_PATH`, which replaces the last
+   * one, and returns it, so the app's window can get the cookie again.
+   */
+  issueBootstrapCode?: () => string;
 }
 
 const defaultInfo = (message: string): void => {
@@ -93,6 +113,7 @@ export async function startServer(
     );
   }
   const staticDir = usableStaticDir(overrides.staticDir, warn);
+  const bootstrap = bootstrapRouteFor(config, overrides);
 
   const app = await createApp({
     config,
@@ -129,7 +150,8 @@ export async function startServer(
   routing.router = createRouter(app.handlers, {
     ...trustedRequests(config, port, { devUiOrigin: overrides.devUiOrigin }),
     staticDir,
-    routes: app.routes,
+    routes: bootstrap ? [...app.routes, bootstrap] : app.routes,
+    requestSecret: overrides.requestSecret,
     onUnexpectedError: (error) => {
       warn(`unexpected error ${inspect(error)}`);
     },
@@ -143,6 +165,13 @@ export async function startServer(
   return {
     url,
     port,
+    issueBootstrapCode: bootstrap
+      ? () => {
+          const code = randomBytes(32).toString('base64url');
+          bootstrap.reissue(code);
+          return code;
+        }
+      : undefined,
     close: () =>
       new Promise<void>((resolve) => {
         app.close();
@@ -160,6 +189,20 @@ function isPlainHttpOrigin(origin: string): boolean {
     !LOOPBACK_HOSTNAMES.some((name) => name === hostname) &&
     hostname !== '[::1]'
   );
+}
+
+function bootstrapRouteFor(
+  config: AppConfig,
+  overrides: ServerOverrides,
+): BootstrapRoute | undefined {
+  const { bootstrapCode, requestSecret } = overrides;
+  if (bootstrapCode === undefined) {
+    return undefined;
+  }
+  if (config.mode !== 'local' || requestSecret === undefined) {
+    throw new Error('A bootstrap code needs local mode and a request secret');
+  }
+  return bootstrapRoute({ code: bootstrapCode, requestSecret });
 }
 
 function usableStaticDir(

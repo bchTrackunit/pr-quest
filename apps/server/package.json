@@ -4,7 +4,11 @@
   "type": "module",
   "version": "0.0.0",
   "description": "PR Quest's local API: GitHub and Linear polling, game state and review runs",
-  "exports": {},
+  "exports": {
+    "./server": "./src/app/server.ts",
+    "./privateFiles": "./src/platform/privateFiles.ts",
+    "./secrets": "./src/platform/secrets.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/app/dev.ts",
     "start": "node dist/main.js",

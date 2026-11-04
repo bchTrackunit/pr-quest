@@ -1,0 +1,27 @@
+{
+  "name": "@pr-quest/desktop",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "PR Quest's desktop app: the Tauri shell, the sidecar that runs the server in it, and their packaging",
+  "exports": {},
+  "scripts": {
+    "package": "node scripts/desktop-package.ts",
+    "smoke": "node scripts/desktop-smoke.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.2.0",
+    "@cursor/sdk": "1.0.40",
+    "@pr-quest/server": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "catalog:",
+    "esbuild": "0.28.2",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

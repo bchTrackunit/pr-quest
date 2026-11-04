@@ -10,7 +10,13 @@
     "node": true,
     "es2024": true
   },
-  "ignorePatterns": ["dist/**", "coverage/**", ".yarn/**"],
+  "ignorePatterns": [
+    "dist/**",
+    "coverage/**",
+    ".yarn/**",
+    "apps/desktop/build-tauri/**",
+    "apps/desktop/src-tauri/**"
+  ],
   "categories": {
     "correctness": "error"
   },

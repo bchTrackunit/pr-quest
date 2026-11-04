@@ -91,7 +91,9 @@ them.
 ### Sign in with GitHub
 
 Without a sign-in, PR Quest uses the GitHub CLI's token, which it reads again at most every 5
-minutes. "Sign in with GitHub" gives PR Quest its own token through GitHub's
+minutes. It looks for `gh` on the `PATH` and, on macOS and Linux, also in `/opt/homebrew/bin` and
+`/usr/local/bin`, because the desktop app started from the Dock or a launcher doesn't get your
+shell's `PATH`. "Sign in with GitHub" gives PR Quest its own token through GitHub's
 [device flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow):
 you enter a short code at <https://github.com/login/device>. It needs no client secret and no
 callback, but it does need a GitHub OAuth App, which you create once:
@@ -199,6 +201,8 @@ Everything is under `~/.pr-quest`, or `PR_QUEST_STATE_DIR`. Directories are crea
 ~/.pr-quest/
 ├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved in Settings
+├── secrets.encrypted.json
+│                       the same, encrypted; the desktop app keeps them here instead
 ├── settings.json       the review provider and the model per provider
 └── users/<login>/      one folder per GitHub user
     ├── state.json      XP, streak, achievements and the last 200 review runs
@@ -212,10 +216,14 @@ unreadable or older files.
 ## Security
 
 - **Loopback only.** In local mode, the default, the server listens on `127.0.0.1` and only
-  accepts browser requests from its own UI, so other websites and local dev servers can't use it to act as you. It has no
-  authentication, so any program running on this computer can call it.
-- **Secrets stay in the server.** No route returns a key or the GitHub token. They're stored in
-  plain text in `secrets.json`, protected only by its file mode.
+  accepts browser requests from its own UI, so other websites and local dev servers can't use it
+  to act as you. Under `yarn dev` and `yarn start` it has no authentication, so any program
+  running on this computer can call it. The [desktop app](docs/desktop.md) also requires a secret
+  made fresh at each start, which only its window has.
+- **Secrets stay in the server.** No route returns a key or the GitHub token. Outside the desktop
+  app they're stored in plain text in `secrets.json`, protected only by its file mode. The desktop
+  app encrypts them with a key from the OS keychain instead; on Windows and Linux, though, any
+  program running as you can read that key.
 - **The Cursor agent's limits are only in its prompt.** It runs with your Cursor identity and
   GitHub integration, and is told never to commit, push, comment or approve. A prompt injection in
   the PR could talk it out of that; the only hard guard is that the SDK won't open a PR for it.
@@ -258,6 +266,24 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 - **Posted reviews match no Agent filter**, so selecting any agent state hides those PRs.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
+- **The desktop app has no release yet.** The version is `0.0.0`, the app icon is a placeholder, and local
+  builds are unsigned, so macOS and Windows warn before the first start.
+- **The desktop app and `yarn start` don't share a running state.** Run one at a time on a state
+  directory, as [the desktop docs](docs/desktop.md#state) describe.
+
+## Desktop app
+
+The desktop app is the same server and UI in a native window: a small
+[Tauri](https://tauri.app) shell in Rust starts the server on a bundled Node and keeps your keys
+encrypted with a key from the OS keychain. It builds for macOS, Linux and Windows:
+
+```sh
+just desktop-package    # build the app and installers for this machine
+just desktop-smoke      # check what desktop-package made
+```
+
+[The desktop app](docs/desktop.md) covers building it, packaging, the smoke test, how the window
+talks to the server, where it keeps your keys, updates and signing.
 
 ## Development
 
@@ -272,8 +298,12 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 | `yarn format`    | Formats with oxfmt                                               |
 | `just check`     | Everything CI runs: type check, lint, format check, tests, build |
 
+`just check` doesn't build the desktop app's Rust shell; `just desktop-check` and
+`just cargo-deny` check that.
+
 The repo is a set of Yarn workspaces: the server in `apps/server`, the React UI in `apps/web`,
-and the types and routes they share in `packages/contract`.
+the desktop app in `apps/desktop`, and the types and routes the server and UI share in
+`packages/contract`.
 [Development](docs/development.md) covers the tooling, the production build, the project
 structure and its import rules, and how to move a branch from the old `src/` layout.
 

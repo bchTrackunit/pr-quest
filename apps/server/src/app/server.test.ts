@@ -7,8 +7,10 @@ import { type AppConfig, loadConfig } from '../platform/config.ts';
 import type { SecretName, SecretStore } from '../platform/secrets.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import {
+  BOOTSTRAP_PATH,
   type IdentityFactory,
   MACHINE_SCOPE,
+  REQUEST_SECRET_COOKIE,
   type RunningServer,
   startServer,
   type ServerOverrides,
@@ -95,6 +97,65 @@ describe('startServer', () => {
     await running?.close();
     const dev = await start({ ...LOCAL_CONFIG, uiPort: 4318 }, { devUiOrigin: true });
     expect((await putFrom(dev)).status).toBe(200);
+  });
+
+  test('answers only requests that carry the request secret, when given one', async () => {
+    const server = await start(LOCAL_CONFIG, { requestSecret: 'per-launch-secret' });
+
+    const without = await fetch(`${server.url}/api/settings`);
+    const withSecret = await fetch(`${server.url}/api/settings`, {
+      headers: { Cookie: `${REQUEST_SECRET_COOKIE}=per-launch-secret` },
+    });
+    const health = await fetch(`${server.url}/api/health`);
+
+    expect(without.status).toBe(403);
+    expect(withSecret.status).toBe(200);
+    expect(health.status).toBe(200);
+  });
+
+  test('hands the request secret to whoever opens the bootstrap link first', async () => {
+    const requestSecret = 'r'.repeat(43);
+    const bootstrapCode = 'b'.repeat(43);
+    const server = await start(LOCAL_CONFIG, { requestSecret, bootstrapCode });
+    const link = `${server.url}${BOOTSTRAP_PATH}?code=${bootstrapCode}`;
+
+    const first = await fetch(link, { redirect: 'manual' });
+    const second = await fetch(link, { redirect: 'manual' });
+    const cookie = first.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
+
+    expect(first.status).toBe(303);
+    expect(second.status).toBe(403);
+    expect(cookie).toBe(`${REQUEST_SECRET_COOKIE}=${requestSecret}`);
+    expect(
+      (await fetch(`${server.url}/api/settings`, { headers: { Cookie: cookie } })).status,
+    ).toBe(200);
+    expect(logs.join('\n')).not.toContain(bootstrapCode);
+  });
+
+  test('issues a new bootstrap link, such as for a window that reloads', async () => {
+    const requestSecret = 'r'.repeat(43);
+    const bootstrapCode = 'b'.repeat(43);
+    const server = await start(LOCAL_CONFIG, { requestSecret, bootstrapCode });
+    await fetch(`${server.url}${BOOTSTRAP_PATH}?code=${bootstrapCode}`, { redirect: 'manual' });
+
+    const code = server.issueBootstrapCode?.() ?? '';
+    const reopened = await fetch(`${server.url}${BOOTSTRAP_PATH}?code=${code}`, {
+      redirect: 'manual',
+    });
+
+    expect(code).toMatch(/^[\w-]{43}$/);
+    expect(reopened.status).toBe(303);
+    expect(logs.join('\n')).not.toContain(code);
+    expect((await start(LOCAL_CONFIG, { requestSecret })).issueBootstrapCode).toBeUndefined();
+  });
+
+  test('takes a bootstrap code only in local mode with a request secret', async () => {
+    const bootstrapCode = 'b'.repeat(43);
+
+    await expect(start(LOCAL_CONFIG, { bootstrapCode })).rejects.toThrow(/request secret/);
+    await expect(
+      start(HOSTED_CONFIG, { bootstrapCode, requestSecret: 'r'.repeat(43) }),
+    ).rejects.toThrow(/local mode/);
   });
 
   test('serves the built UI from the static directory', async () => {

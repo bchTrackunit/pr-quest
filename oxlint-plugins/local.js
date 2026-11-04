@@ -68,10 +68,12 @@ function boundaryViolation(importer, target, importerIsTest) {
 
 /**
  * Which workspace packages each package may import. The server and the UI share code only through
- * the contract; a new edge is an architecture change, so it goes here and in the import rules in
+ * the contract, the desktop app embeds the server through its exports, and nothing imports the
+ * desktop app; a new edge is an architecture change, so it goes here and in the import rules in
  * docs/development.md.
  */
 const PACKAGE_GRAPH = {
+  'apps/desktop': ['@pr-quest/server'],
   'apps/server': ['@pr-quest/contract'],
   'apps/web': ['@pr-quest/contract'],
   'packages/contract': [],
@@ -127,7 +129,7 @@ export default {
           crossPackage:
             "A relative import must stay inside its package; import '{{source}}' by package name, such as @pr-quest/contract/api.",
           forbiddenPackage:
-            '{{pkg}} may not import {{name}}. The server and the UI share code only through @pr-quest/contract; see PACKAGE_GRAPH in oxlint-plugins/local.js.',
+            '{{pkg}} may not import {{name}}. The server and the UI share code only through @pr-quest/contract, and only the desktop app imports the server; see PACKAGE_GRAPH in oxlint-plugins/local.js.',
           undeclaredPackage: 'Add {{name}} to the dependencies in {{pkg}}/package.json.',
         },
         schema: [],
