@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -165,6 +166,36 @@ describe.skipIf(process.platform === 'win32')('compiled.sh', () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(message);
+  });
+
+  test.each([
+    ['../scripts/ci/package.sh'],
+    ['../../outside'],
+    ['/tmp/pr-quest-compiled-test/x'],
+    ['sidecar/./main.mjs'],
+    ['./pr-quest'],
+    ['sidecar//main.mjs'],
+    ['node_modules/x'],
+    ['sidecar/dist/../../../x'],
+  ])('refuses %s before unpacking anything', (name) => {
+    compile();
+    expect(run(compiling, 'pack').status).toBe(0);
+    rawTar({ 'pr-quest': 'shell', [name]: 'planted' });
+    const temporary = join(dir, 'tmp', 'deeper');
+    mkdirSync(temporary, { recursive: true });
+
+    const result = spawnSync('bash', [script, 'unpack', triple, join(dir, 'artifact')], {
+      cwd: bundling,
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', TMPDIR: temporary },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("which isn't the shell or its built sidecar");
+    expect(readdirSync(bundling)).toEqual([]);
+    expect(readdirSync(join(dir, 'tmp'))).toEqual(['deeper']);
+    expect(readdirSync(temporary)).toEqual([]);
+    expect(existsSync('/tmp/pr-quest-compiled-test')).toBe(false);
   });
 
   test('stops when the tar holds a link', () => {
