@@ -91,6 +91,14 @@ latest stored value, so two server instances don't lose each other's writes. A d
 newer build stops that player's load with an error instead of being overwritten. An unreadable one
 is copied once to `user_documents_quarantine` and replaced by a fresh document, with a warning.
 
+Hosted mode still needs all of a player's requests on one server instance: run one instance, or
+route each player to the same one with sticky sessions. The row locks keep their writes, but each
+instance keeps the player's decrypted keys and settings in memory once it opens them, picks up
+their interrupted review runs the first time it opens their game, and remembers in memory which
+runs it is posting. A second instance serving the same player would keep using a key the player
+has deleted or changed on the first, mark a Claude review still running on the first as failed,
+follow the same Cursor run twice, and could post the same review twice.
+
 The GitHub token and the Cursor, Anthropic and Linear keys are stored per player in
 `user_secrets`, encrypted with AES-256-GCM under that player's data key. The data key is stored
 in `user_data_keys`, itself encrypted under the master key, with the master key's id. Each
