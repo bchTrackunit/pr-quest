@@ -180,9 +180,27 @@ export async function setAsideEncryptedSecrets(stateDir: string): Promise<string
   const parsed = EncryptedFileSchema.safeParse(safeJson(text));
   const keyId =
     parsed.success && /^[\w-]+$/.test(parsed.data.keyId) ? parsed.data.keyId : 'unknown-key';
-  const name = `secrets.encrypted.${keyId}.${Date.now()}.json`;
-  await rename(file, join(stateDir, name));
-  return name;
+  const stamp = `secrets.encrypted.${keyId}.${Date.now()}`;
+  // rename replaces an existing file, so take a name no earlier set-aside has.
+  for (let n = 0; ; n += 1) {
+    const name = n === 0 ? `${stamp}.json` : `${stamp}-${n}.json`;
+    if (!(await exists(join(stateDir, name)))) {
+      await rename(file, join(stateDir, name));
+      return name;
+    }
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /** The keychain's copy of the keys in `secrets.json` didn't read back the same. */
