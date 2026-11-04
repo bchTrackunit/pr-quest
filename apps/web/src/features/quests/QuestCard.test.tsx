@@ -65,7 +65,7 @@ describe('QuestCard', () => {
   test('sends the review agent and asks to approve with the quest id', async () => {
     const user = userEvent.setup();
     const handlers = renderCard();
-    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    await user.click(screen.getByRole('button', { name: 'Summon agent' }));
     await user.click(screen.getByRole('button', { name: /Approve/ }));
     expect(handlers.onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
     expect(handlers.onClickApprove).toHaveBeenCalledWith('Trackunit/manager#101');
@@ -78,7 +78,7 @@ describe('QuestCard', () => {
     );
     expect(screen.getByRole('status').textContent).toContain('Agent on quest');
     expect(screen.getByText(/01:0\d/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Send review agent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Summon agent' })).toBeNull();
   });
 
   test('keeps the ticking stopwatch out of the announced status', () => {
@@ -141,7 +141,7 @@ describe('QuestCard', () => {
         />,
       );
 
-      const send = screen.getByRole('button', { name: 'Send review agent' });
+      const send = screen.getByRole('button', { name: 'Summon agent' });
       expect(send).toHaveProperty('disabled', true);
       expect(
         document.getElementById(send.getAttribute('aria-describedby') ?? '')?.textContent,
@@ -224,7 +224,7 @@ describe('QuestCard', () => {
         />,
       );
 
-      await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+      await user.click(screen.getByRole('button', { name: 'Summon agent' }));
       expect(onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
       expect(screen.queryByText(/Review it with Claude instead/)).toBeNull();
     });

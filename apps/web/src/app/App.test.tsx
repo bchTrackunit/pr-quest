@@ -190,7 +190,7 @@ describe('App', () => {
     });
     await renderApp();
 
-    const send = screen.getByRole('button', { name: 'Send review agent' });
+    const send = screen.getByRole('button', { name: 'Summon agent' });
     await vi.waitFor(() => expect(send).toHaveProperty('disabled', true));
     expect(screen.getByText(/Review it with Claude instead/)).toBeTruthy();
   });
@@ -204,7 +204,7 @@ describe('App', () => {
       stale: false,
     });
     await renderApp();
-    const send = screen.getByRole('button', { name: 'Send review agent' });
+    const send = screen.getByRole('button', { name: 'Summon agent' });
     expect(send).toHaveProperty('disabled', false);
 
     api.fetchSettings.mockResolvedValue({
@@ -226,7 +226,7 @@ describe('App', () => {
     api.startReview.mockResolvedValue({ run: queued });
     await renderApp();
 
-    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    await user.click(screen.getByRole('button', { name: 'Summon agent' }));
     expect(api.startReview).toHaveBeenCalledWith('Trackunit/manager#101');
     expect(await screen.findByText('Agent is gearing up…')).toBeTruthy();
 
@@ -258,7 +258,7 @@ describe('App', () => {
     );
     await renderApp();
 
-    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    await user.click(screen.getByRole('button', { name: 'Summon agent' }));
     const error = await screen.findByRole('alert');
     expect(error.textContent).toContain('Claude reviews need an Anthropic API key');
 
@@ -279,7 +279,7 @@ describe('App', () => {
     api.startReview.mockRejectedValue(new ApiRequestError(409, 'conflict', 'Refresh the board'));
     await renderApp();
 
-    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    await user.click(screen.getByRole('button', { name: 'Summon agent' }));
 
     const error = await screen.findByRole('alert');
     expect(error.textContent).toContain('Refresh the board');

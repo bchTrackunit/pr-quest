@@ -163,7 +163,7 @@ export const QuestCard = ({
             onClick={() => onClickSendAgent(quest.id)}
             type="button"
           >
-            {isStarting ? 'Summoning agent…' : 'Send review agent'}
+            {isStarting ? 'Summoning agent…' : 'Summon agent'}
           </button>
         ) : null}
         <PullRequestLinks githubUrl={quest.githubUrl} linearUrl={quest.linearUrl} />

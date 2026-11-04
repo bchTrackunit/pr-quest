@@ -49,7 +49,7 @@ and the board shows that as an error.
 
 ## The Cursor review agent
 
-With the Cursor provider, **Send review agent** starts a Cursor cloud agent through
+With the Cursor provider, **Summon agent** starts a Cursor cloud agent through
 `@cursor/sdk`, pinned to the quest's head commit, so pushes made after you send it don't change
 what it reviews. The repo is always the base repo; the prompt has the agent check out
 `pull/<number>/head` if it didn't start on that commit. The agent:
@@ -74,7 +74,7 @@ The server refuses a Cursor review before anything is queued, and suggests Claud
   `-` or `+`. Git allows shell characters in branch names, and the prompt asks the agent to run
   commands that contain them.
 
-The board applies the same rules: with Cursor selected, such a quest's **Send review agent**
+The board applies the same rules: with Cursor selected, such a quest's **Summon agent**
 button is disabled with the reason and a shortcut to the provider setting. If the author's role or
 the fork state is unknown, for example on a board cached by an older version, refreshing fixes it.
 

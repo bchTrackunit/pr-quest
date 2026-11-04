@@ -139,7 +139,7 @@ The bar above the cards narrows and orders the board, without calling GitHub:
 
 ## Reviewing a PR
 
-**Send review agent** on a card starts a review with the provider chosen in Settings:
+**Summon agent** on a card starts a review with the provider chosen in Settings:
 
 - **Cursor** starts a Cursor cloud agent that checks out the repo at the PR's head commit and
   reviews the diff with the rest of the repo as context. Because the agent can act as you, it only
