@@ -3,7 +3,8 @@
 # their own, checks every update signature, writes the updater's latest.json and publishes it all
 # to one draft GitHub Release. Pushing a v* tag
 # releases; running the workflow by hand is a dry run that builds unsigned, with a throwaway
-# updater key, keeps the files as workflow artifacts and publishes nothing. See RELEASING.md.
+# updater key it deletes at the end, keeps the files as workflow artifacts and publishes nothing.
+# See RELEASING.md.
 name: Release
 
 on:
@@ -175,7 +176,9 @@ jobs:
 
       # The app accepts an update only if it is signed with the key it was built with, so a dry
       # run, which can't use the release environment's private key, gets a key pair of its own.
-      # Its apps only trust updates signed with it, and it is never used for anything else.
+      # Its apps only trust updates signed with it, and it is never used for anything else. The
+      # private key goes to the signing job as an artifact, which anyone who can read the
+      # repository can download, so the cleanup job deletes it when the run ends.
       - uses: ./.github/actions/setup-yarn
         if: github.event_name == 'workflow_dispatch'
 
@@ -815,3 +818,30 @@ jobs:
               --title "PR Quest $VERSION" "${flags[@]}"
           fi
           echo "Draft release: $(gh release view "$TAG" --json url --jq .url)" >>"$GITHUB_STEP_SUMMARY"
+
+  # Deletes the dry run's private updater key once the signing job, the only one that downloads
+  # it, is done. always(), not !cancelled(), so it also runs when a newer dry run cancels this one.
+  cleanup:
+    name: Delete the dry run's updater key
+    needs: [verify, sign-updates]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the dry-run-updater-key artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # None when the version check stopped before making the key.
+          ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=dry-run-updater-key" \
+            --jq '.artifacts[] | select(.expired | not) | .id')"
+          if [[ -z "$ids" ]]; then
+            echo "No dry-run-updater-key artifact to delete."
+            exit 0
+          fi
+          while IFS= read -r id; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            echo "Deleted the dry-run-updater-key artifact $id."
+          done <<<"$ids"

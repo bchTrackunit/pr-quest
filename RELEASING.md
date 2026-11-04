@@ -18,7 +18,10 @@ flowchart LR
   smoke --> signUpdates["Sign the update files"]
   signUpdates --> assets["Check the release files"]
   assets --> publish["Publish the draft release"]
+  signUpdates -. dry run .-> cleanup["Delete the dry run's updater key"]
 ```
+
+The last job, **Delete the dry run's updater key**, runs only in a dry run; see below.
 
 1. **Check the version.**
    - The `version` in `apps/desktop/package.json` must look like `0.2.0`, or `0.2.0-beta.1` for a
@@ -168,14 +171,19 @@ flowchart LR
    Because only this job creates the release, the builds can't race to create several.
 
 Running the workflow by hand from the **Actions** tab (**Release**, then **Run workflow**) is a
-**dry run**. It runs every job but the last, the same way as a release, except that:
+**dry run**. It runs every job but the publish job, the same way as a release, except that:
 
 - it uses no environment and no secrets, so it sets `PR_QUEST_ALLOW_UNSIGNED_RELEASE=1`, the
   only way a release build may skip code signing on macOS and Windows. The macOS app is signed
   ad hoc instead, as every unsigned build is, and the signature checks are skipped;
 - it makes a throwaway updater key pair. The builds trust its public key, and the private key,
-  kept as a workflow artifact for a day, reaches only the job that signs the update files, so
-  they and `latest.json` are made and checked as in a release;
+  without a password, reaches only the job that signs the update files, so they and
+  `latest.json` are made and checked as in a release. It gets there as the
+  `dry-run-updater-key` workflow artifact, which anyone who can read the repository can
+  download, so a last job, **Delete the dry run's updater key**, deletes it once the signing job
+  is done, also when the run failed or was cancelled. That job has only the `actions: write`
+  permission and checks out nothing. Should it not run, the artifact expires after a day. To
+  retry a dry run, re-run all its jobs: re-running only the failed ones finds the key gone;
 - it keeps the files as the `release-assets` workflow artifact for 7 days, marked with a
   `DRY-RUN` file, and publishes nothing.
 
