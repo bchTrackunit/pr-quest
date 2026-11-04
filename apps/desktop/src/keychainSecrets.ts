@@ -50,8 +50,9 @@ export interface DesktopSecretsOptions {
  *   read, and deleting one removes it from there too, so signing out lasts.
  * - `locked`: encrypted keys exist but the keychain is gone, so the app starts without them, keeps
  *   new ones in memory and leaves both files alone.
- * - `undecryptable`: the keychain couldn't read the encrypted file. The app starts without saved
- *   keys and leaves the file alone until a key is saved, which replaces it.
+ * - `undecryptable`: the encrypted file names the keychain's data key but doesn't decrypt with it,
+ *   so it was changed or damaged. The app starts without saved keys and leaves the file alone
+ *   until a key is saved, which replaces it, unless the player chooses to start over.
  * - `wrongKey`: the encrypted file names another data key than the keychain's, as when the
  *   keychain entry was deleted and a new one made. The app starts without saved keys, keeps new
  *   ones in memory and leaves the file alone, unless the player chooses to start over (see
@@ -127,12 +128,12 @@ export async function openDesktopSecrets(
     if (decrypted !== 'corrupt' && decrypted !== 'undecryptable') {
       secrets = decrypted;
     } else {
-      // Someone denied keychain access, the file came from another computer or user, or it was
-      // damaged. It may read again once that's fixed, so nothing touches it until a key is saved.
+      // The file was changed or damaged. It may read again once it's restored from a backup, so
+      // nothing touches it until a key is saved.
       options.warn(
         decrypted === 'corrupt'
           ? `Your saved keys in ${encryptedFile} are damaged, so PR Quest starts without them. Saving a key replaces that file.`
-          : `The OS keychain couldn't decrypt your saved keys in ${encryptedFile}, so PR Quest starts without them. Saving a key replaces that file.`,
+          : `Your saved keys in ${encryptedFile} don't decrypt with the OS keychain's data key they name, so the file was changed or damaged, and PR Quest starts without them. Saving a key replaces that file.`,
       );
       return {
         store: new KeychainSecretStore(encryptedFile, options.encryptor, {}),

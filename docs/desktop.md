@@ -156,10 +156,11 @@ file stays the only copy. Each value is bound to its key's name, and the file na
 it was encrypted with by a short hash. If that isn't the keychain's data key, as after the
 keychain entry was deleted and the app made a new one, the app says so, starts without saved
 keys, keeps new ones in memory and leaves the file alone; **Start Over** moves it aside as
-`secrets.encrypted.<key id>.<time>.json` and saves keys with the new data key. If the keychain
-can't decrypt the file otherwise, as when access was denied, or the file is damaged, the app says
-which and offers to try again or to continue without saved keys; the file is left in place until
-you save a key, which replaces it.
+`secrets.encrypted.<key id>.<time>.json` and saves keys with the new data key. If the file is
+damaged, or names the keychain's data key but doesn't decrypt with it, as when it was changed, the
+app says which and starts without saved keys; the file is left in place until you save a key,
+which replaces it. For a damaged file it offers to try again, as after restoring it from a backup;
+for one that doesn't decrypt, where trying again can't help, it offers **Start Over**.
 
 ## Updates
 

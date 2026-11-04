@@ -27,11 +27,13 @@ describe('secretsNotice', () => {
     expect(actions(secretsNotice('locked', undefined))).toEqual(['continue']);
   });
 
-  test("offers to try again when the keychain couldn't decrypt the saved keys", () => {
+  test("says a file that doesn't decrypt with its own data key was changed, and offers no retry", () => {
     const notice = secretsNotice('undecryptable', undefined);
 
-    expect(notice?.detail).toMatch(/replaces/);
-    expect(actions(notice)).toEqual(['retry', 'continue']);
+    expect(notice?.message).toMatch(/changed or damaged/);
+    expect(notice?.detail).not.toMatch(/denied|try again/i);
+    expect(notice?.detail).toMatch(/Start Over moves it aside/);
+    expect(actions(notice)).toEqual(['startOver', 'continue']);
   });
 
   test('says a damaged file is damaged, not that the keychain failed', () => {
@@ -94,7 +96,7 @@ describe('openWithNotices', () => {
   });
 
   test('opens again for Try Again, until the keys read', async () => {
-    const open = opening('undecryptable', 'undecryptable', 'keychain');
+    const open = opening('corrupt', 'corrupt', 'keychain');
     const ask = answering('retry', 'retry');
 
     const opened = await openWithNotices({
