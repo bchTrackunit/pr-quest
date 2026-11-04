@@ -341,11 +341,14 @@ describe('ReviewResult', () => {
     expect(handlers.onPost).not.toHaveBeenCalled();
   });
 
-  test('discards, approves and links to Linear', async () => {
+  test('discards, approves and links to the Linear guide and GitHub', async () => {
     const user = userEvent.setup();
     const handlers = renderResult();
     expect(screen.getByRole('link', { name: /Open in Linear/ }).getAttribute('href')).toBe(
-      'https://linear.app/trackunit/review/manager-101',
+      'https://linear.app/trackunit/review/manager-101/review',
+    );
+    expect(screen.getByRole('link', { name: /Open on GitHub/ }).getAttribute('href')).toBe(
+      'https://github.com/Trackunit/manager/pull/101',
     );
     await user.click(screen.getByRole('button', { name: 'Approve' }));
     expect(handlers.onClickApprove).toHaveBeenCalledWith('Trackunit/manager#101');

@@ -42,18 +42,25 @@ describe('QuestCard', () => {
     expect(screen.getByText('Boss fight')).toBeTruthy();
   });
 
-  test('links to Linear in a new tab, and falls back to GitHub', () => {
-    renderCard();
-    const linear = screen.getByRole('link', { name: /Open in Linear/ });
-    expect(linear.getAttribute('href')).toBe('https://linear.app/trackunit/review/manager-101');
-    expect(linear.getAttribute('target')).toBe('_blank');
-    cleanup();
-
-    renderCard(makeQuest({ linearUrl: undefined }));
-    const github = screen.getByRole('link', { name: /Open on GitHub/ });
-    expect(github.getAttribute('href')).toBe('https://github.com/Trackunit/manager/pull/101');
-    expect(screen.queryByRole('link', { name: /Open in Linear/ })).toBeNull();
-  });
+  test.each([
+    {
+      linearUrl: 'https://linear.app/trackunit/review/manager-101',
+      guide: 'https://linear.app/trackunit/review/manager-101/review',
+    },
+    {
+      linearUrl: undefined,
+      guide: 'https://linear.review/Trackunit/manager/pull/101/review',
+    },
+  ])(
+    'links to the Linear guide and to GitHub with linearUrl $linearUrl',
+    ({ linearUrl, guide }) => {
+      renderCard(makeQuest({ linearUrl }));
+      expect(screen.getByRole('link', { name: /Open in Linear/ }).getAttribute('href')).toBe(guide);
+      expect(screen.getByRole('link', { name: /Open on GitHub/ }).getAttribute('href')).toBe(
+        'https://github.com/Trackunit/manager/pull/101',
+      );
+    },
+  );
 
   test('sends the review agent and asks to approve with the quest id', async () => {
     const user = userEvent.setup();
