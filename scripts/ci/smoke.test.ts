@@ -5,7 +5,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,12 +21,18 @@ const script = resolve(import.meta.dirname, 'smoke.sh');
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'smoke-'));
+  dir = realpathSync(mkdtempSync(join(tmpdir(), 'smoke-')));
   mkdirSync(join(dir, 'bin'));
-  // Records each `just desktop-smoke <artifact> <flags>`, with the bundle folder taken off.
+  mkdirSync(join(dir, 'tmp'));
+  // Records each `just desktop-smoke <artifact> <flags>`, with the bundle, release files or
+  // unpacking folder taken off, and whether the artifact was there.
   writeFileSync(
     join(dir, 'bin', 'just'),
-    `#!/bin/sh\necho "$*" | sed "s|$BUNDLES/||" >>"$STUB_DIR/smoked"\nexit "\${STUB_JUST_STATUS:-0}"\n`,
+    `#!/bin/sh
+[ -e "$2" ] || missing=" (missing)"
+echo "$*$missing" | sed -e "s|$BUNDLES/||" -e "s|$STUB_DIR/files/||" -e "s|$TMPDIR/[^/]*/|unpacked/|" >>"$STUB_DIR/smoked"
+exit "\${STUB_JUST_STATUS:-0}"
+`,
   );
   chmodSync(join(dir, 'bin', 'just'), 0o755);
 });
@@ -40,14 +49,37 @@ function bundles(triple: string, files: ReadonlyArray<string>): void {
   }
 }
 
-function smoke(triple: string, env: Record<string, string> = {}) {
-  const result = spawnSync('bash', [script, triple], {
+/** The release files, as collect-bundles.sh names them and an artifact download leaves them. */
+function releaseFiles(files: Record<string, string>): void {
+  mkdirSync(join(dir, 'files'));
+  for (const [name, contents] of Object.entries(files)) {
+    writeFileSync(join(dir, 'files', name), contents, { mode: 0o644 });
+  }
+}
+
+/** A macOS update archive with "PR Quest.app" at its root. */
+function updateArchive(name: string): void {
+  mkdirSync(join(dir, 'app', 'PR Quest.app', 'Contents'), { recursive: true });
+  writeFileSync(join(dir, 'app', 'PR Quest.app', 'Contents', 'Info.plist'), '');
+  const result = spawnSync('tar', [
+    '-czf',
+    join(dir, 'files', name),
+    '-C',
+    join(dir, 'app'),
+    'PR Quest.app',
+  ]);
+  expect(result.status).toBe(0);
+}
+
+function smoke(triple: string, env: Record<string, string> = {}, files?: string) {
+  const result = spawnSync('bash', [script, triple, ...(files === undefined ? [] : [files])], {
     encoding: 'utf8',
     env: {
       PATH: `${join(dir, 'bin')}:${process.env.PATH ?? ''}`,
       CARGO_TARGET_DIR: join(dir, 'target'),
       BUNDLES: join(dir, 'target', triple, 'release', 'bundle'),
       STUB_DIR: dir,
+      TMPDIR: join(dir, 'tmp'),
       ...env,
     },
   });
@@ -97,7 +129,61 @@ describe.skipIf(process.platform === 'win32')('smoke.sh', () => {
     const result = smoke('aarch64-apple-darwin');
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('Expected 2 bundles');
+    expect(result.stdout).toContain('Expected one .app in');
+    expect(result.smoked).toBe('');
+  });
+
+  test('stops at two bundles of a kind', () => {
+    bundles('x86_64-pc-windows-msvc', [
+      'nsis/PR Quest_1.0.0_x64-setup.exe',
+      'nsis/PR Quest_0.9.0_x64-setup.exe',
+    ]);
+    const result = smoke('x86_64-pc-windows-msvc');
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Expected one -setup.exe in');
+    expect(result.smoked).toBe('');
+  });
+
+  test('smoke-tests the dmg and the app in the update archive of the release files', () => {
+    releaseFiles({ 'PR-Quest_1.0.0_aarch64.dmg': '', 'build-aarch64-apple-darwin.txt': '' });
+    updateArchive('PR-Quest_1.0.0_aarch64.app.tar.gz');
+    const result = smoke('aarch64-apple-darwin', {}, join(dir, 'files'));
+
+    expect(result.status).toBe(0);
+    expect(result.smoked).toBe(
+      'desktop-smoke unpacked/PR Quest.app --target aarch64-apple-darwin\n' +
+        'desktop-smoke PR-Quest_1.0.0_aarch64.dmg --target aarch64-apple-darwin\n',
+    );
+    expect(readdirSync(join(dir, 'tmp'))).toEqual([]);
+  });
+
+  test('smoke-tests the AppImage, made executable, and the deb of the release files', () => {
+    releaseFiles({ 'PR-Quest_1.0.0_amd64.AppImage': '', 'PR-Quest_1.0.0_amd64.deb': '' });
+    const result = smoke('x86_64-unknown-linux-gnu', {}, join(dir, 'files'));
+
+    expect(result.status).toBe(0);
+    expect(result.smoked).toBe(
+      'desktop-smoke PR-Quest_1.0.0_amd64.AppImage --target x86_64-unknown-linux-gnu --headless\n' +
+        'desktop-smoke PR-Quest_1.0.0_amd64.deb --target x86_64-unknown-linux-gnu --headless\n',
+    );
+    expect(statSync(join(dir, 'files', 'PR-Quest_1.0.0_amd64.AppImage')).mode & 0o100).toBe(0o100);
+  });
+
+  test('smoke-tests the installer of the release files', () => {
+    releaseFiles({ 'PR-Quest_1.0.0_x64-setup.exe': '' });
+
+    expect(smoke('x86_64-pc-windows-msvc', {}, join(dir, 'files')).smoked).toBe(
+      'desktop-smoke PR-Quest_1.0.0_x64-setup.exe --target x86_64-pc-windows-msvc\n',
+    );
+  });
+
+  test('stops when the release files lack the update archive', () => {
+    releaseFiles({ 'PR-Quest_1.0.0_aarch64.dmg': '' });
+    const result = smoke('aarch64-apple-darwin', {}, join(dir, 'files'));
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Expected one .app.tar.gz in');
     expect(result.smoked).toBe('');
   });
 
