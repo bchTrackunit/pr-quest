@@ -118,6 +118,10 @@ doesn't hold during a rolling deploy:
    and run it again until it exits 0.
 4. Drop the old key from `PR_QUEST_PREVIOUS_MASTER_KEYS` and redeploy.
 
+While a step 2 deploy rolls out, instances still on the old keyring and those on the new one may
+rewrap the same data keys back and forth. That is harmless, and it settles once every instance runs
+the new keyring and step 3 has run.
+
 The schema is created by plain SQL migrations in
 [`apps/server/src/platform/postgres/migrations.ts`](../apps/server/src/platform/postgres/migrations.ts),
 each run in one transaction (so no `CREATE INDEX CONCURRENTLY`), without the pool's statement

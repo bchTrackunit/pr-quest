@@ -306,11 +306,14 @@ describe('loadConfig', () => {
         expect(loadConfig({ env, envFilePath }).database?.poolMax).toBe(4);
       });
 
-      test.each(['0', '101', 'ten'])('refuses the pool size %j', (poolMax) => {
-        const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: poolMax };
+      test.each(['0', '101', 'ten', '0x10', '1e1', '4.0', '+4', '0b11'])(
+        'refuses the pool size %j',
+        (poolMax) => {
+          const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: poolMax };
 
-        expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_DATABASE_POOL_MAX/);
-      });
+          expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_DATABASE_POOL_MAX/);
+        },
+      );
 
       test('is optional, for a server given its storage in code', () => {
         expect(loadConfig({ env: hosted, envFilePath }).database).toBeUndefined();

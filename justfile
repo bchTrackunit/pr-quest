@@ -29,10 +29,18 @@ test-postgres:
     trap 'docker stop "$container" >/dev/null' EXIT
     port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
     # The image's init runs a socket-only server first, so wait for TCP.
+    ready=false
     for _ in $(seq 1 120); do
-        docker exec "$container" pg_isready --host 127.0.0.1 --username postgres --quiet && break
+        if docker exec "$container" pg_isready --host 127.0.0.1 --username postgres --quiet; then
+            ready=true
+            break
+        fi
         sleep 0.5
     done
+    if [ "$ready" != true ]; then
+        echo "postgres never became ready" >&2
+        exit 1
+    fi
     PR_QUEST_TEST_DATABASE_URL="postgres://postgres:pr-quest-test@127.0.0.1:${port}/pr_quest_test" yarn test
 
 # Run the pending Postgres migrations against DATABASE_URL (hosted mode)

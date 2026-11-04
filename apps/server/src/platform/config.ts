@@ -239,10 +239,15 @@ function databaseConfig(read: (name: string) => string | undefined): DatabaseCon
       current: masterKey,
       previous: read(PREVIOUS_MASTER_KEYS_VARIABLE),
     }),
-    ...(poolMax === undefined ? {} : { poolMax: Number(poolMax) }),
+    ...(poolMax === undefined ? {} : { poolMax: decimal(poolMax) }),
   };
   assertDatabase(database);
   return database;
+}
+
+/** Plain decimal digits, which `Number` alone would widen to `0x10` or `1e1`; otherwise `NaN`. */
+function decimal(text: string): number {
+  return /^\d+$/.test(text) ? Number(text) : Number.NaN;
 }
 
 /** Fails at startup rather than on the first sign-in; the keyring has already checked the keys. */
