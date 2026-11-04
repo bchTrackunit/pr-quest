@@ -1,19 +1,32 @@
 /*
  * Packages the desktop app for one target, by default this machine's:
  *
- *   node apps/desktop/scripts/desktop-package.ts [--target <triple>] [--bundles <a,b>] [--skip-build] [--layout-only]
+ *   node apps/desktop/scripts/desktop-package.ts [--target <triple>] [--bundles <a,b>] [--skip-build]
+ *     [--layout-only | --compile-only | --skip-compile]
  *
  * Paths below are in apps/desktop/, and the script runs from any folder.
  * 1. `yarn build`, then the sidecar layout and Node for the target (scripts/desktop/layout.ts).
- * 2. Signs the native code Tauri doesn't (scripts/desktop/sign.ts), when signing is configured.
- * 3. `tauri build` with what the environment adds to the config (scripts/desktop/config.ts).
- *    macOS bundles separately, retrying when hdiutil finds the dmg's volume busy.
- * 4. Linux: makes sure the AppImage has no libwayland-client (scripts/desktop/appimage.ts).
+ * 2. `tauri build --no-bundle` with what the environment adds to the config
+ *    (scripts/desktop/config.ts). --compile-only stops here, and leaves out every signing
+ *    setting, so the release workflow compiles without its signing secrets.
+ * 3. Signs the native code Tauri doesn't (scripts/desktop/sign.ts), when signing is configured.
+ * 4. `tauri bundle`, which signs what Tauri signs; for macOS it retries when hdiutil finds the
+ *    dmg's volume busy. --skip-compile starts here, with the binary, main.mjs and dist/ that
+ *    --compile-only built, and lays out the sidecar's packages and Node again itself.
+ * 5. Linux: makes sure the AppImage has no libwayland-client (scripts/desktop/appimage.ts).
  *
  * Bundles land in $CARGO_TARGET_DIR (default src-tauri/target)/<triple>/release/bundle/.
  */
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -22,19 +35,18 @@ import { z } from 'zod';
 import { stripAppImage } from './desktop/appimage.ts';
 import { debBinaries, sidecarBinaryProblem } from './desktop/artifacts.ts';
 import { configOverlay } from './desktop/config.ts';
-import { layOut, SIDECAR_DIR } from './desktop/layout.ts';
+import { layOut, layOutRuntime, SIDECAR_DIR } from './desktop/layout.ts';
 import {
   BUILD_DIR,
   bundleDir as bundleDirFor,
   cargoTargetDir,
   DESKTOP_DIR,
   REPO_ROOT,
-  SRC_TAURI,
 } from './desktop/paths.ts';
 import {
-  adHocSignNode,
+  codeFlagsOf,
   entitlementsOf,
-  nodeEntitlementsProblem,
+  nodeSignatureProblem,
   signMacCode,
   signWindowsCode,
 } from './desktop/sign.ts';
@@ -53,8 +65,16 @@ const { values } = parseArgs({
     bundles: { type: 'string' },
     'skip-build': { type: 'boolean', default: false },
     'layout-only': { type: 'boolean', default: false },
+    'compile-only': { type: 'boolean', default: false },
+    'skip-compile': { type: 'boolean', default: false },
   },
 });
+const modes = (['layout-only', 'compile-only', 'skip-compile'] as const).filter(
+  (mode) => values[mode],
+);
+if (modes.length > 1) {
+  throw new Error(`Pass only one of ${modes.map((mode) => `--${mode}`).join(', ')}`);
+}
 const target = targetFor(values.target ?? hostTriple(process.platform, process.arch));
 const bundles = values.bundles?.split(',') ?? [
   ...target.bundles,
@@ -64,45 +84,51 @@ const bundles = values.bundles?.split(',') ?? [
 if ((process.env.CARGO_TARGET_DIR ?? '') !== '') {
   process.env.CARGO_TARGET_DIR = cargoTargetDir();
 }
+const bundleDir = bundleDirFor(target.triple);
 
-const { overlay, problems } = configOverlay(process.env, target, DESKTOP_DIR);
+const phase = values['compile-only'] ? 'compile' : values['skip-compile'] ? 'bundle' : 'all';
+const { overlay, problems } = configOverlay(process.env, target, DESKTOP_DIR, phase);
 if (problems.length > 0) {
   throw new Error(problems.join('\n'));
 }
-if (!values['skip-build']) {
-  // A command line, not yarn with arguments: Windows runs yarn.cmd only through a shell, which
-  // would concatenate the arguments unescaped (DEP0190).
-  execSync('yarn build', { cwd: REPO_ROOT, stdio: 'inherit' });
-}
-const node = await layOut(target);
-log(`laid out ${relative('.', SIDECAR_DIR)} and ${relative('.', node)} for ${target.triple}`);
-if (values['layout-only']) {
-  process.exit(0);
-}
-
-sign(target, node);
-
 const configArgs: Array<string> = [];
 if (Object.keys(overlay).length > 0) {
-  const file = join(BUILD_DIR, 'tauri.overlay.json');
+  const file = join(BUILD_DIR, `tauri.overlay.${phase}.json`);
+  mkdirSync(BUILD_DIR, { recursive: true });
   writeFileSync(file, `${JSON.stringify(overlay, null, 2)}\n`);
   configArgs.push('--config', file);
 }
-const bundleDir = bundleDirFor(target.triple);
-if (target.os === 'macos') {
-  // `tauri bundle` deletes the bundles it isn't asked for, so the app and dmg go together.
+
+if (phase !== 'bundle') {
+  if (!values['skip-build']) {
+    // A command line, not yarn with arguments: Windows runs yarn.cmd only through a shell, which
+    // would concatenate the arguments unescaped (DEP0190).
+    execSync('yarn build', { cwd: REPO_ROOT, stdio: 'inherit' });
+  }
+  const node = await layOut(target);
+  log(`laid out ${relative('.', SIDECAR_DIR)} and ${relative('.', node)} for ${target.triple}`);
+  if (values['layout-only']) {
+    process.exit(0);
+  }
   tauri(['build', '--target', target.triple, '--no-bundle', ...configArgs, ...LOCKED]);
+  if (phase === 'compile') {
+    log(`compiled ${target.triple}; bundle it with --skip-compile`);
+    process.exit(0);
+  }
+} else {
+  if (!existsSync(join(bundleDir, '..', target.os === 'windows' ? 'pr-quest.exe' : 'pr-quest'))) {
+    throw new Error(`Nothing compiled for ${target.triple}; run --compile-only first`);
+  }
+  // From this checkout's own node_modules and nodejs.org, not from whatever compiled the shell.
+  const node = layOutRuntime(target);
+  log(`laid out the sidecar's packages and ${relative('.', node)} for ${target.triple}`);
+}
+
+sign(target);
+if (target.os === 'macos') {
   bundleMac(configArgs);
 } else {
-  tauri([
-    'build',
-    '--target',
-    target.triple,
-    '--bundles',
-    bundles.join(','),
-    ...configArgs,
-    ...LOCKED,
-  ]);
+  tauri(['bundle', '--target', target.triple, '--bundles', bundles.join(','), ...configArgs]);
 }
 if (bundles.includes('appimage')) {
   stripLibraries();
@@ -112,13 +138,10 @@ for (const artifact of artifacts(bundleDir)) {
   log(`${relative('.', artifact.path)} (${(artifact.bytes / 1024 / 1024).toFixed(1)} MB)`);
 }
 
-function sign({ os }: Target, nodeBinary: string): void {
+function sign({ os }: Target): void {
   const identity = process.env.APPLE_SIGNING_IDENTITY ?? '';
   if (os === 'macos' && identity !== '') {
     log(`signed ${signMacCode(identity, SIDECAR_DIR)} Mach-O files`);
-  } else if (os === 'macos') {
-    adHocSignNode(nodeBinary);
-    log(`signed ${relative('.', nodeBinary)} ad hoc, without the official binary's entitlements`);
   }
   const template = process.env.PR_QUEST_WINDOWS_SIGN_COMMAND ?? '';
   if (os === 'windows' && template !== '') {
@@ -127,6 +150,7 @@ function sign({ os }: Target, nodeBinary: string): void {
 }
 
 /**
+ * `tauri bundle` deletes the bundles it isn't asked for, so the app and dmg go together.
  * hdiutil sometimes fails with "Resource busy" when Spotlight or a previous attempt still holds
  * the image; a stale mount of the volume then breaks every later attempt, so it goes first.
  */
@@ -174,7 +198,7 @@ function stripLibraries(): void {
 
 /**
  * The app and the deb have the sidecar under its own name, and no `node` (see targets.ts), and
- * the app's Node has only the entitlements it needs.
+ * the app's Node runs under the hardened runtime with only the entitlements it needs.
  */
 function checkBinaries(): void {
   const listings: Array<[string, Array<string>]> = [];
@@ -184,7 +208,10 @@ function checkBinaries(): void {
     const bundledNode = join(macos, 'pr-quest-node');
     const signed = (process.env.APPLE_SIGNING_IDENTITY ?? '') !== '';
     const problem = existsSync(bundledNode)
-      ? nodeEntitlementsProblem(entitlementsOf(bundledNode), signed)
+      ? nodeSignatureProblem(
+          { entitlements: entitlementsOf(bundledNode), flags: codeFlagsOf(bundledNode) },
+          signed,
+        )
       : undefined;
     if (problem !== undefined) {
       throw new Error(`${bundledNode}: ${problem}`);
@@ -205,11 +232,11 @@ function checkBinaries(): void {
   }
 }
 
+/** tauri.conf.json takes its version from apps/desktop/package.json, as the app reports it. */
 function appVersion(): string {
-  const config = z
+  return z
     .object({ version: z.string() })
-    .parse(JSON.parse(readFileSync(join(SRC_TAURI, 'tauri.conf.json'), 'utf8')));
-  return config.version;
+    .parse(JSON.parse(readFileSync(join(DESKTOP_DIR, 'package.json'), 'utf8'))).version;
 }
 
 function artifacts(dir: string): Array<{ path: string; bytes: number }> {

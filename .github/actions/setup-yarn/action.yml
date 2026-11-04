@@ -1,0 +1,39 @@
+name: Set up Node and Yarn
+description: Installs the Node version pinned in package.json and the project's dependencies with Yarn 4.
+
+inputs:
+  cache:
+    description: >-
+      Restore and save Yarn's cache of package archives. The release's bundle job leaves it off, so
+      nothing another job of the run saved reaches it.
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: package.json
+        package-manager-cache: false
+
+    - name: Enable Yarn from packageManager
+      shell: bash
+      run: corepack enable
+
+    - name: Find the Yarn cache
+      if: inputs.cache == 'true'
+      id: yarn-cache
+      shell: bash
+      run: echo "dir=$(yarn config get cacheFolder)" >> "$GITHUB_OUTPUT"
+
+    # Yarn checks every cached archive against the checksums in yarn.lock, so a tampered cache fails
+    # the install instead of reaching the build.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: inputs.cache == 'true'
+      with:
+        path: ${{ steps.yarn-cache.outputs.dir }}
+        key: yarn-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('yarn.lock') }}
+
+    - name: Install
+      shell: bash
+      run: yarn install --immutable

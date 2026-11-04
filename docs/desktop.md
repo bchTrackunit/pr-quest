@@ -41,7 +41,10 @@ sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-
 
 `--bundles app` (or `appimage`, `deb`, `nsis`) builds fewer. `--skip-build` reuses `apps/web/dist/`, and
 `--layout-only` stops after laying out the sidecar, which `cargo` needs before it can build the
-shell. Each target takes Node from nodejs.org at a pinned version and SHA-256
+shell. `--compile-only` stops after compiling the shell, with no signing settings, and
+`--skip-compile` signs and bundles what it compiled, after laying out the sidecar's packages and
+Node again; the release workflow compiles in one job, without its signing secrets, and bundles
+in another, from a fresh checkout. Each target takes Node from nodejs.org at a pinned version and SHA-256
 ([`apps/desktop/scripts/desktop/targets.ts`](../apps/desktop/scripts/desktop/targets.ts)), and the Cursor SDK's native parts
 (its sandbox, `rg` and the tree-sitter binding) from `node_modules`. `yarn install` fetches only
 this machine's copy of those, so the build stops if the target's `@cursor/sdk-<os>-<cpu>` package
@@ -178,18 +181,24 @@ A release build is one packaged with `PR_QUEST_RELEASE_BUILD=1`, `PR_QUEST_RELEA
 the GitHub `owner/name` it checks and that **Help** opens, and `PR_QUEST_UPDATER_PUBKEY` set to
 the updater's public key. It stops if the repository is still the `CHANGE-ME` placeholder (in any
 case) or the key is missing, and on macOS and Windows if it wouldn't be signed (see
-[Signing](#signing)). With `TAURI_SIGNING_PRIVATE_KEY` (and
+[Signing](#signing)), unless `PR_QUEST_ALLOW_UNSIGNED_RELEASE=1`, which the release workflow sets
+only for its dry runs. With `TAURI_SIGNING_PRIVATE_KEY` (and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one) it also writes the update files next to the
 bundles: `PR Quest.app.tar.gz`, the AppImage and the `-setup.exe`, each with a `.sig`.
 `just desktop-verify-updater <file>` checks a `.sig` against the key. Make a key pair with
-`node node_modules/@tauri-apps/cli/tauri.js signer generate`. The release pipeline uploads those
-files and a `latest.json` that lists them.
+`yarn workspace @pr-quest/desktop exec tauri signer generate`. The release workflow never gives
+its compile or bundle jobs the private key: it makes the macOS update archive itself and signs the
+update files in a job of their own, then uploads them with a `latest.json` that lists them.
 
 ## Signing
 
 Signing is off unless these are set in the environment of `just desktop-package`. Without an
-identity on macOS, the bundled Node is signed ad hoc without entitlements, replacing the official
-binary's debugging ones such as `get-task-allow`; the package step checks the result.
+identity on macOS, Tauri signs the whole app ad hoc, with the hardened runtime and only the two
+entitlements Node needs, `allow-jit` and `disable-library-validation`
+([`entitlements-ad-hoc.plist`](../apps/desktop/scripts/desktop/entitlements-ad-hoc.plist)). The
+bundle is sealed, and the bundled Node loses the official binary's debugging entitlements such as
+`get-task-allow`, so no debugger can attach to it; the package step checks the result. Publishing
+a release is described in [RELEASING.md](../RELEASING.md).
 
 | Variable                                                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

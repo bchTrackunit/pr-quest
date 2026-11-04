@@ -6,8 +6,11 @@
  *   Anthropic SDKs with their dependencies and only the target's Cursor SDK platform package.
  * - src-tauri/binaries/pr-quest-node-<target triple>: the official Node binary, checked against a pinned
  *   SHA-256, which tauri.conf.json bundles as an externalBin.
+ *
+ * main.mjs and dist/ are built (layOutBuilt); the rest is copied from node_modules and nodejs.org
+ * (layOutRuntime), which runs no dependency's code, so the release's bundle job does it itself
+ * instead of taking it from the compile job.
  */
-import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -37,12 +40,22 @@ const ManifestSchema = z.object({
   peerDependencies: z.record(z.string(), z.string()).optional(),
 });
 
+/** What layOutBuilt makes in SIDECAR_DIR. */
+export const SIDECAR_BUILT = ['main.mjs', 'dist'] as const;
+
 /** Lays out the sidecar for `target` and returns the path of its Node binary. */
 export async function layOut(target: Target): Promise<string> {
+  await layOutBuilt();
+  return layOutRuntime(target);
+}
+
+/** Bundles the server into main.mjs and copies the UI build, replacing the whole sidecar. */
+export async function layOutBuilt(): Promise<void> {
   if (!existsSync(join(WEB_DIST, 'index.html'))) {
     throw new Error(`No UI build in ${WEB_DIST}; run \`yarn build\` first`);
   }
   rmSync(SIDECAR_DIR, { recursive: true, force: true });
+  const { build } = await import('esbuild');
   await build({
     entryPoints: [join(DESKTOP_DIR, 'src', 'sidecar', 'main.ts')],
     bundle: true,
@@ -57,6 +70,24 @@ export async function layOut(target: Target): Promise<string> {
     recursive: true,
     filter: (path) => !path.endsWith('.map'),
   });
+}
+
+/**
+ * Copies the external packages for `target` from node_modules next to what layOutBuilt made,
+ * writes the sidecar's package.json and installs Node; returns the path of the Node binary.
+ */
+export function layOutRuntime(target: Target): string {
+  const built: ReadonlyArray<string> = SIDECAR_BUILT;
+  for (const name of built) {
+    if (!existsSync(join(SIDECAR_DIR, name))) {
+      throw new Error(`No ${name} in ${SIDECAR_DIR}; lay out the built sidecar first`);
+    }
+  }
+  for (const name of readdirSync(SIDECAR_DIR)) {
+    if (!built.includes(name)) {
+      rmSync(join(SIDECAR_DIR, name), { recursive: true, force: true });
+    }
+  }
   for (const dir of dependencyClosure(EXTERNAL, target)) {
     cpSync(dir, join(SIDECAR_DIR, installedPath(dir)), {
       recursive: true,

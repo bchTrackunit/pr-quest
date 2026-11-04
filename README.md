@@ -283,7 +283,8 @@ just desktop-smoke      # check what desktop-package made
 ```
 
 [The desktop app](docs/desktop.md) covers building it, packaging, the smoke test, how the window
-talks to the server, where it keeps your keys, updates and signing.
+talks to the server, where it keeps your keys, updates and signing, and
+[RELEASING.md](RELEASING.md) how a release is published.
 
 ## Development
 

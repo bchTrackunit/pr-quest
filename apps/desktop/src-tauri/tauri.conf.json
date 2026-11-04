@@ -1,7 +1,7 @@
 {
   "$schema": "../../../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PR Quest",
-  "version": "0.0.0",
+  "version": "../package.json",
   "identifier": "com.prquest.desktop",
   "build": {
     "frontendDist": "./splash"
