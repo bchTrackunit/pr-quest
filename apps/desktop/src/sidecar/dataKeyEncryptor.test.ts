@@ -1,5 +1,5 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -26,7 +26,7 @@ describe('dataKeyEncryptor', () => {
     const first = encryptor.encryptString('crsr_secret', 'cursor');
     const second = encryptor.encryptString('crsr_secret', 'cursor');
 
-    expect(encryptor.decryptString(first, 'cursor', false)).toBe('crsr_secret');
+    expect(encryptor.decryptString(first, 'cursor')).toBe('crsr_secret');
     expect(first.equals(second)).toBe(false);
     expect(first.toString('latin1')).not.toContain('crsr_secret');
   });
@@ -36,15 +36,15 @@ describe('dataKeyEncryptor', () => {
 
     const encrypted = encryptor.encryptString('crsr_secret', 'cursor');
 
-    expect(() => encryptor.decryptString(encrypted, 'linear', false)).toThrow();
+    expect(() => encryptor.decryptString(encrypted, 'linear')).toThrow();
   });
 
-  test('reads values from before they were bound to a name only when asked to', () => {
+  test('refuses a value from before values were bound to a name, which PR Quest never shipped', () => {
     const key = randomBytes(DATA_KEY_BYTES);
-    const v1 = v1Value(key, 'crsr_old');
 
-    expect(dataKeyEncryptor(key).decryptString(v1, 'cursor', true)).toBe('crsr_old');
-    expect(() => dataKeyEncryptor(key).decryptString(v1, 'cursor', false)).toThrow(/version 1/);
+    expect(() => dataKeyEncryptor(key).decryptString(v1Value(key, 'crsr_old'), 'cursor')).toThrow(
+      /format/,
+    );
   });
 
   test('names its key with an id that tells keys apart without giving one away', () => {
@@ -66,10 +66,10 @@ describe('dataKeyEncryptor', () => {
     unknownFormat[0] = 9;
 
     expect(() =>
-      dataKeyEncryptor(randomBytes(DATA_KEY_BYTES)).decryptString(encrypted, 'cursor', false),
+      dataKeyEncryptor(randomBytes(DATA_KEY_BYTES)).decryptString(encrypted, 'cursor'),
     ).toThrow();
-    expect(() => encryptor.decryptString(tampered, 'cursor', false)).toThrow();
-    expect(() => encryptor.decryptString(unknownFormat, 'cursor', false)).toThrow(/format/);
+    expect(() => encryptor.decryptString(tampered, 'cursor')).toThrow();
+    expect(() => encryptor.decryptString(unknownFormat, 'cursor')).toThrow(/format/);
   });
 
   test('needs a 256-bit key', () => {
@@ -139,14 +139,24 @@ describe('the desktop secrets with a data key', () => {
   const writeEncrypted = (file: object) =>
     writeFile(join(stateDir, ENCRYPTED_SECRETS_FILE), JSON.stringify(file));
 
-  test('read a version 1 file with its version 1 values', async () => {
+  test('take a version 1 file for a damaged one, and keep it aside once a key is saved', async () => {
     const key = randomBytes(DATA_KEY_BYTES);
     await writeEncrypted({
       version: 1,
       secrets: { cursor: v1Value(key, 'crsr_old').toString('base64') },
     });
+    const original = await readFile(join(stateDir, ENCRYPTED_SECRETS_FILE), 'utf8');
 
-    expect((await openWith(key)).store.get('cursor')).toBe('crsr_old');
+    const opened = await openWith(key);
+    await opened.store.set('linear', 'lin_new');
+
+    expect(opened.storage).toBe('corrupt');
+    expect(opened.store.get('cursor')).toBeUndefined();
+    const aside = (await readdir(stateDir)).find((name) =>
+      /^secrets\.encrypted\.unknown-key\.\d+\.json$/.test(name),
+    );
+    expect(await readFile(join(stateDir, aside ?? ''), 'utf8')).toBe(original);
+    expect((await openWith(key)).store.get('linear')).toBe('lin_new');
   });
 
   test("refuse a version 1 value in a version 2 file, which isn't bound to its name", async () => {

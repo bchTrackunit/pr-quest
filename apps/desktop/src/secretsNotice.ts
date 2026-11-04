@@ -81,7 +81,7 @@ export function secretsNotice(
     case 'undecryptable':
       return {
         message: 'The file with your saved keys was changed or damaged',
-        detail: `${ENCRYPTED_SECRETS_FILE} in the state folder names the OS keychain's data key, but doesn't decrypt with it. Restore it from a backup and restart PR Quest to get your keys back. If you continue, PR Quest starts without saved keys, and saving a key replaces that file. Start Over moves it aside in the state folder and saves keys with the current data key.`,
+        detail: `${ENCRYPTED_SECRETS_FILE} in the state folder names the OS keychain's data key, but doesn't decrypt with it. Restore it from a backup and restart PR Quest to get your keys back. If you continue, PR Quest starts without saved keys, and saving a key moves that file aside. Start Over moves it aside in the state folder and saves keys with the current data key.`,
         // Closing the dialog chooses the last button, which leaves the file alone.
         buttons: [
           { label: 'Start Over', action: 'startOver' },
@@ -101,7 +101,7 @@ export function secretsNotice(
     case 'corrupt':
       return {
         message: 'The file with your saved keys is damaged',
-        detail: `PR Quest can't read ${ENCRYPTED_SECRETS_FILE} in the state folder. Restore it from a backup and try again. If you continue, PR Quest starts without saved keys, and saving a key replaces the damaged file.`,
+        detail: `PR Quest can't read ${ENCRYPTED_SECRETS_FILE} in the state folder. Restore it from a backup and try again. If you continue, PR Quest starts without saved keys, and saving a key moves the damaged file aside in the state folder.`,
         buttons: RETRY_OR_CONTINUE,
       };
     case 'importFailed':

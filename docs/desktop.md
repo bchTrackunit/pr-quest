@@ -151,7 +151,7 @@ Without a usable keychain, such as on Linux without a Secret Service, the app re
 Deleting a key, as **Sign out** does, removes it from `secrets.json` too, so it doesn't come back
 on the next start. On Linux and Windows, choosing **Save Them Unencrypted** there, and confirming
 it, writes `secrets.json` from then on, and the choice is kept in `desktop.json`. macOS never
-offers that, and never writes `secrets.json`. If `secrets.encrypted.json` exists but the keychain isn't
+offers that, so it never saves a key there. If `secrets.encrypted.json` exists but the keychain isn't
 available, the app starts without saved keys and never writes `secrets.json`, so the encrypted
 file stays the only copy. Each value is bound to its key's name, and the file names the data key
 it was encrypted with by a short hash. If that isn't the keychain's data key, as after the
@@ -160,7 +160,8 @@ keys, keeps new ones in memory and leaves the file alone; **Start Over** moves i
 `secrets.encrypted.<key id>.<time>.json` and saves keys with the new data key. If the file is
 damaged, or names the keychain's data key but doesn't decrypt with it, as when it was changed, the
 app says which and starts without saved keys; the file is left in place until you save a key,
-which replaces it. For a damaged file it offers to try again, as after restoring it from a backup;
+which moves it aside the same way, as `unknown-key` when the file names no data key, and never
+deletes it. For a damaged file it offers to try again, as after restoring it from a backup;
 for one that doesn't decrypt, where trying again can't help, it offers **Start Over**.
 
 ## Updates
