@@ -299,6 +299,23 @@ describe('openDesktopSecrets with the OS keychain', () => {
     expect((await open(fakeKeychain('new-key'))).store.get('cursor')).toBe('key_new');
   });
 
+  test('keeps both files when two are moved aside in the same millisecond', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      await writeFile(encryptedFile(), '{ first');
+      const first = await setAsideEncryptedSecrets(dir);
+      await writeFile(encryptedFile(), '{ second');
+      const second = await setAsideEncryptedSecrets(dir);
+
+      expect(first).toBe('secrets.encrypted.unknown-key.1700000000000.json');
+      expect(second).toBe('secrets.encrypted.unknown-key.1700000000000-1.json');
+      expect(await readFile(join(dir, first ?? ''), 'utf8')).toBe('{ first');
+      expect(await readFile(join(dir, second ?? ''), 'utf8')).toBe('{ second');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   test.each([
     ['not JSON', '{ not json'],
     [
