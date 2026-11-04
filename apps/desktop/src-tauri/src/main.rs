@@ -409,6 +409,14 @@ impl Session<'_> {
             } else {
                 events.recv_timeout(READY_TIMEOUT)
             };
+            if let Some(reason) = event
+                .as_ref()
+                .ok()
+                .and_then(|event| out_of_turn(event, ready))
+            {
+                self.log.warn(&format!("ignored {reason}"));
+                continue;
+            }
             match event {
                 Ok(Event::Ready(server)) => {
                     ready = true;
@@ -544,6 +552,17 @@ impl Session<'_> {
                 }
             }
         });
+    }
+}
+
+/// Why a session ignores `event`, if it does. A server is ready once, and issues start-up codes
+/// only when the shell asks, which it does once the server is ready. Another ready line would
+/// point the window, and the request secret's cookie, which doesn't name a port, at another port.
+fn out_of_turn(event: &Event, ready: bool) -> Option<&'static str> {
+    match event {
+        Event::Ready(_) if ready => Some("another ready line from a server that is already ready"),
+        Event::Bootstrap(_) if !ready => Some("a start-up code from a server that isn't ready yet"),
+        _ => None,
     }
 }
 
@@ -748,6 +767,38 @@ mod tests {
 
         assert_eq!(url.as_str(), "http://127.0.0.1:4317/__bootstrap?code=a-b_c");
         assert!(policy::is_app_url(&url, &origin));
+    }
+
+    fn ready_line(port: u16) -> Event {
+        Event::Ready(sidecar::Ready {
+            port,
+            storage: "keychain".into(),
+        })
+    }
+
+    #[test]
+    fn a_session_shows_its_server_once() {
+        assert_eq!(out_of_turn(&ready_line(4317), false), None);
+        assert!(out_of_turn(&ready_line(4318), true).is_some());
+    }
+
+    #[test]
+    fn a_new_start_up_code_counts_only_once_the_server_is_ready() {
+        let code = || Event::Bootstrap("abc".into());
+        assert!(out_of_turn(&code(), false).is_some());
+        assert_eq!(out_of_turn(&code(), true), None);
+    }
+
+    #[test]
+    fn other_events_count_before_and_after_the_server_is_ready() {
+        for ready in [false, true] {
+            assert_eq!(out_of_turn(&Event::Reload, ready), None);
+            assert_eq!(out_of_turn(&Event::Exited(Some(1)), ready), None);
+            assert_eq!(
+                out_of_turn(&Event::Fatal("Port in use".into()), ready),
+                None
+            );
+        }
     }
 
     #[test]
