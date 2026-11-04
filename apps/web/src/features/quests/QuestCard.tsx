@@ -154,7 +154,7 @@ export const QuestCard = ({
         </div>
       ) : null}
 
-      <div className="button-row">
+      <div className="quest__actions">
         {canSendAgent ? (
           <button
             aria-describedby={cursorBlocker ? blockedNoteId : undefined}
