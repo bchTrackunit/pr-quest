@@ -337,6 +337,18 @@ describe('accounts', () => {
     expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'first' }]);
   });
 
+  test('records a login again on the next open once the user is released', async () => {
+    const mine = await openPostgresStorage(db, { keyring, warn: () => undefined, now: () => 0 });
+    const theirs = await open();
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+    await theirs.gameState({ id: OCTOCAT.id, login: 'second' });
+
+    mine.releaseUser?.({ id: OCTOCAT.id, login: 'first' });
+    await mine.gameState({ id: OCTOCAT.id, login: 'first' });
+
+    expect(await loginOf(OCTOCAT.id)).toEqual([{ login: 'first' }]);
+  });
+
   test('records a user once per storage, however many of their stores it opens', async () => {
     const statements: Array<string> = [];
     const counting: Database = {

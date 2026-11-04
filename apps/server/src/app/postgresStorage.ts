@@ -104,6 +104,9 @@ export async function openPostgresStorage(
     registerUser: async (user) => {
       await record(githubUser(user.id, user.login));
     },
+    releaseUser: (user) => {
+      registered.delete(user.id);
+    },
   };
 }
 

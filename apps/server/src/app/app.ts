@@ -286,6 +286,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     if (scope.kind === 'user') {
       scopes.delete(scopeKey(scope));
     }
+    storage.releaseUser?.(player);
   };
 
   const context: IdentityContext<UserServices> = {

@@ -48,6 +48,8 @@ export interface AppStorage {
    * saw it. The app calls it whenever it opens a session; storage keyed by login needs none.
    */
   registerUser?: (user: GitHubUser) => Promise<void>;
+  /** Forgets what the storage keeps in memory for `user`; the app calls it when it releases them. */
+  releaseUser?: (user: GitHubUser) => void;
 }
 
 export interface FileStorageOptions {

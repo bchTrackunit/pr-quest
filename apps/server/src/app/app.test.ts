@@ -780,6 +780,31 @@ describe('createApp in hosted mode', () => {
     ]);
   });
 
+  test('tells the storage when a player is released', async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const released: Array<GitHubUser> = [];
+    await start({
+      config: hostedConfig(),
+      identity: async (given) => {
+        context = given;
+        return headerIdentity(given);
+      },
+      storage: {
+        ...perUserStorage(),
+        releaseUser: (user) => {
+          released.push(user);
+        },
+      },
+    });
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+
+    context.releaseUser({ id: 4101, login: 'octocat' });
+
+    expect(released).toEqual([{ id: 4101, login: 'octocat' }]);
+  });
+
   test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
     const crossSiteIdentity: IdentityFactory<UserServices> = async (context) => ({
       ...(await headerIdentity(context)),
