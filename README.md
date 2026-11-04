@@ -266,7 +266,7 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 - **Posted reviews match no Agent filter**, so selecting any agent state hides those PRs.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
-- **The desktop app has no release yet.** The version is `0.0.0`, there is no app icon, and local
+- **The desktop app has no release yet.** The version is `0.0.0`, the app icon is a placeholder, and local
   builds are unsigned, so macOS and Windows warn before the first start.
 - **The desktop app and `yarn start` don't share a running state.** Run one at a time on a state
   directory, as [the desktop docs](docs/desktop.md#state) describe.
