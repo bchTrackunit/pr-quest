@@ -148,7 +148,8 @@ function artifact(job: string, file: string): string {
   return join(dir, 'artifacts', job, file);
 }
 
-describe.skipIf(process.platform === 'win32')('release-assets.sh', () => {
+// Each run starts Node once per update file, which takes a while when the other tests run too.
+describe.skipIf(process.platform === 'win32')('release-assets.sh', { timeout: 30_000 }, () => {
   test('writes latest.json with every platform, its download URL and its signature', () => {
     const result = run();
 
