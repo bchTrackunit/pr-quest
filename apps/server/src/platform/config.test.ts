@@ -12,6 +12,7 @@ import { DEFAULT_SERVER_PORT } from '@pr-quest/contract/ports';
 import {
   type AppConfig,
   assertSafeConfig,
+  DatabaseUrl,
   DEFAULT_GITHUB_CLIENT_ID,
   ENV_FILE_NAME,
   HOSTED_DEFAULT_HOST,
@@ -255,11 +256,9 @@ describe('loadConfig', () => {
     describe('the database', () => {
       const masterKey = randomBytes(32).toString('base64');
       const previous = randomBytes(32).toString('base64');
-      const withDatabase = {
-        ...hosted,
-        DATABASE_URL: 'postgres://pr_quest@db.internal:5432/pr_quest',
-        PR_QUEST_MASTER_KEY: masterKey,
-      };
+      const password = 'db-s3cret';
+      const url = `postgres://pr_quest:${password}@db.internal:5432/pr_quest?password=${password}`;
+      const withDatabase = { ...hosted, DATABASE_URL: url, PR_QUEST_MASTER_KEY: masterKey };
 
       test('reads the URL and the master keys', () => {
         const config = loadConfig({
@@ -273,16 +272,17 @@ describe('loadConfig', () => {
         );
 
         expect(config.database).toEqual({
-          url: 'postgres://pr_quest@db.internal:5432/pr_quest',
+          url: expect.any(DatabaseUrl),
           keyring: expect.any(MasterKeyring),
         });
+        expect(config.database?.url.reveal()).toBe(url);
         expect(config.database?.keyring.currentId).toBe(
           MasterKeyring.fromConfig({ current: masterKey }).currentId,
         );
         expect(config.database?.keyring.unwrap(wrappedByPrevious, 'x')).toEqual(dataKey);
       });
 
-      test('never shows the master keys when the config is logged or serialised', () => {
+      test('never shows the master keys or the database password when the config is logged or serialised', () => {
         const config = loadConfig({
           env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
           envFilePath,
@@ -291,12 +291,15 @@ describe('loadConfig', () => {
         for (const shown of [
           JSON.stringify(config),
           inspect(config, { depth: Infinity, showHidden: true }),
+          String(config.database?.url),
         ]) {
           for (const key of [masterKey, previous]) {
             expect(shown).not.toContain(key);
             expect(shown).not.toContain(Buffer.from(key, 'base64').toString('hex'));
           }
           expect(shown).not.toMatch(/Buffer/);
+          expect(shown).not.toContain(password);
+          expect(shown).toContain('db.internal:5432');
         }
       });
 
@@ -373,8 +376,9 @@ describe('assertSafeConfig', () => {
 
 describe('assertSafeConfig with a database', () => {
   const masterKey = randomBytes(32).toString('base64');
+  const plainUrl = 'postgres://pr_quest:db-s3cret@db.internal:5432/pr_quest';
   const database = {
-    url: 'postgres://pr_quest@db.internal:5432/pr_quest',
+    url: new DatabaseUrl(plainUrl),
     keyring: MasterKeyring.fromConfig({ current: masterKey }),
   };
 
@@ -392,9 +396,22 @@ describe('assertSafeConfig with a database', () => {
     expect(() => assertSafeConfig(config)).not.toThrow(masterKey);
   });
 
+  test('refuses a hosted config with a plain URL string, without echoing its password', () => {
+    const config: AppConfig = Object.assign(
+      { ...HOSTED_CONFIG },
+      { database: { ...database, url: plainUrl } },
+    );
+
+    expect(() => assertSafeConfig(config)).toThrow(/DatabaseUrl/);
+    expect(() => assertSafeConfig(config)).not.toThrow(/db-s3cret/);
+  });
+
   test('refuses a hosted config with a non-Postgres URL', () => {
     expect(() =>
-      assertSafeConfig({ ...HOSTED_CONFIG, database: { ...database, url: 'mysql://db/x' } }),
+      assertSafeConfig({
+        ...HOSTED_CONFIG,
+        database: { ...database, url: new DatabaseUrl('mysql://db/x') },
+      }),
     ).toThrow(/DATABASE_URL/);
   });
 

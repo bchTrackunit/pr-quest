@@ -10,6 +10,7 @@ import { NotSignedInError } from '../platform/githubApi.ts';
 import type { SecretName, SecretStore } from '../platform/secrets.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import {
+  DatabaseUrl,
   type IdentityFactory,
   MACHINE_SCOPE,
   MasterKeyring,
@@ -246,7 +247,7 @@ describe('startServer', () => {
 
     test('opens the configured database, and fails to start when it is unreachable', async () => {
       const database = {
-        url: 'postgres://nobody@127.0.0.1:1/pr_quest',
+        url: new DatabaseUrl('postgres://nobody@127.0.0.1:1/pr_quest'),
         keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
       };
 
@@ -258,7 +259,7 @@ describe('startServer', () => {
 
     test('warns when the database is on a public host without TLS', async () => {
       const database = {
-        url: 'postgres://nobody:s3cret@pr-quest-db.invalid:1/pr_quest',
+        url: new DatabaseUrl('postgres://nobody:s3cret@pr-quest-db.invalid:1/pr_quest'),
         keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
       };
 

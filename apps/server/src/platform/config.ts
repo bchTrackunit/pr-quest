@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parseEnv } from 'node:util';
+import { inspect, parseEnv } from 'node:util';
 
 import { MASTER_KEY_VARIABLE, MasterKeyring, PREVIOUS_MASTER_KEYS_VARIABLE } from './envelope.ts';
 import { readPorts, SERVER_HOST } from '@pr-quest/contract/ports';
@@ -35,10 +35,49 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
  */
 export const DEFAULT_GITHUB_CLIENT_ID = '';
 
+/**
+ * `DATABASE_URL`, which can hold the database password. It keeps the URL in a `#private` field, so
+ * logging or serialising it shows only the URL without the password or the query string.
+ */
+export class DatabaseUrl {
+  readonly #url: string;
+
+  public constructor(url: string) {
+    this.#url = url;
+  }
+
+  /** The whole connection string, password included, for connecting only. */
+  public reveal(): string {
+    return this.#url;
+  }
+
+  public toString(): string {
+    let shown: URL;
+    try {
+      shown = new URL(this.#url);
+    } catch {
+      return 'postgres://***';
+    }
+    if (shown.password !== '') {
+      shown.password = '***';
+    }
+    shown.search = '';
+    return shown.href;
+  }
+
+  public toJSON(): string {
+    return this.toString();
+  }
+
+  public [inspect.custom](): string {
+    return `DatabaseUrl(${this.toString()})`;
+  }
+}
+
 /** Hosted mode's Postgres database and the master keys that encrypt users' API keys in it. */
 export interface DatabaseConfig {
   /** `DATABASE_URL`, a `postgres://` connection string. */
-  url: string;
+  url: DatabaseUrl;
   /**
    * `PR_QUEST_MASTER_KEY` and `PR_QUEST_PREVIOUS_MASTER_KEYS`, held only as a keyring, so logging
    * or serialising the config never shows them.
@@ -234,7 +273,7 @@ function databaseConfig(read: (name: string) => string | undefined): DatabaseCon
   }
   const poolMax = read('PR_QUEST_DATABASE_POOL_MAX');
   const database: DatabaseConfig = {
-    url,
+    url: new DatabaseUrl(url),
     keyring: MasterKeyring.fromConfig({
       current: masterKey,
       previous: read(PREVIOUS_MASTER_KEYS_VARIABLE),
@@ -252,7 +291,13 @@ function decimal(text: string): number {
 
 /** Fails at startup rather than on the first sign-in; the keyring has already checked the keys. */
 function assertDatabase(database: DatabaseConfig): void {
-  if (!/^postgres(?:ql)?:\/\//.test(database.url)) {
+  const { url }: { url: unknown } = database;
+  if (!(url instanceof DatabaseUrl)) {
+    throw new Error(
+      'The database config needs its url as a DatabaseUrl, so logging the config never shows the password',
+    );
+  }
+  if (!/^postgres(?:ql)?:\/\//.test(url.reveal())) {
     throw new Error('DATABASE_URL must be a postgres:// connection string');
   }
   const { poolMax } = database;

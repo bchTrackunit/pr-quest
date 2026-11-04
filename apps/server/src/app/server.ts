@@ -20,6 +20,7 @@ import { type AppStorage, createFileStorage } from './storage.ts';
 
 export {
   type AppConfig,
+  DatabaseUrl,
   type HostedConfig,
   loadConfig,
   type LocalConfig,
@@ -196,11 +197,12 @@ async function openDatabase(
   config: DatabaseConfig,
   warn: (message: string) => void,
 ): Promise<{ db: Database; storage: AppStorage }> {
-  const transport = transportWarning(config.url);
+  const url = config.url.reveal();
+  const transport = transportWarning(url);
   if (transport) {
     warn(transport);
   }
-  const db = connectPostgres(config.url, { max: config.poolMax, onError: warn });
+  const db = connectPostgres(url, { max: config.poolMax, onError: warn });
   try {
     return { db, storage: await openPostgresStorage(db, { keyring: config.keyring, warn }) };
   } catch (error) {
