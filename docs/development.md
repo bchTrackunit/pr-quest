@@ -37,7 +37,8 @@ runs `node apps/server/dist/main.js`, which serves the API and the built UI toge
 <http://127.0.0.1:4317>; there is no separate UI port. To run an existing build without
 rebuilding, use `yarn workspace @pr-quest/server start`. Without an `apps/web/dist/` build the
 server serves only the API and says so. The bundle leaves
-`@cursor/sdk`, `@anthropic-ai/sdk` and `pg` out, so it still needs the repo's `node_modules`.
+`@cursor/sdk`, `@anthropic-ai/sdk`, `pg` and `pg-connection-string` out, so it still needs the
+repo's `node_modules`.
 
 ### Hosted mode
 
@@ -63,9 +64,11 @@ Hosted mode keeps every player's state in Postgres instead of the state director
 settings, only in hosted mode; local mode ignores `DATABASE_URL`:
 
 - `DATABASE_URL`: a `postgres://` or `postgresql://` connection string. The server warns at startup
-  when it reaches a host without TLS (no `sslmode`, or `sslmode=disable`), unless the host is
-  private: a socket, loopback, an RFC 1918 address, a single-label name, `*.internal` or
-  `*.flycast`. Add `?sslmode=require` or `verify-full` otherwise.
+  when it reaches a host without TLS (no `sslmode`, or `sslmode=disable`) or with TLS that doesn't
+  check the certificate (`sslmode=no-verify`), unless the host is private: a socket, loopback, an
+  RFC 1918 address, a single-label name, `*.internal` or `*.flycast`. The host is the one `pg`
+  connects to, so a `?host=` parameter counts over the URL's host name. Add `?sslmode=verify-full`
+  otherwise; `pg` 9 will stop checking the certificate for `sslmode=require`.
 - `PR_QUEST_MASTER_KEY`: 32 random bytes, base64-encoded, from `openssl rand -base64 32`. Keep it
   outside the database, as a deployment secret.
 - `PR_QUEST_PREVIOUS_MASTER_KEYS`: comma-separated older master keys, during a rotation.

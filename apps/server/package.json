@@ -9,7 +9,7 @@
     "dev": "tsx watch src/app/dev.ts",
     "start": "node dist/main.js",
     "db": "tsx src/app/db.ts",
-    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts src/app/db.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --external:pg --sourcemap --log-level=warning",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts src/app/db.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --external:pg --external:pg-connection-string --sourcemap --log-level=warning",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -18,6 +18,7 @@
     "@cursor/sdk": "1.0.40",
     "@pr-quest/contract": "workspace:*",
     "pg": "8.23.1",
+    "pg-connection-string": "2.14.1",
     "zod": "catalog:"
   },
   "devDependencies": {

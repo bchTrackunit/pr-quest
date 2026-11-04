@@ -1059,6 +1059,7 @@ __metadata:
     "@types/pg": "npm:8.23.1"
     esbuild: "npm:0.28.2"
     pg: "npm:8.23.1"
+    pg-connection-string: "npm:2.14.1"
     tsx: "npm:4.23.13"
     typescript: "catalog:"
     vitest: "catalog:"
@@ -2796,7 +2797,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-connection-string@npm:^2.14.1":
+"pg-connection-string@npm:2.14.1, pg-connection-string@npm:^2.14.1":
   version: 2.14.1
   resolution: "pg-connection-string@npm:2.14.1"
   checksum: 10c0/7321eed97579b4972a714909e7a444beb2186780fe7fd86ea719ff7c8f1fad07d7e5f85722c4992245b23683ed7d2fe2bdda8f7469fed4c016bb5c3379c575ca

@@ -111,6 +111,9 @@ describe('transportWarning', () => {
     'postgres:///pr_quest?host=/var/run/postgresql',
     'postgres://u:p@%2Fvar%2Frun%2Fpostgresql/pr_quest',
     'socket:/var/run/postgresql?db=pr_quest',
+    'postgres://u:p@db.example.com/pr_quest?host=10.0.3.7',
+    'postgres://u:p@db.example.com/pr_quest?host=pr-quest-db.internal',
+    'postgres://u:p@10.0.3.7/pr_quest?sslmode=no-verify',
   ])('trusts %s', (url) => {
     expect(transportWarning(url)).toBeUndefined();
   });
@@ -118,13 +121,33 @@ describe('transportWarning', () => {
   test.each([
     'postgres://u:s3cret@db.example.com/pr_quest',
     'postgres://u:s3cret@db.example.com/pr_quest?sslmode=disable',
+    'postgres://u:s3cret@db.example.com/pr_quest?ssl=0',
     'postgres://u:s3cret@172.32.0.1/pr_quest',
     'postgres://u:s3cret@11.0.0.1/pr_quest',
     'postgres://u:s3cret@192.169.1.1/pr_quest',
   ])('warns about %s, naming the host but not the password', (url) => {
     const warning = transportWarning(url);
 
-    expect(warning).toMatch(/reaches \S+ without TLS.*sslmode=require/);
+    expect(warning).toMatch(/reaches \S+ without TLS.*sslmode=verify-full/);
+    expect(warning).not.toContain('s3cret');
+  });
+
+  test('warns about the host a ?host= parameter connects to, not the one in the URL', () => {
+    const warning = transportWarning('postgres://u:s3cret@localhost/pr_quest?host=db.example.com');
+
+    expect(warning).toMatch(/reaches db\.example\.com without TLS/);
+  });
+
+  test.each([
+    'postgres://u:s3cret@db.example.com/pr_quest?sslmode=no-verify',
+    'postgres://u:s3cret@db.example.com/pr_quest?ssl=no-verify',
+    'postgres://u:s3cret@db.example.com/pr_quest?uselibpqcompat=true&sslmode=require',
+    'postgres://u:s3cret@localhost/pr_quest?host=db.example.com&sslmode=no-verify',
+  ])("warns that %s doesn't check the certificate", (url) => {
+    const warning = transportWarning(url);
+
+    expect(warning).toMatch(/reaches db\.example\.com .*certificate.*sslmode=verify-full/);
+    expect(warning).not.toContain('without TLS');
     expect(warning).not.toContain('s3cret');
   });
 });

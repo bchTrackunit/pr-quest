@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { type ConnectionOptions, parse } from 'pg-connection-string';
 import { z } from 'zod';
 
 /** What a statement returned. Rows are `unknown`; parse them with a schema before use. */
@@ -160,45 +161,48 @@ async function rollback(
  * RFC 1918 addresses, Fly's private names and single-label names such as a Compose service's.
  */
 const PRIVATE_HOST =
-  /(\.internal|\.flycast|^localhost|^127\.\d+\.\d+\.\d+|^\[::1\]|^10\.\d+\.\d+\.\d+|^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|^192\.168\.\d+\.\d+|^[a-z\d-]+)$/i;
+  /(\.internal|\.flycast|^localhost|^127\.\d+\.\d+\.\d+|^::1|^10\.\d+\.\d+\.\d+|^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|^192\.168\.\d+\.\d+|^[a-z\d-]+)$/i;
 
 /**
  * A warning when `url` reaches a public host without TLS, which would send every user's sealed
- * keys and the password in the clear. Names the host only, never the URL with its password.
+ * keys and the password in the clear, or over TLS that doesn't check the server's certificate.
+ * Names the host only, never the URL with its password.
  */
 export function transportWarning(url: string): string | undefined {
-  let parsed: URL;
+  let options: ConnectionOptions;
   try {
-    parsed = new URL(url);
+    // pg's own parser, so a `?host=` that overrides the URL's host name is the host checked.
+    options = parse(url);
   } catch {
     return undefined;
   }
-  const sslmode = parsed.searchParams.get('sslmode');
-  const ssl = parsed.searchParams.get('ssl');
-  const encrypted = (sslmode !== null && sslmode !== 'disable') || ssl === 'true' || ssl === '1';
-  if (encrypted || isSocketOrDefaultHost(parsed) || PRIVATE_HOST.test(parsed.hostname)) {
+  const host = options.host ?? '';
+  // No host means a socket or `PGHOST`; a path means a Unix socket.
+  if (host === '' || host.startsWith('/') || PRIVATE_HOST.test(host)) {
     return undefined;
   }
-  return `DATABASE_URL reaches ${parsed.hostname} without TLS. Add ?sslmode=require (or verify-full) unless that host is on a private network.`;
+  const tls = tlsOf(options.ssl);
+  if (tls === 'verified') {
+    return undefined;
+  }
+  if (tls === 'unverified') {
+    return `DATABASE_URL reaches ${host} over TLS without checking its certificate, so anyone on the way can pose as the database. Use ?sslmode=verify-full unless that host is on a private network.`;
+  }
+  return `DATABASE_URL reaches ${host} without TLS. Add ?sslmode=verify-full unless that host is on a private network.`;
 }
 
-/**
- * `socket:/dir`, `?host=/dir`, a host that is a percent-encoded directory, or no host at all
- * (`pg` then uses `PGHOST` or this machine).
- */
-function isSocketOrDefaultHost(url: URL): boolean {
-  let host = url.hostname;
-  try {
-    host = decodeURIComponent(host);
-  } catch {
-    // Not percent-encoded after all; keep it as it is.
+/** How `pg` treats the parsed `ssl` setting: `no-verify` keeps TLS but skips the certificate. */
+function tlsOf(ssl: ConnectionOptions['ssl']): 'none' | 'unverified' | 'verified' {
+  if (ssl === true) {
+    return 'verified';
   }
-  return (
-    url.protocol === 'socket:' ||
-    host === '' ||
-    url.searchParams.get('host')?.startsWith('/') === true ||
-    host.startsWith('/')
-  );
+  if (ssl === 'no-verify') {
+    return 'unverified';
+  }
+  if (typeof ssl === 'object') {
+    return ssl.rejectUnauthorized === false ? 'unverified' : 'verified';
+  }
+  return 'none';
 }
 
 /** A `bytea` column, which `pg` reads as a `Buffer` and PGlite as a `Uint8Array`. */
