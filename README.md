@@ -59,8 +59,9 @@ PR Quest warns at startup when other users may read that file.
 | `PR_QUEST_UI_PORT`          | UI port, default `4318`                                                                            |
 | `PR_QUEST_STATE_DIR`        | Where PR Quest keeps its data, default `~/.pr-quest` (see [Where state lives](#where-state-lives)) |
 
-`PR_QUEST_MODE`, `PR_QUEST_HOST`, `PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to
-[hosted mode](docs/development.md#hosted-mode), which isn't usable yet.
+`PR_QUEST_MODE`, `PR_QUEST_HOST`, `PR_QUEST_PUBLIC_ORIGIN`, `PR_QUEST_ALLOWED_HOSTS` and the
+[hosted storage](docs/development.md#hosted-storage) settings (`DATABASE_URL` and the master keys)
+belong to [hosted mode](docs/development.md#hosted-mode), which isn't usable yet.
 
 PR Quest reads settings from three places, and the first one that sets a value wins:
 
@@ -182,7 +183,8 @@ XP comes only from real review actions, never from just starting an agent:
 
 Base XP is multiplied by tier: Trivial ×1, Normal ×1.5, Hard ×2, Boss ×3. Approving the same PR
 twice earns XP once. Reaching the next level takes `100 × level^1.5` XP, and the streak counts
-consecutive days with at least one rewarded action.
+consecutive days, in your [time zone](docs/how-it-works.md#time-zone), with at least one rewarded
+action.
 
 There are 27 achievements, from _First Blood_ to secret ones that show as "???" until they
 unlock. Each pays bonus XP once, by rarity: 25 (common), 50 (rare), 100 (epic) or 200
@@ -199,7 +201,7 @@ Everything is under `~/.pr-quest`, or `PR_QUEST_STATE_DIR`. Directories are crea
 ~/.pr-quest/
 ├── .env                optional settings and keys that you write; PR Quest only reads it
 ├── secrets.json        the GitHub OAuth token and the API keys saved in Settings
-├── settings.json       the review provider and the model per provider
+├── settings.json       the review provider, the model per provider and the time zone
 └── users/<login>/      one folder per GitHub user
     ├── state.json      XP, streak, achievements and the last 200 review runs
     └── quests.json     the last quest list, for a fast start and rate-limit backoff

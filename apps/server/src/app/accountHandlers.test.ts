@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { DeviceFlowStatus, ListModelsResponse } from '@pr-quest/contract/api';
 import { createAccountHandlers, type AccountServices } from './accountHandlers.ts';
-import { ApiKeys, type AppSettings, type SettingsPatch } from '../features/settings/index.ts';
+import {
+  ApiKeys,
+  type AppSettings,
+  applySettingsPatch,
+  type SettingsPatch,
+  type SettingsUpdateOptions,
+} from '../features/settings/index.ts';
 import { createRouter, loopbackOrigins } from '../platform/router.ts';
 import type { SecretName } from '../platform/secrets.ts';
 
@@ -47,18 +53,8 @@ function fakeServices(): FakeServices {
     apiKeys,
     settings: {
       get: () => settings,
-      update: vi.fn(async (patch: SettingsPatch) => {
-        const models = { ...settings.models };
-        for (const [provider, model] of Object.entries(patch.models ?? {})) {
-          if (provider === 'cursor' || provider === 'claude') {
-            if (model) {
-              models[provider] = model;
-            } else {
-              delete models[provider];
-            }
-          }
-        }
-        settings = { reviewProvider: patch.reviewProvider ?? settings.reviewProvider, models };
+      update: vi.fn(async (patch: SettingsPatch, options?: SettingsUpdateOptions) => {
+        settings = applySettingsPatch(settings, patch, options);
         return settings;
       }),
     },
@@ -179,7 +175,95 @@ describe('settings', () => {
     });
   });
 
+  test('PUT /api/settings saves an IANA time zone under its canonical name', async () => {
+    const response = await send('PUT', '/api/settings', {
+      body: { timeZone: 'europe/copenhagen' },
+    });
+
+    expect(response).toMatchObject({ status: 200, body: { timeZone: 'Europe/Copenhagen' } });
+    expect(services.settings.update).toHaveBeenCalledWith({ timeZone: 'Europe/Copenhagen' });
+  });
+
+  describe('with a time zone change limit, as in hosted mode', () => {
+    const DAY = 24 * 60 * 60_000;
+    let now: Date;
+
+    beforeEach(async () => {
+      now = new Date('2026-11-02T09:00:00Z');
+      settings = {
+        reviewProvider: 'cursor',
+        models: {},
+        timeZone: 'Asia/Tokyo',
+        timeZoneChangedAt: '2026-11-01T10:00:00.000Z',
+      };
+      services = { ...fakeServices(), timeZoneChanges: { minIntervalMs: DAY, now: () => now } };
+      await listen(services);
+    });
+
+    test('refuses a second change within a day, saying when it may change again', async () => {
+      const response = await send('PUT', '/api/settings', {
+        body: { timeZone: 'Europe/Copenhagen' },
+      });
+
+      expect(response).toMatchObject({
+        status: 429,
+        body: {
+          error: {
+            code: 'rateLimited',
+            message: expect.stringContaining('2026-11-02T10:00:00.000Z'),
+          },
+        },
+      });
+      await expect(
+        send('PUT', '/api/settings', { body: { timeZone: null } }),
+      ).resolves.toMatchObject({ status: 429 });
+      expect(settings.timeZone).toBe('Asia/Tokyo');
+    });
+
+    test('checks the limit inside the update, against the stored settings', async () => {
+      await send('PUT', '/api/settings', { body: { timeZone: 'Europe/Copenhagen' } });
+
+      expect(services.settings.update).toHaveBeenCalledWith(
+        { timeZone: 'Europe/Copenhagen' },
+        { now, minTimeZoneIntervalMs: DAY },
+      );
+    });
+
+    test('still saves the same zone and the other settings', async () => {
+      const same = await send('PUT', '/api/settings', {
+        body: { timeZone: 'asia/tokyo', reviewProvider: 'claude' },
+      });
+
+      expect(same.status).toBe(200);
+      expect(services.settings.update).toHaveBeenCalledTimes(1);
+    });
+
+    test('allows the change once a day has passed', async () => {
+      now = new Date('2026-11-02T10:00:00Z');
+
+      const response = await send('PUT', '/api/settings', {
+        body: { timeZone: 'Europe/Copenhagen' },
+      });
+
+      expect(response).toMatchObject({ status: 200, body: { timeZone: 'Europe/Copenhagen' } });
+      expect(settings.timeZoneChangedAt).toBe('2026-11-02T10:00:00.000Z');
+    });
+  });
+
+  test('PUT /api/settings clears the time zone with null', async () => {
+    settings = { reviewProvider: 'cursor', models: {}, timeZone: 'Asia/Tokyo' };
+
+    const response = await send('PUT', '/api/settings', { body: { timeZone: null } });
+
+    expect(response.status).toBe(200);
+    expect(response.body).not.toHaveProperty('timeZone');
+    expect(services.settings.update).toHaveBeenCalledWith({ timeZone: null });
+  });
+
   test.each([
+    ['an unknown time zone', { timeZone: 'Mars/Olympus_Mons' }],
+    ['a fixed UTC offset', { timeZone: '+02:00' }],
+    ['a non-string time zone', { timeZone: 1 }],
     ['an unknown provider', { reviewProvider: 'openai' }],
     ['an unknown field', { reviewProvider: 'claude', theme: 'dark' }],
     ['a model for an unknown provider', { models: { openai: 'gpt' } }],

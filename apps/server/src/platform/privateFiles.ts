@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 
+import { documentVersion } from './documentCodec.ts';
+
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 
@@ -32,15 +34,20 @@ export async function writePrivateJson(file: string, value: unknown): Promise<vo
   }
 }
 
-/** Throws when `parsed` carries a `version` above `supported`: a newer build wrote it. */
-export function refuseNewerVersion(parsed: unknown, supported: number, file: string): void {
-  const version =
-    typeof parsed === 'object' && parsed !== null && 'version' in parsed
-      ? parsed.version
-      : undefined;
-  if (typeof version === 'number' && version > supported) {
+/**
+ * Throws when `parsed` carries a `version` above `supported`: a newer build wrote it. `source` names
+ * where it came from, such as a file path, and `remedy` says what to do about it.
+ */
+export function refuseNewerVersion(
+  parsed: unknown,
+  supported: number,
+  source: string,
+  remedy = 'Update PR Quest, or move the file away to start fresh.',
+): void {
+  const version = documentVersion(parsed);
+  if (version !== undefined && version > supported) {
     throw new Error(
-      `${file} was written by a newer version of PR Quest (file version ${version}, this build reads version ${supported}). Update PR Quest, or move the file away to start fresh.`,
+      `${source} was written by a newer version of PR Quest (version ${version}, this build reads version ${supported}). ${remedy}`,
     );
   }
 }

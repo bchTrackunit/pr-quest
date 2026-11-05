@@ -14,6 +14,7 @@ import type {
   UnlockedAchievement,
   XpReason,
 } from '@pr-quest/contract/api';
+import { machineTimeZone, previousDate, zonedTime } from '../../platform/timeZone.ts';
 import {
   ACHIEVEMENT_RULES,
   type AchievementFacts,
@@ -64,7 +65,7 @@ export interface GameState {
   counters: PlayerCounters;
   /** Streak as of `lastReviewDate`; see `currentStreak` for the value shown today. */
   streakDays: number;
-  /** Local calendar date (`YYYY-MM-DD`) of the latest rewarded action. */
+  /** Calendar date (`YYYY-MM-DD`) of the latest rewarded action, in the player's time zone. */
   lastReviewDate?: string;
   /** Quest ids whose approval already earned XP. */
   rewardedApprovals: Array<string>;
@@ -90,10 +91,17 @@ export interface ReviewAction {
   board?: Array<BoardQuest>;
 }
 
-/** Who is playing, so their own PRs don't count toward Diplomat. */
+/** Who is playing, so their own PRs don't count toward Diplomat, and where. */
 export interface PlayerContext {
   login?: string;
+  /**
+   * The IANA zone whose calendar days and clock hours streaks, daily counters and time-of-day
+   * achievements follow. Defaults to the machine's zone, which is the player's in local mode.
+   */
+  timeZone?: string;
 }
+
+const zoneOf = (player: PlayerContext): string | undefined => player.timeZone ?? machineTimeZone();
 
 export interface FinishedReview {
   questId: string;
@@ -150,19 +158,20 @@ export function levelProgress(
   return { level, xpIntoLevel: remaining, xpForNextLevel: xpForLevel(level) };
 }
 
-export function localDate(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function previousLocalDate(date: Date): string {
-  return localDate(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1));
+/** The calendar date (`YYYY-MM-DD`) of `date` in `timeZone`. */
+export function localDate(date: Date, timeZone: string | undefined = machineTimeZone()): string {
+  return zonedTime(date, timeZone).date;
 }
 
 /** The streak still counts on the day after the last action, so it can be extended today. */
-export function currentStreak(state: GameState, now: Date): number {
+export function currentStreak(
+  state: GameState,
+  now: Date,
+  timeZone: string | undefined = machineTimeZone(),
+): number {
   const last = state.lastReviewDate;
-  return last === localDate(now) || last === previousLocalDate(now) ? state.streakDays : 0;
+  const today = localDate(now, timeZone);
+  return last === today || last === previousDate(today) ? state.streakDays : 0;
 }
 
 export function applyReviewAction(
@@ -190,14 +199,17 @@ export function applyReviewAction(
     counters.quickDraws++;
   }
 
-  const facts = actionFacts(state.ledger, action, waitedMs);
-  const today = localDate(action.at);
+  const timeZone = zoneOf(player);
+  const facts = actionFacts(state.ledger, action, waitedMs, timeZone);
+  const today = facts.local.date;
   const next: GameState = {
     ...state,
     xp: state.xp + amount,
     counters,
     streakDays:
-      today === state.lastReviewDate ? state.streakDays : currentStreak(state, action.at) + 1,
+      today === state.lastReviewDate
+        ? state.streakDays
+        : currentStreak(state, action.at, timeZone) + 1,
     lastReviewDate: today,
     rewardedApprovals:
       action.kind === 'approved'
@@ -205,19 +217,20 @@ export function applyReviewAction(
         : state.rewardedApprovals,
     ledger: recordAction(state.ledger, action, facts, today, player),
   };
-  return withUnlocks(next, [{ amount, reason: action.kind, questId: action.questId }], action.at, {
-    action: facts,
-  });
+  const grants: Array<XpGrant> = [{ amount, reason: action.kind, questId: action.questId }];
+  return withUnlocks(next, grants, action.at, timeZone, { action: facts });
 }
 
 function actionFacts(
   ledger: AchievementLedger,
   action: ReviewAction,
   waitedMs: number,
+  timeZone: string | undefined,
 ): ActionFacts {
   const facts: ActionFacts = {
     kind: action.kind,
     at: action.at,
+    local: zonedTime(action.at, timeZone),
     difficulty: action.difficulty,
     waitedMs,
     wasReviewedBefore: ledger.reviewedPrs.includes(prKey(action.questId)),
@@ -292,6 +305,7 @@ export function applyAgentReviewFinished(
   state: GameState,
   review: FinishedReview,
   at: Date,
+  player: PlayerContext = {},
 ): GameUpdate {
   const key = prKey(review.questId);
   const counters = { ...state.counters, agentReviews: state.counters.agentReviews + 1 };
@@ -300,26 +314,31 @@ export function applyAgentReviewFinished(
     reviewedPrs: withEntry(state.ledger.reviewedPrs, key),
     runProviders: withRunProvider(state.ledger.runProviders, key, review.provider),
   };
-  return withUnlocks({ ...state, counters, ledger }, [], at);
+  return withUnlocks({ ...state, counters, ledger }, [], at, zoneOf(player));
 }
 
 /** The quest list was refreshed; an empty list can unlock Inbox Zero. */
 export function applyQueueChecked(
   state: GameState,
   check: { questCount: number; at: Date },
+  player: PlayerContext = {},
 ): GameUpdate {
+  const timeZone = zoneOf(player);
   const emptyAfterActionToday =
-    check.questCount === 0 && state.lastReviewDate === localDate(check.at);
-  return withUnlocks(state, [], check.at, { queueEmptyAfterActionToday: emptyAfterActionToday });
+    check.questCount === 0 && state.lastReviewDate === localDate(check.at, timeZone);
+  return withUnlocks(state, [], check.at, timeZone, {
+    queueEmptyAfterActionToday: emptyAfterActionToday,
+  });
 }
 
 function withUnlocks(
   state: GameState,
   grants: Array<XpGrant>,
   at: Date,
+  timeZone: string | undefined,
   extra: Partial<Pick<AchievementFacts, 'action' | 'queueEmptyAfterActionToday'>> = {},
 ): GameUpdate {
-  const facts: AchievementFacts = { ...factsFor(state, at), ...extra };
+  const facts: AchievementFacts = { ...factsFor(state, at, timeZone), ...extra };
   const owned = new Set(state.achievements.map((entry) => entry.id));
   const newlyMet = ACHIEVEMENT_RULES.filter((rule) => !owned.has(rule.def.id) && rule.isMet(facts));
   if (newlyMet.length === 0 && grants.length === 0) {
@@ -347,24 +366,28 @@ function withUnlocks(
   };
 }
 
-function factsFor(state: GameState, now: Date): AchievementFacts {
+function factsFor(state: GameState, now: Date, timeZone: string | undefined): AchievementFacts {
   const { reviewsPosted, approvals, changesRequested } = state.counters;
-  const day = state.ledger.day?.date === localDate(now) ? state.ledger.day : undefined;
+  const day = state.ledger.day?.date === localDate(now, timeZone) ? state.ledger.day : undefined;
   return {
     counters: state.counters,
     ledger: state.ledger,
     totalActions: reviewsPosted + approvals + changesRequested,
-    streakDays: currentStreak(state, now),
+    streakDays: currentStreak(state, now, timeZone),
     queueEmptyAfterActionToday: false,
     today: { trivialApprovals: day?.trivialApprovals ?? 0, directPrs: day?.directPrs.length ?? 0 },
   };
 }
 
-export function toPlayerState(state: GameState, now: Date): PlayerState {
+export function toPlayerState(
+  state: GameState,
+  now: Date,
+  context: PlayerContext = {},
+): PlayerState {
   const player: PlayerState = {
     xp: state.xp,
     ...levelProgress(state.xp),
-    streakDays: currentStreak(state, now),
+    streakDays: currentStreak(state, now, zoneOf(context)),
     achievements: state.achievements,
     counters: state.counters,
   };
@@ -384,8 +407,12 @@ function redacted(def: AchievementDef): AchievementDef {
   };
 }
 
-export function achievementStatuses(state: GameState, now: Date): Array<AchievementStatus> {
-  const facts = factsFor(state, now);
+export function achievementStatuses(
+  state: GameState,
+  now: Date,
+  player: PlayerContext = {},
+): Array<AchievementStatus> {
+  const facts = factsFor(state, now, zoneOf(player));
   return ACHIEVEMENT_RULES.map((rule) => {
     const unlockedAt = state.achievements.find((entry) => entry.id === rule.def.id)?.unlockedAt;
     const status: AchievementStatus =

@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parseEnv } from 'node:util';
+import { inspect, parseEnv } from 'node:util';
 
+import { MASTER_KEY_VARIABLE, MasterKeyring, PREVIOUS_MASTER_KEYS_VARIABLE } from './envelope.ts';
 import { readPorts, SERVER_HOST } from '@pr-quest/contract/ports';
 
 /**
@@ -34,6 +35,58 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com';
  */
 export const DEFAULT_GITHUB_CLIENT_ID = '';
 
+/**
+ * `DATABASE_URL`, which can hold the database password. It keeps the URL in a `#private` field, so
+ * logging or serialising it shows only the URL without the password or the query string.
+ */
+export class DatabaseUrl {
+  readonly #url: string;
+
+  public constructor(url: string) {
+    this.#url = url;
+  }
+
+  /** The whole connection string, password included, for connecting only. */
+  public reveal(): string {
+    return this.#url;
+  }
+
+  public toString(): string {
+    let shown: URL;
+    try {
+      shown = new URL(this.#url);
+    } catch {
+      return 'postgres://***';
+    }
+    if (shown.password !== '') {
+      shown.password = '***';
+    }
+    shown.search = '';
+    return shown.href;
+  }
+
+  public toJSON(): string {
+    return this.toString();
+  }
+
+  public [inspect.custom](): string {
+    return `DatabaseUrl(${this.toString()})`;
+  }
+}
+
+/** Hosted mode's Postgres database and the master keys that encrypt users' API keys in it. */
+export interface DatabaseConfig {
+  /** `DATABASE_URL`, a `postgres://` connection string. */
+  url: DatabaseUrl;
+  /**
+   * `PR_QUEST_MASTER_KEY` and `PR_QUEST_PREVIOUS_MASTER_KEYS`, held only as a keyring, so logging
+   * or serialising the config never shows them.
+   */
+  keyring: MasterKeyring;
+  /** `PR_QUEST_DATABASE_POOL_MAX`: most connections per server process, 1 to 100; default 10. */
+  poolMax?: number;
+}
+
 interface BaseConfig {
   /** Enables "Sign in with GitHub"; without it PR Quest relies on the gh CLI's token. */
   githubClientId?: string;
@@ -53,6 +106,7 @@ export interface LocalConfig extends BaseConfig {
   host: LoopbackHost;
   allowedHosts: ReadonlyArray<LoopbackHostname>;
   publicOrigin?: never;
+  database?: never;
 }
 
 /** Many players behind HTTPS. Each saves their own API keys, so none come from the environment. */
@@ -67,6 +121,8 @@ export interface HostedConfig extends BaseConfig {
   linearApiKey?: never;
   cursorApiKey?: never;
   anthropicApiKey?: never;
+  /** Postgres storage, from `DATABASE_URL`. Without it, the embedding app supplies the storage. */
+  database?: DatabaseConfig;
 }
 
 export type AppConfig = LocalConfig | HostedConfig;
@@ -131,7 +187,8 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
         );
       }
     }
-    return { ...base, ...boundary };
+    const database = databaseConfig(read);
+    return { ...base, ...boundary, ...(database ? { database } : {}) };
   }
   return {
     ...base,
@@ -176,6 +233,9 @@ export function assertSafeConfig(config: AppConfig): void {
         `Hosted mode takes no API keys from the config (${shared.map((field) => ENV_API_KEYS[field]).join(', ')}): every player would share them`,
       );
     }
+    if (config.database !== undefined) {
+      assertDatabase(config.database);
+    }
     return;
   }
   const host: string = config.host;
@@ -190,6 +250,65 @@ export function assertSafeConfig(config: AppConfig): void {
   const { publicOrigin }: { publicOrigin?: unknown } = config;
   if (publicOrigin !== undefined) {
     throw new Error('Local mode has no public origin; that is hosted mode (PR_QUEST_MODE=hosted)');
+  }
+  const { database }: { database?: unknown } = config;
+  if (database !== undefined) {
+    throw new Error(
+      'Local mode keeps its state in files, not a database; that is hosted mode (PR_QUEST_MODE=hosted)',
+    );
+  }
+}
+
+/** Local mode never reads `DATABASE_URL`, which other tools on the machine may set. */
+function databaseConfig(read: (name: string) => string | undefined): DatabaseConfig | undefined {
+  const url = read('DATABASE_URL');
+  if (url === undefined) {
+    return undefined;
+  }
+  const masterKey = read(MASTER_KEY_VARIABLE);
+  if (masterKey === undefined) {
+    throw new Error(
+      `${MASTER_KEY_VARIABLE} is required with DATABASE_URL: it encrypts every user's API keys. Create one with \`openssl rand -base64 32\` and keep it in the platform's secrets.`,
+    );
+  }
+  const poolMax = read('PR_QUEST_DATABASE_POOL_MAX');
+  const database: DatabaseConfig = {
+    url: new DatabaseUrl(url),
+    keyring: MasterKeyring.fromConfig({
+      current: masterKey,
+      previous: read(PREVIOUS_MASTER_KEYS_VARIABLE),
+    }),
+    ...(poolMax === undefined ? {} : { poolMax: decimal(poolMax) }),
+  };
+  assertDatabase(database);
+  return database;
+}
+
+/** Plain decimal digits, which `Number` alone would widen to `0x10` or `1e1`; otherwise `NaN`. */
+function decimal(text: string): number {
+  return /^\d+$/.test(text) ? Number(text) : Number.NaN;
+}
+
+/** Fails at startup rather than on the first sign-in; the keyring has already checked the keys. */
+function assertDatabase(database: DatabaseConfig): void {
+  const { url }: { url: unknown } = database;
+  if (!(url instanceof DatabaseUrl)) {
+    throw new Error(
+      'The database config needs its url as a DatabaseUrl, so logging the config never shows the password',
+    );
+  }
+  if (!/^postgres(?:ql)?:\/\//.test(url.reveal())) {
+    throw new Error('DATABASE_URL must be a postgres:// connection string');
+  }
+  const { poolMax } = database;
+  if (poolMax !== undefined && (!Number.isInteger(poolMax) || poolMax < 1 || poolMax > 100)) {
+    throw new Error('PR_QUEST_DATABASE_POOL_MAX must be an integer between 1 and 100');
+  }
+  const { keyring }: { keyring: unknown } = database;
+  if (!(keyring instanceof MasterKeyring)) {
+    throw new Error(
+      `The database config needs a keyring from MasterKeyring.fromConfig, which reads ${MASTER_KEY_VARIABLE}`,
+    );
   }
 }
 

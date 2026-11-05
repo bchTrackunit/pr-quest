@@ -20,6 +20,7 @@
   "scripts": {
     "dev": "concurrently --kill-others --names api,ui --prefix-colors cyan,magenta \"yarn workspace @pr-quest/server dev\" \"yarn workspace @pr-quest/web dev\"",
     "start": "yarn build && yarn workspace @pr-quest/server start",
+    "db": "yarn workspace @pr-quest/server db",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint",

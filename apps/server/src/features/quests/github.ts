@@ -192,6 +192,7 @@ const MAX_UNANCHORED_LISTED = 5;
 const PullRequestHeadSchema = z.object({ head: z.object({ sha: z.string().min(1) }) });
 
 const ViewerSchema = z.object({
+  id: z.number().int().positive(),
   login: z.string().min(1),
   name: z.string().nullish(),
   avatar_url: z.string().nullish(),
@@ -199,6 +200,8 @@ const ViewerSchema = z.object({
 
 /** The signed-in GitHub user. */
 export interface GitHubViewer {
+  /** GitHub's account id, which never changes; the login can be renamed and reused by others. */
+  id: number;
   login: string;
   name?: string;
   avatarUrl?: string;
@@ -618,7 +621,7 @@ export class GitHubClient {
 
   public async fetchViewer(): Promise<GitHubViewer> {
     const raw = parseJson(await this.api.request('GET', '/user'), ViewerSchema, 'user');
-    const viewer: GitHubViewer = { login: raw.login };
+    const viewer: GitHubViewer = { id: raw.id, login: raw.login };
     if (raw.name) {
       viewer.name = raw.name;
     }

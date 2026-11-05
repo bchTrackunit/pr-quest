@@ -10,6 +10,7 @@ import { ApiKeys, ModelCatalog, type SettingsStore } from '../features/settings/
 import { ClaudeReviewer, type CreateMessage, ReviewRunService } from '../features/reviews/index.ts';
 import { type AppConfig, assertSafeConfig } from '../platform/config.ts';
 import { EventHub } from '../platform/events.ts';
+import { type Database, sharedDatabase } from '../platform/postgres/database.ts';
 import { GameService, type StateStore } from '../features/game/index.ts';
 import { GitHubClient, LinearReviewClient, QuestService } from '../features/quests/index.ts';
 import {
@@ -28,6 +29,7 @@ import {
   type RouteHandlers,
 } from '../platform/router.ts';
 import type { SecretStore } from '../platform/secrets.ts';
+import { type GitHubUser, githubUser } from '../platform/githubUser.ts';
 import {
   type IdentityContext,
   type IdentityFactory,
@@ -41,6 +43,7 @@ import {
   MACHINE_SCOPE,
   scopeKey,
   type StorageScope,
+  userScope,
 } from './storage.ts';
 
 /** One player's game, opened when their sign-in is first seen. */
@@ -69,6 +72,9 @@ function perRequest<TName extends JsonRouteName>(
   };
 }
 
+/** A hosted player may move their streak calendar once a day, so hopping zones can't stretch a day. */
+const TIME_ZONE_CHANGE_INTERVAL_MS = 24 * 60 * 60_000;
+
 /** Sign-in failures as API errors: 401 when nobody is signed in, 502 when GitHub can't say. */
 function signInFailure(error: unknown): never {
   if (error instanceof NotSignedInError) {
@@ -90,6 +96,8 @@ export interface AppOptions {
   ghToken?: () => Promise<string | undefined>;
   /** Where everything is saved. Defaults to the JSON files in `config.stateDir`. */
   storage?: AppStorage;
+  /** The database behind `storage`, if any, for the identity resolver's own tables. */
+  database?: Database;
   /**
    * Works out who each request acts as. Defaults to local mode's one player per machine. An
    * injected resolver turns off the device flow and the gh fallback, which only work locally.
@@ -197,8 +205,16 @@ export async function createApp(options: AppOptions): Promise<App> {
    * must not load a second copy that a run still finishing in the old session would overwrite.
    */
   const stores = new Map<string, Promise<StateStore>>();
+  /**
+   * Hosted games belong to the account id, so a rename keeps the open store; a local game lives in
+   * a folder per login, so a rename opens that login's folder.
+   */
+  const userKey = ({ id, login }: GitHubUser): string => (hosted ? String(id) : login);
 
-  const openUser = async ({ login, token }: SessionContext): Promise<UserServices> => {
+  const openUser = async (session: SessionContext): Promise<UserServices> => {
+    const { token } = session;
+    const player = githubUser(session.user.id, session.user.login);
+    const { login } = player;
     const github = new GitHubClient(
       new GitHubApi({
         token,
@@ -207,18 +223,23 @@ export async function createApp(options: AppOptions): Promise<App> {
       }),
       { onWarning: warn },
     );
+    await storage.registerUser?.(player);
     // First, so a scope the app refuses leaves the player's game unopened.
-    const scoped = await servicesFor(identity.scopeFor(login));
-    let opening = stores.get(login);
+    const scoped = await servicesFor(identity.scopeFor(player));
+    const storeKey = userKey(player);
+    let opening = stores.get(storeKey);
     const firstOpen = opening === undefined;
     if (!opening) {
-      opening = storage.gameState(login);
-      stores.set(login, opening);
-      opening.catch(() => stores.delete(login));
+      opening = storage.gameState(player);
+      stores.set(storeKey, opening);
+      opening.catch(() => stores.delete(storeKey));
     }
-    const [store, cache] = await Promise.all([opening, storage.questCache(login)]);
+    const [store, cache] = await Promise.all([opening, storage.questCache(player)]);
     const events = new EventHub();
-    const game = new GameService(store, events, { login });
+    const game = new GameService(store, events, {
+      login,
+      timeZone: () => scoped.settings.get().timeZone,
+    });
     const runs = new ReviewRunService({
       store,
       events,
@@ -258,12 +279,14 @@ export async function createApp(options: AppOptions): Promise<App> {
     };
   };
 
-  const releaseUser = (login: string): void => {
-    stores.delete(login);
-    const scope = identity.scopeFor(login);
+  const releaseUser = (given: GitHubUser): void => {
+    const player = githubUser(given.id, given.login);
+    stores.delete(userKey(player));
+    const scope = identity.scopeFor(player);
     if (scope.kind === 'user') {
       scopes.delete(scopeKey(scope));
     }
+    storage.releaseUser?.(player);
   };
 
   const context: IdentityContext<UserServices> = {
@@ -273,6 +296,9 @@ export async function createApp(options: AppOptions): Promise<App> {
     log: info,
     warn,
     releaseUser,
+    secretsFor: async (player) =>
+      (await servicesFor(hosted ? userScope(player) : MACHINE_SCOPE)).secrets,
+    ...(options.database ? { database: sharedDatabase(options.database) } : {}),
   };
   let identity: IdentityResolver<UserServices>;
   if (options.identity) {
@@ -311,7 +337,14 @@ export async function createApp(options: AppOptions): Promise<App> {
           const session = await identity.resolve(req, res);
           return session ? { account: session.account } : {};
         } catch (error) {
-          return { error: error instanceof Error ? error.message : String(error) };
+          if (error instanceof GitHubApiError) {
+            return { error: error.message };
+          }
+          // Anything else may be about stored keys or the database, which the browser needn't see.
+          warn(
+            `Could not check who is signed in: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return { error: "Couldn't check who is signed in; see the server log" };
         }
       },
       signOut: async () => {
@@ -330,7 +363,11 @@ export async function createApp(options: AppOptions): Promise<App> {
     const scoped = await servicesFor(scope);
     let handlers = settingsHandlers.get(scoped);
     if (!handlers) {
-      handlers = createSettingsHandlers(scoped);
+      handlers = createSettingsHandlers(
+        hosted
+          ? { ...scoped, timeZoneChanges: { minIntervalMs: TIME_ZONE_CHANGE_INTERVAL_MS } }
+          : scoped,
+      );
       settingsHandlers.set(scoped, handlers);
     }
     return handlers;

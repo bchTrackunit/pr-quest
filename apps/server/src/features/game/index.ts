@@ -5,6 +5,7 @@ export {
   type PersistedState,
   type QuestSnapshot,
   runQuestOf,
+  STATE_DOCUMENT,
   type StateStore,
   type StoredRun,
 } from './store.ts';

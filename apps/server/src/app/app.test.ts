@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { copyFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import {
   createServer,
@@ -9,14 +10,17 @@ import {
 } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createApp, type App, type AppOptions, type UserServices } from './app.ts';
 import type { AppSettings, SettingsStore } from '../features/settings/index.ts';
+import { MasterKeyring } from '../platform/envelope.ts';
 import { NotSignedInError } from '../platform/githubApi.ts';
 import type { SecretName, SecretStore } from '../platform/secrets.ts';
-import type { IdentityFactory } from './identity.ts';
+import { openTestDatabase, type TestDatabase } from '../platform/test-utils/postgres.ts';
+import { openPostgresStorage } from './postgresStorage.ts';
+import type { IdentityContext, IdentityFactory } from './identity.ts';
 import type { Session } from './sessions.ts';
 import {
   type AppStorage,
@@ -26,6 +30,7 @@ import {
   type StorageScope,
   userScope,
 } from './storage.ts';
+import { type GitHubUser, githubUser } from '../platform/githubUser.ts';
 import type { CreateMessage } from '../features/reviews/index.ts';
 import type { AppConfig, HostedConfig } from '../platform/config.ts';
 import { createRouter } from '../platform/router.ts';
@@ -49,6 +54,15 @@ let server: Server | undefined;
 let port: number;
 let ghToken: string | undefined;
 let logins: Record<string, string>;
+/** Overrides the account id `/user` answers with for a token, as for a login another account took. */
+let tokenIds: Record<string, number>;
+
+/** GitHub's account id for each login the fake GitHub answers for. */
+const ACCOUNT_IDS: Record<string, number> = { brianchristensen: 4101, 'other-player': 4102 };
+const accountOf = (login: string): GitHubUser => ({
+  id: ACCOUNT_IDS[login.toLowerCase()] ?? 4199,
+  login: login.toLowerCase(),
+});
 let logs: Array<string>;
 
 type Route = (url: URL, init: RequestInit, token: string) => Promise<Response | undefined>;
@@ -67,7 +81,7 @@ const fakeGitHub = vi.fn(async (url: string, init: RequestInit): Promise<Respons
   if (pathname === '/user') {
     const login = logins[auth.replace(/^Bearer /, '')];
     return login
-      ? Response.json({ login })
+      ? Response.json({ id: tokenIds[auth.replace(/^Bearer /, '')] ?? accountOf(login).id, login })
       : Response.json({ message: 'Bad credentials' }, { status: 401 });
   }
   if (pathname === '/search/issues') {
@@ -180,6 +194,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-app-'));
   ghToken = undefined;
   logins = { [GH_TOKEN]: 'BrianChristensen', [OAUTH_TOKEN]: 'Other-Player' };
+  tokenIds = {};
   logs = [];
   route = undefined;
   createMessage = async () => {
@@ -433,7 +448,7 @@ describe('createApp', () => {
 
 /**
  * A stand-in for a hosted sign-in: the `X-Test-Token` header names the GitHub token, and every
- * login keeps its own session open at the same time. It names the session in an `X-Test-Session`
+ * account keeps its own session open at the same time. It names the session in an `X-Test-Session`
  * response header, as a hosted resolver would set its cookie, and releases a player who signs out.
  */
 const headerIdentity: IdentityFactory<UserServices> = async ({
@@ -442,45 +457,45 @@ const headerIdentity: IdentityFactory<UserServices> = async ({
   releaseUser,
 }) => {
   const open = new Map<string, Promise<Session<UserServices>>>();
-  const sessionOf = async (req: IncomingMessage, res: ServerResponse) => {
+  const signedIn = async (req: IncomingMessage, res: ServerResponse) => {
     const token = req.headers['x-test-token'];
     if (typeof token !== 'string') {
       return undefined;
     }
-    const { login } = await fetchViewer(token);
-    const key = login.toLowerCase();
+    const viewer = await fetchViewer(token);
+    const user = githubUser(viewer.id, viewer.login);
+    const key = String(user.id);
     let session = open.get(key);
     if (!session) {
-      session = openUser({ login: key, token: async () => token }).then((services) => ({
-        account: { login, tokenSource: 'oauth' as const },
+      session = openUser({ user, token: async () => token }).then((services) => ({
+        account: { login: viewer.login, tokenSource: 'oauth' as const },
         services,
       }));
       open.set(key, session);
     }
     res.setHeader('X-Test-Session', key);
-    return session;
+    return { user, key, session: await session };
   };
   return {
-    resolve: sessionOf,
+    resolve: async (req, res) => (await signedIn(req, res))?.session,
     scope: async (req, res) => {
-      const session = await sessionOf(req, res);
-      if (!session) {
+      const signed = await signedIn(req, res);
+      if (!signed) {
         throw new NotSignedInError();
       }
-      return userScope(session.account.login);
+      return userScope(signed.user);
     },
     scopeFor: userScope,
     signOut: async (req, res) => {
-      const session = await sessionOf(req, res);
-      if (!session) {
+      const signed = await signedIn(req, res);
+      if (!signed) {
         return undefined;
       }
-      const key = session.account.login.toLowerCase();
       res.removeHeader('X-Test-Session');
-      open.delete(key);
-      session.services.stop();
-      releaseUser(key);
-      return session.account;
+      open.delete(signed.key);
+      signed.session.services.stop();
+      releaseUser(signed.user);
+      return signed.session.account;
     },
     rejected: () => undefined,
     warmUp: async () => undefined,
@@ -591,7 +606,7 @@ describe('createApp with an injected identity and storage', () => {
 
     const player = await send('GET', '/api/player', undefined, as(GH_TOKEN));
 
-    expect(player.headers['x-test-session']).toBe('brianchristensen');
+    expect(player.headers['x-test-session']).toBe(String(accountOf('brianchristensen').id));
   });
 
   test("serves the identity's own routes outside the JSON API", async () => {
@@ -707,9 +722,9 @@ describe('createApp in hosted mode', () => {
       identity: headerIdentity,
       storage: {
         ...storage,
-        gameState: async (login) => {
+        gameState: async (user) => {
           gameStates += 1;
-          return storage.gameState(login);
+          return storage.gameState(user);
         },
       },
     });
@@ -721,7 +736,73 @@ describe('createApp in hosted mode', () => {
     await send('GET', '/api/player', undefined, as(GH_TOKEN));
 
     expect(gameStates).toBe(2);
-    expect(scopes.filter((key) => key === 'user:brianchristensen')).toHaveLength(4);
+    expect(scopes.filter((key) => key === `user:${accountOf('brianchristensen').id}`)).toHaveLength(
+      4,
+    );
+  });
+
+  test("keeps one copy of a renamed player's game, and records each session's login", async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const games: Array<string> = [];
+    const registered: Array<GitHubUser> = [];
+    const inner = perUserStorage();
+    await start({
+      config: hostedConfig(),
+      identity: async (given) => {
+        context = given;
+        return headerIdentity(given);
+      },
+      storage: {
+        ...inner,
+        gameState: async (user) => {
+          games.push(user.login);
+          return inner.gameState(user);
+        },
+        registerUser: async (user) => {
+          registered.push(user);
+        },
+      },
+    });
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+    const token = async () => GH_TOKEN;
+
+    const before = await context.openUser({ user: { id: 4101, login: 'before' }, token });
+    before.stop();
+    const after = await context.openUser({ user: { id: 4101, login: 'after' }, token });
+    after.stop();
+
+    expect(games).toEqual(['before']);
+    expect(registered).toEqual([
+      { id: 4101, login: 'before' },
+      { id: 4101, login: 'after' },
+    ]);
+  });
+
+  test('tells the storage when a player is released', async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const released: Array<GitHubUser> = [];
+    await start({
+      config: hostedConfig(),
+      identity: async (given) => {
+        context = given;
+        return headerIdentity(given);
+      },
+      storage: {
+        ...perUserStorage(),
+        releaseUser: (user) => {
+          released.push(user);
+        },
+      },
+    });
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+
+    context.releaseUser({ id: 4101, login: 'octocat' });
+
+    expect(released).toEqual([{ id: 4101, login: 'octocat' }]);
   });
 
   test('serves cross-site routes, such as an OAuth callback from github.com', async () => {
@@ -755,9 +836,9 @@ describe('createApp in hosted mode', () => {
       identity: headerIdentity,
       storage: {
         ...storage,
-        gameState: async (login) => {
+        gameState: async (user) => {
           gameStates += 1;
-          return storage.gameState(login);
+          return storage.gameState(user);
         },
       },
     });
@@ -775,5 +856,192 @@ describe('createApp in hosted mode', () => {
     await start({ config: hostedConfig(), identity: headerIdentity, storage: perUserStorage() });
 
     expect((await send('GET', '/api/health')).body).toEqual({ ok: true });
+  });
+});
+
+describe('createApp on Postgres storage', () => {
+  const as = (token: string) => ({ 'X-Test-Token': token });
+  const ANTHROPIC_KEY = 'sk-ant-api03-POSTGRES-0000';
+  let database: TestDatabase;
+  let postgres: () => Promise<AppStorage>;
+
+  beforeAll(async () => {
+    database = await openTestDatabase();
+    const keyring = MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') });
+    postgres = () =>
+      openPostgresStorage(database.db, { keyring, warn: (message) => logs.push(message) });
+  });
+
+  beforeEach(async () => {
+    await database.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterAll(async () => {
+    await database.close();
+  });
+
+  test('hands the identity resolver the database, for its own tables such as sessions', async () => {
+    let seen: IdentityContext<UserServices>['database'];
+    const identity: IdentityFactory<UserServices> = async (context) => {
+      seen = context.database;
+      return headerIdentity(context);
+    };
+    await start({
+      config: hostedConfig(),
+      identity,
+      storage: await postgres(),
+      database: database.db,
+    });
+
+    const result = await seen?.transaction((tx) =>
+      tx.query('SELECT count(*)::int AS n FROM users'),
+    );
+    expect(result?.rows).toEqual([{ n: 0 }]);
+    expect(seen).not.toHaveProperty('close');
+  });
+
+  test("hands the identity resolver each player's secrets, kept until the player is released", async () => {
+    let context: IdentityContext<UserServices> | undefined;
+    const identity: IdentityFactory<UserServices> = async (given) => {
+      context = given;
+      return headerIdentity(given);
+    };
+    await start({ config: hostedConfig(), identity, storage: await postgres() });
+    const player = accountOf('brianchristensen');
+    if (!context) {
+      throw new Error('the identity factory was not called');
+    }
+
+    const secrets = await context.secretsFor(player);
+    await secrets.set('github', 'gho_sealed_token');
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+
+    expect(await context.secretsFor(player)).toBe(secrets);
+    expect(secrets.get('anthropic')).toBe(ANTHROPIC_KEY);
+    expect((await context.secretsFor(accountOf('other-player'))).get('github')).toBeUndefined();
+    context.releaseUser(player);
+    const reopened = await context.secretsFor(player);
+    expect(reopened).not.toBe(secrets);
+    expect(reopened.get('github')).toBe('gho_sealed_token');
+  });
+
+  test("tells the browser only that the sign-in couldn't be checked, and logs why", async () => {
+    await start({
+      config: hostedConfig(),
+      identity: async (context) => ({
+        ...(await headerIdentity(context)),
+        resolve: async () => {
+          throw new Error("octocat's github key could not be decrypted: tag mismatch");
+        },
+      }),
+      storage: perUserStorage(),
+    });
+
+    const status = await send('GET', '/api/auth/status');
+
+    expect(status.body).toMatchObject({
+      error: "Couldn't check who is signed in; see the server log",
+    });
+    expect(status.text).not.toContain('decrypted');
+    expect(logs.join('\n')).toMatch(/could not be decrypted: tag mismatch/);
+  });
+
+  test('gives the identity resolver no database when the app has none', async () => {
+    let seen: IdentityContext<UserServices>['database'] | 'unset' = 'unset';
+    await start({
+      config: hostedConfig(),
+      identity: async (context) => {
+        seen = context.database;
+        return headerIdentity(context);
+      },
+      storage: await postgres(),
+    });
+
+    expect(seen).toBeUndefined();
+  });
+
+  test("keeps each player's settings, time zone and encrypted keys apart", async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+
+    await send(
+      'PUT',
+      '/api/settings',
+      { reviewProvider: 'claude', timeZone: 'Asia/Tokyo' },
+      as(GH_TOKEN),
+    );
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+
+    const mine = await send('GET', '/api/settings', undefined, as(GH_TOKEN));
+    const theirs = await send('GET', '/api/settings', undefined, as(OAUTH_TOKEN));
+    expect(mine.body).toMatchObject({
+      reviewProvider: 'claude',
+      timeZone: 'Asia/Tokyo',
+      keys: { anthropic: { set: true, source: 'settings', last4: '0000' } },
+    });
+    expect(mine.text).not.toContain(ANTHROPIC_KEY);
+    expect(theirs.body).toMatchObject({
+      reviewProvider: 'cursor',
+      keys: { anthropic: { set: false } },
+    });
+    expect(theirs.body).not.toHaveProperty('timeZone');
+    const sealed = JSON.stringify(
+      (await database.db.query('SELECT sealed FROM user_secrets')).rows,
+    );
+    expect(sealed).not.toContain(ANTHROPIC_KEY);
+  });
+
+  test("never shows a login's new owner the keys or game of the account that held it", async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+    await send('PUT', '/api/settings/keys/anthropic', { value: ANTHROPIC_KEY }, as(GH_TOKEN));
+    const reused = 'gho_login_reused';
+    logins[reused] = 'BrianChristensen';
+    tokenIds[reused] = 777_000_001;
+
+    const settings = await send('GET', '/api/settings', undefined, as(reused));
+
+    expect(settings.body).toMatchObject({ keys: { anthropic: { set: false } } });
+    expect(logs.join('\n')).toMatch(/brianchristensen now belongs to GitHub id 777000001/);
+  });
+
+  test("shows the streak by the calendar of the player's time zone", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 07:00 UTC on the 12th is still the 11th in Los Angeles, the day after the last review.
+    const storage = await postgres();
+    const player = accountOf('brianchristensen');
+    vi.setSystemTime(new Date('2026-11-09T07:00:00Z'));
+    await (await storage.settings(userScope(player))).update({ timeZone: 'UTC' });
+    vi.setSystemTime(new Date('2026-11-12T07:00:00Z'));
+    const seeded = await storage.gameState(player);
+    await seeded.update((state) => ({
+      ...state,
+      game: { ...state.game, streakDays: 3, lastReviewDate: '2026-11-10' },
+    }));
+    await start({ config: hostedConfig(), identity: headerIdentity, storage });
+
+    const inUtc = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+    await send('PUT', '/api/settings', { timeZone: 'America/Los_Angeles' }, as(GH_TOKEN));
+    const inLosAngeles = await send('GET', '/api/player', undefined, as(GH_TOKEN));
+
+    expect(inUtc.body).toMatchObject({ player: { streakDays: 0 } });
+    expect(inLosAngeles.body).toMatchObject({ player: { streakDays: 3 } });
+  });
+
+  test('lets a player change their time zone once a day, so streaks follow one calendar', async () => {
+    await start({ config: hostedConfig(), identity: headerIdentity, storage: await postgres() });
+
+    const first = await send('PUT', '/api/settings', { timeZone: 'UTC' }, as(GH_TOKEN));
+    const second = await send(
+      'PUT',
+      '/api/settings',
+      { timeZone: 'Pacific/Kiritimati' },
+      as(GH_TOKEN),
+    );
+
+    expect(first.status).toBe(200);
+    expect(second).toMatchObject({ status: 429, body: { error: { code: 'rateLimited' } } });
   });
 });

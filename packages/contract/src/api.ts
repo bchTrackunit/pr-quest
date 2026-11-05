@@ -435,6 +435,8 @@ export interface SettingsResponse {
   reviewProvider: ReviewProvider;
   /** Model id per provider; absent means the provider's default. */
   models: Partial<Record<ReviewProvider, string>>;
+  /** The IANA time zone streaks and daily achievements follow; absent means the server's. */
+  timeZone?: string;
   keys: Record<ApiKeyName, ApiKeyStatus>;
 }
 
@@ -442,6 +444,8 @@ export interface UpdateSettingsRequest {
   reviewProvider?: ReviewProvider;
   /** `null` goes back to the provider's default model. */
   models?: Partial<Record<ReviewProvider, string | null>>;
+  /** An IANA zone such as `Europe/Copenhagen`; `null` goes back to the server's zone. */
+  timeZone?: string | null;
 }
 
 export interface SetApiKeyRequest {

@@ -1,12 +1,18 @@
+import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { MasterKeyring, newDataKey } from './envelope.ts';
+import { HOSTED_CONFIG, LOCAL_CONFIG } from './test-utils/config.ts';
 import { DEFAULT_SERVER_PORT } from '@pr-quest/contract/ports';
 
 import {
+  type AppConfig,
   assertSafeConfig,
+  DatabaseUrl,
   DEFAULT_GITHUB_CLIENT_ID,
   ENV_FILE_NAME,
   HOSTED_DEFAULT_HOST,
@@ -14,7 +20,6 @@ import {
   LOOPBACK_HOST,
   LOOPBACK_HOSTNAMES,
 } from './config.ts';
-import { HOSTED_CONFIG } from './test-utils/config.ts';
 
 describe('loadConfig', () => {
   let dir: string;
@@ -247,6 +252,104 @@ describe('loadConfig', () => {
         ).toThrow(/PR_QUEST_ALLOWED_HOSTS/);
       },
     );
+
+    describe('the database', () => {
+      const masterKey = randomBytes(32).toString('base64');
+      const previous = randomBytes(32).toString('base64');
+      const password = 'db-s3cret';
+      const url = `postgres://pr_quest:${password}@db.internal:5432/pr_quest?password=${password}`;
+      const withDatabase = { ...hosted, DATABASE_URL: url, PR_QUEST_MASTER_KEY: masterKey };
+
+      test('reads the URL and the master keys', () => {
+        const config = loadConfig({
+          env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
+          envFilePath,
+        });
+        const dataKey = newDataKey();
+        const wrappedByPrevious = MasterKeyring.fromConfig({ current: previous }).wrap(
+          dataKey,
+          'x',
+        );
+
+        expect(config.database).toEqual({
+          url: expect.any(DatabaseUrl),
+          keyring: expect.any(MasterKeyring),
+        });
+        expect(config.database?.url.reveal()).toBe(url);
+        expect(config.database?.keyring.currentId).toBe(
+          MasterKeyring.fromConfig({ current: masterKey }).currentId,
+        );
+        expect(config.database?.keyring.unwrap(wrappedByPrevious, 'x')).toEqual(dataKey);
+      });
+
+      test('never shows the master keys or the database password when the config is logged or serialised', () => {
+        const config = loadConfig({
+          env: { ...withDatabase, PR_QUEST_PREVIOUS_MASTER_KEYS: previous },
+          envFilePath,
+        });
+
+        for (const shown of [
+          JSON.stringify(config),
+          inspect(config, { depth: Infinity, showHidden: true }),
+          String(config.database?.url),
+        ]) {
+          for (const key of [masterKey, previous]) {
+            expect(shown).not.toContain(key);
+            expect(shown).not.toContain(Buffer.from(key, 'base64').toString('hex'));
+          }
+          expect(shown).not.toMatch(/Buffer/);
+          expect(shown).not.toContain(password);
+          expect(shown).toContain('db.internal:5432');
+        }
+      });
+
+      test('reads the pool size', () => {
+        const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: '4' };
+
+        expect(loadConfig({ env, envFilePath }).database?.poolMax).toBe(4);
+      });
+
+      test.each(['0', '101', 'ten', '0x10', '1e1', '4.0', '+4', '0b11'])(
+        'refuses the pool size %j',
+        (poolMax) => {
+          const env = { ...withDatabase, PR_QUEST_DATABASE_POOL_MAX: poolMax };
+
+          expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_DATABASE_POOL_MAX/);
+        },
+      );
+
+      test('is optional, for a server given its storage in code', () => {
+        expect(loadConfig({ env: hosted, envFilePath }).database).toBeUndefined();
+      });
+
+      test('requires a master key to encrypt the API keys with', () => {
+        const { PR_QUEST_MASTER_KEY: _omitted, ...env } = withDatabase;
+
+        expect(() => loadConfig({ env, envFilePath })).toThrow(/PR_QUEST_MASTER_KEY is required/);
+      });
+
+      test('refuses a malformed master key without echoing it', () => {
+        const env = { ...withDatabase, PR_QUEST_MASTER_KEY: 'c2hvcnQta2V5' };
+
+        expect(() => loadConfig({ env, envFilePath })).toThrow(/32 random bytes/);
+        expect(() => loadConfig({ env, envFilePath })).not.toThrow(/c2hvcnQta2V5/);
+      });
+
+      test('refuses a non-Postgres URL', () => {
+        expect(() =>
+          loadConfig({ env: { ...withDatabase, DATABASE_URL: 'mysql://db/x' }, envFilePath }),
+        ).toThrow(/DATABASE_URL/);
+      });
+    });
+  });
+
+  test('local mode ignores DATABASE_URL, which other tools on the machine may set', () => {
+    const config = loadConfig({
+      env: { DATABASE_URL: 'postgres://elsewhere/db', PR_QUEST_MASTER_KEY: 'x' },
+      envFilePath,
+    });
+
+    expect(config.database).toBeUndefined();
   });
 
   test('rejects an unknown mode', () => {
@@ -269,4 +372,52 @@ describe('assertSafeConfig', () => {
       );
     },
   );
+});
+
+describe('assertSafeConfig with a database', () => {
+  const masterKey = randomBytes(32).toString('base64');
+  const plainUrl = 'postgres://pr_quest:db-s3cret@db.internal:5432/pr_quest';
+  const database = {
+    url: new DatabaseUrl(plainUrl),
+    keyring: MasterKeyring.fromConfig({ current: masterKey }),
+  };
+
+  test('accepts a hosted config with a Postgres URL and a master keyring', () => {
+    expect(() => assertSafeConfig({ ...HOSTED_CONFIG, database })).not.toThrow();
+  });
+
+  test('refuses a hosted config with a plain master key instead of a keyring, without echoing it', () => {
+    const config: AppConfig = Object.assign(
+      { ...HOSTED_CONFIG },
+      { database: { url: database.url, masterKey } },
+    );
+
+    expect(() => assertSafeConfig(config)).toThrow(/MasterKeyring\.fromConfig/);
+    expect(() => assertSafeConfig(config)).not.toThrow(masterKey);
+  });
+
+  test('refuses a hosted config with a plain URL string, without echoing its password', () => {
+    const config: AppConfig = Object.assign(
+      { ...HOSTED_CONFIG },
+      { database: { ...database, url: plainUrl } },
+    );
+
+    expect(() => assertSafeConfig(config)).toThrow(/DatabaseUrl/);
+    expect(() => assertSafeConfig(config)).not.toThrow(/db-s3cret/);
+  });
+
+  test('refuses a hosted config with a non-Postgres URL', () => {
+    expect(() =>
+      assertSafeConfig({
+        ...HOSTED_CONFIG,
+        database: { ...database, url: new DatabaseUrl('mysql://db/x') },
+      }),
+    ).toThrow(/DATABASE_URL/);
+  });
+
+  test('refuses a database in local mode, which keeps its state in files', () => {
+    const local: AppConfig = Object.assign({ ...LOCAL_CONFIG }, { database });
+
+    expect(() => assertSafeConfig(local)).toThrow(/hosted mode/);
+  });
 });

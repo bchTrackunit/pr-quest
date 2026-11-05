@@ -6,9 +6,15 @@ import {
   type GitHubAccount,
   type SettingsResponse,
 } from '@pr-quest/contract/api';
-import type { ApiKeys, ModelCatalog, SettingsStore } from '../features/settings/index.ts';
+import {
+  type ApiKeys,
+  type ModelCatalog,
+  type SettingsStore,
+  TimeZoneChangeTooSoon,
+} from '../features/settings/index.ts';
 import type { DeviceFlow } from '../features/auth/index.ts';
 import { ApiError, type RouteHandlers } from '../platform/router.ts';
+import { canonicalTimeZone } from '../platform/timeZone.ts';
 import { ModelIdSchema, parseBody, parseOrReject } from '../platform/validation.ts';
 
 const MAX_KEY_LENGTH = 1000;
@@ -17,12 +23,28 @@ const ProviderSchema = z.enum(['cursor', 'claude'], {
   error: 'Must be "cursor" or "claude"',
 });
 
+const TimeZoneSchema = z
+  .string({ error: 'Send the time zone as a string' })
+  .max(100)
+  .transform((value, context) => {
+    const zone = canonicalTimeZone(value);
+    if (zone === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Must be an IANA time zone such as Europe/Copenhagen',
+      });
+      return z.NEVER;
+    }
+    return zone;
+  });
+
 const UpdateSettingsSchema = z.strictObject(
   {
     reviewProvider: ProviderSchema.optional(),
     models: z.partialRecord(ProviderSchema, ModelIdSchema.nullable()).optional(),
+    timeZone: TimeZoneSchema.nullable().optional(),
   },
-  { error: 'Send a JSON object with reviewProvider and/or models' },
+  { error: 'Send a JSON object with reviewProvider, models and/or timeZone' },
 );
 
 /** The value's content never appears in an error, only which rule it broke. */
@@ -54,6 +76,11 @@ export interface SettingsServices {
   apiKeys: Pick<ApiKeys, 'statuses' | 'set' | 'remove'>;
   settings: Pick<SettingsStore, 'get' | 'update'>;
   models: Pick<ModelCatalog, 'list'>;
+  /**
+   * How often a player may change their time zone, which moves the calendar their streaks and
+   * daily achievements count by. Without it, as in local mode, any time.
+   */
+  timeZoneChanges?: { minIntervalMs: number; now?: () => Date };
 }
 
 /** What the sign-in routes act on. */
@@ -132,13 +159,14 @@ export function createAuthHandlers(services: AuthServices): RouteHandlers {
 
 /** The settings, API key and model routes. */
 export function createSettingsHandlers(services: SettingsServices): RouteHandlers {
-  const { apiKeys, settings, models } = services;
+  const { apiKeys, settings, models, timeZoneChanges } = services;
 
   const settingsResponse = (): SettingsResponse => {
     const current = settings.get();
     return {
       reviewProvider: current.reviewProvider,
       models: current.models,
+      ...(current.timeZone ? { timeZone: current.timeZone } : {}),
       keys: apiKeys.statuses(),
     };
   };
@@ -148,7 +176,19 @@ export function createSettingsHandlers(services: SettingsServices): RouteHandler
 
     updateSettings: async ({ body }) => {
       const patch = parseOrReject(UpdateSettingsSchema, body, 'Invalid settings');
-      await settings.update(patch);
+      try {
+        await (timeZoneChanges
+          ? settings.update(patch, {
+              now: timeZoneChanges.now?.() ?? new Date(),
+              minTimeZoneIntervalMs: timeZoneChanges.minIntervalMs,
+            })
+          : settings.update(patch));
+      } catch (error) {
+        if (error instanceof TimeZoneChangeTooSoon) {
+          throw new ApiError(429, 'rateLimited', error.message);
+        }
+        throw error;
+      }
       return settingsResponse();
     },
 

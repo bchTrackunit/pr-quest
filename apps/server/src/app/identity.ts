@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DeviceFlow, GitHubTokenProvider } from '../features/auth/index.ts';
 import type { GitHubViewer } from '../features/quests/index.ts';
 import type { FetchLike } from '../platform/githubApi.ts';
+import type { GitHubUser } from '../platform/githubUser.ts';
+import type { SharedDatabase } from '../platform/postgres/database.ts';
 import type { RawRoute } from '../platform/router.ts';
 import type { SecretStore } from '../platform/secrets.ts';
 import type { GitHubAccount } from '@pr-quest/contract/api';
@@ -37,8 +39,8 @@ export interface IdentityResolver<TServices extends SessionServices = SessionSer
    * before anyone signs in locally. Rejects with `NotSignedInError` when the scope needs a sign-in.
    */
   scope: (req: IncomingMessage, res: ServerResponse) => Promise<StorageScope>;
-  /** Whose API keys and settings the session of `login` uses, for its reviews and quests. */
-  scopeFor: (login: string) => StorageScope;
+  /** Whose API keys and settings the session of `user` uses, for its reviews and quests. */
+  scopeFor: (user: GitHubUser) => StorageScope;
   /**
    * Forgets `req`'s sign-in and stops its session; resolves to the account that was signed in. A
    * hosted resolver clears its cookie on `res`. Local mode then calls `resolve` on the same request
@@ -62,7 +64,8 @@ export interface IdentityResolver<TServices extends SessionServices = SessionSer
 export interface IdentityContext<TServices extends SessionServices> {
   /**
    * Opens one player's services. Call it once per session, never for two sessions of the same
-   * login at once, and `stop()` the services when that session ends.
+   * account at once, and `stop()` the services when that session ends. Pass the `id` and `login`
+   * of `fetchViewer`'s answer for the session's token; hosted data belongs to the `id`.
    */
   openUser: SessionFactory<TServices>;
   /** `GET /user` with the given token. */
@@ -71,12 +74,23 @@ export interface IdentityContext<TServices extends SessionServices> {
   log: (message: string) => void;
   warn: (message: string) => void;
   /**
-   * Forgets `login`'s game store and per-user keys and settings, so the next `openUser` reads them
+   * Forgets `user`'s game store and per-user keys and settings, so the next `openUser` reads them
    * from storage again, for example to evict an idle player. Call it only once every session of
-   * `login` has stopped and its review runs have finished, or a run still finishing would write to
+   * `user` has stopped and its review runs have finished, or a run still finishing would write to
    * the forgotten store over the reopened one.
    */
-  releaseUser: (login: string) => void;
+  releaseUser: (user: GitHubUser) => void;
+  /**
+   * `user`'s secrets, for the sign-in's own ones such as their sealed GitHub token: the same store
+   * their API keys are in, opened once and kept until `releaseUser`. Local mode has only the
+   * machine's.
+   */
+  secretsFor: (user: GitHubUser) => Promise<SecretStore>;
+  /**
+   * Hosted mode's Postgres database, when the server opened one from `config.database`, for the
+   * sign-in's own tables such as sessions. Add them as migrations in `postgres/migrations.ts`.
+   */
+  database?: SharedDatabase;
 }
 
 export type IdentityFactory<TServices extends SessionServices> = (
@@ -85,7 +99,7 @@ export type IdentityFactory<TServices extends SessionServices> = (
 
 export interface LocalIdentityOptions<TServices extends SessionServices> extends Omit<
   IdentityContext<TServices>,
-  'storage' | 'releaseUser'
+  'storage' | 'releaseUser' | 'database' | 'secretsFor'
 > {
   /** The machine's secrets, which hold the OAuth token from "Sign in with GitHub". */
   secrets: SecretStore;
@@ -145,7 +159,7 @@ export class LocalIdentityResolver<
     return MACHINE_SCOPE;
   }
 
-  public scopeFor(_login: string): StorageScope {
+  public scopeFor(_user: GitHubUser): StorageScope {
     return MACHINE_SCOPE;
   }
 

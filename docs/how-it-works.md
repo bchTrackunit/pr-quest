@@ -269,11 +269,25 @@ already has a `state.json` in their folder keeps it. The login is recorded in
 A `state.json` or `quests.json` that shows up in `~/.pr-quest` later is renamed to
 `<file>.orphaned-<UTC time>.bak` rather than given to anyone.
 
+Hosted mode keeps the same documents and keys in Postgres instead, per GitHub account; see
+[Hosted storage](development.md#hosted-storage).
+
+## Time zone
+
+Settings can also hold an IANA time zone, such as `Europe/Copenhagen`, for the streak, the daily
+counts and the time-of-day achievements. The settings dialog doesn't show it yet;
+`PUT /api/settings` with `{"timeZone": "Europe/Copenhagen"}` sets it, and `null` clears it.
+Fixed offsets such as `+01:00` or `Etc/GMT-1` are refused, because they ignore daylight saving
+time. Without a time zone, PR Quest uses the server's, or its local clock when `TZ` names no zone.
+In hosted mode a player can change it once every 24 hours; a
+second change sooner answers `429 rateLimited` with the time it may change again, so hopping zones
+can't stretch a streak day.
+
 ## Achievements
 
 "Review action" means posting a review, requesting changes or approving. Times and days use the
-server's local clock, and the daily counts (Clean Sweep, Featherweight) start again at local
-midnight. The Achievements dialog shows progress where there is a count and hides secret
+player's [time zone](#time-zone), and the daily counts (Clean Sweep, Featherweight) start again at
+midnight there. The Achievements dialog shows progress where there is a count and hides secret
 achievements behind a hint until they unlock.
 
 | Achievement      | How to unlock                                                                       | Rarity    |

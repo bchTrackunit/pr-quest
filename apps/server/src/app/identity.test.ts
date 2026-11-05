@@ -44,8 +44,8 @@ function setup(options: { githubClientId?: string; tokenReplies?: Array<unknown>
     },
   };
   const viewers: Record<string, GitHubViewer> = {
-    [GH_TOKEN]: { login: 'Alice' },
-    [OAUTH_TOKEN]: { login: 'Bob' },
+    [GH_TOKEN]: { id: 1001, login: 'Alice' },
+    [OAUTH_TOKEN]: { id: 1002, login: 'Bob' },
   };
   const fetchViewer = vi.fn(async (token: string) => {
     const viewer = viewers[token];
@@ -55,7 +55,7 @@ function setup(options: { githubClientId?: string; tokenReplies?: Array<unknown>
     return viewer;
   });
   const stopped: Array<string> = [];
-  const openUser = vi.fn<SessionFactory>(async ({ login }) => ({
+  const openUser = vi.fn<SessionFactory>(async ({ user: { login } }) => ({
     login,
     stop: () => stopped.push(login),
   }));
@@ -103,7 +103,7 @@ describe('LocalIdentityResolver', () => {
     const { identity, fetchViewer } = setup();
 
     await expect(identity.scope(req, res)).resolves.toEqual(MACHINE_SCOPE);
-    expect(identity.scopeFor('alice')).toEqual(MACHINE_SCOPE);
+    expect(identity.scopeFor({ id: 1001, login: 'alice' })).toEqual(MACHINE_SCOPE);
     expect(fetchViewer).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,9 @@ describe('LocalIdentityResolver', () => {
 
     await identity.warmUp();
 
-    expect(openUser).toHaveBeenCalledWith(expect.objectContaining({ login: 'alice' }));
+    expect(openUser).toHaveBeenCalledWith(
+      expect.objectContaining({ user: { id: 1001, login: 'alice' } }),
+    );
   });
 
   test('closing stops the open session', async () => {

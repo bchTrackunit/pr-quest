@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "tsx watch src/app/dev.ts",
     "start": "node dist/main.js",
-    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --sourcemap --log-level=warning",
+    "db": "tsx src/app/db.ts",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild src/main.ts src/app/server.ts src/app/db.ts --bundle --platform=node --format=esm --target=node24 --splitting --outdir=dist --entry-names='[name]' --external:@cursor/sdk --external:@anthropic-ai/sdk --external:pg --external:pg-connection-string --sourcemap --log-level=warning",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -16,10 +17,14 @@
     "@anthropic-ai/sdk": "1.2.0",
     "@cursor/sdk": "1.0.40",
     "@pr-quest/contract": "workspace:*",
+    "pg": "8.23.1",
+    "pg-connection-string": "2.14.1",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
     "@types/node": "catalog:",
+    "@types/pg": "8.23.1",
     "esbuild": "0.28.2",
     "tsx": "4.23.13",
     "typescript": "catalog:",

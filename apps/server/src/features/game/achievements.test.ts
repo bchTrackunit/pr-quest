@@ -125,7 +125,7 @@ describe('the achievement list', () => {
   });
 });
 
-describe('time of day and week, in server local time', () => {
+describe("time of day and week, by default in the machine's time zone", () => {
   test.each([
     [7, 59, true],
     [8, 0, false],
@@ -160,6 +160,47 @@ describe('time of day and week, in server local time', () => {
     expect(unlocks(initialGameState(), { kind: 'approved', at: at(7, 22, 30) })).toEqual(
       expect.arrayContaining(['night-owl', 'weekend-warrior']),
     );
+  });
+});
+
+describe("time of day and week, in the player's time zone", () => {
+  const unlocksIn = (timeZone: string, iso: string): Array<AchievementId> =>
+    applyReviewAction(initialGameState(), action({ at: new Date(iso) }), {
+      ...PLAYER,
+      timeZone,
+    }).unlocked.map((entry) => entry.id);
+
+  test.each([
+    ['UTC', true],
+    ['Europe/Copenhagen', false],
+  ])('Early Bird at 07:30 UTC in %s: %s', (zone, unlocked) => {
+    expect(unlocksIn(zone, '2026-11-04T07:30:00Z').includes('early-bird')).toBe(unlocked);
+  });
+
+  test.each([
+    ['UTC', false],
+    ['Europe/Copenhagen', true],
+  ])('Night Owl at 21:30 UTC in %s: %s', (zone, unlocked) => {
+    expect(unlocksIn(zone, '2026-11-04T21:30:00Z').includes('night-owl')).toBe(unlocked);
+  });
+
+  test.each([
+    ['UTC', false],
+    ['Europe/Copenhagen', true],
+  ])('Weekend Warrior late on a Friday in UTC, in %s: %s', (zone, unlocked) => {
+    expect(unlocksIn(zone, '2026-11-06T23:30:00Z').includes('weekend-warrior')).toBe(unlocked);
+  });
+
+  test('Early Bird follows the clocks going back', () => {
+    // 06:30Z is 08:30 CEST the day before the change and 07:30 CET on the day of it.
+    expect(unlocksIn('Europe/Copenhagen', '2026-10-24T06:30:00Z')).not.toContain('early-bird');
+    expect(unlocksIn('Europe/Copenhagen', '2026-10-25T06:30:00Z')).toContain('early-bird');
+  });
+
+  test('Night Owl follows the clocks going forward', () => {
+    // 20:30Z is 21:30 CET the day before the change and 22:30 CEST on the day of it.
+    expect(unlocksIn('Europe/Copenhagen', '2026-03-28T20:30:00Z')).not.toContain('night-owl');
+    expect(unlocksIn('Europe/Copenhagen', '2026-03-29T20:30:00Z')).toContain('night-owl');
   });
 });
 

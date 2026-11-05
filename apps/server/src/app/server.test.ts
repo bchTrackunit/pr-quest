@@ -3,12 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { randomBytes } from 'node:crypto';
+
 import { type AppConfig, loadConfig } from '../platform/config.ts';
+import { NotSignedInError } from '../platform/githubApi.ts';
 import type { SecretName, SecretStore } from '../platform/secrets.ts';
 import { HOSTED_CONFIG, LOCAL_CONFIG } from '../platform/test-utils/config.ts';
 import {
+  DatabaseUrl,
   type IdentityFactory,
   MACHINE_SCOPE,
+  MasterKeyring,
   type RunningServer,
   startServer,
   type ServerOverrides,
@@ -173,7 +178,7 @@ describe('startServer', () => {
       {
         identity: async () => ({
           resolve: async () => undefined,
-          scope: async () => userScope('nobody'),
+          scope: async () => userScope({ id: 1, login: 'nobody' }),
           scopeFor: userScope,
           signOut: async () => undefined,
           rejected: () => undefined,
@@ -218,6 +223,50 @@ describe('startServer', () => {
     const server = await start(LOCAL_CONFIG, { identity });
 
     expect(await (await fetch(`${server.url}/auth/ping`)).text()).toBe('pong');
+  });
+
+  describe('hosted mode', () => {
+    const hosted: AppConfig = { ...HOSTED_CONFIG, host: '127.0.0.1' };
+    const nobody: IdentityFactory<UserServices> = async () => ({
+      resolve: async () => undefined,
+      scope: async () => {
+        throw new NotSignedInError();
+      },
+      scopeFor: userScope,
+      signOut: async () => undefined,
+      rejected: () => undefined,
+      warmUp: async () => undefined,
+      close: () => undefined,
+    });
+
+    test('refuses to start without storage or a database for many users', async () => {
+      await expect(start(hosted, { identity: nobody })).rejects.toThrow(
+        /hosted mode needs storage.*DATABASE_URL/i,
+      );
+    });
+
+    test('opens the configured database, and fails to start when it is unreachable', async () => {
+      const database = {
+        url: new DatabaseUrl('postgres://nobody@127.0.0.1:1/pr_quest'),
+        keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
+      };
+
+      await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow(
+        /ECONNREFUSED|connect/,
+      );
+      expect(logs.join('\n')).not.toMatch(/TLS/);
+    });
+
+    test('warns when the database is on a public host without TLS', async () => {
+      const database = {
+        url: new DatabaseUrl('postgres://nobody:s3cret@pr-quest-db.invalid:1/pr_quest'),
+        keyring: MasterKeyring.fromConfig({ current: randomBytes(32).toString('base64') }),
+      };
+
+      await expect(start({ ...hosted, database }, { identity: nobody })).rejects.toThrow();
+      expect(logs.join('\n')).toMatch(/pr-quest-db\.invalid without TLS/);
+      expect(logs.join('\n')).not.toContain('s3cret');
+    });
   });
 
   test('stops listening when closed', async () => {

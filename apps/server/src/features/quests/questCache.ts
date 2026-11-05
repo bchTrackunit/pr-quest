@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 
 import type { Quest, QuestSource } from '@pr-quest/contract/api';
+import type { DocumentCodec } from '../../platform/documentCodec.ts';
 import type { Backoff } from '../../platform/rateLimit.ts';
 
 const CACHE_FILE = 'quests.json';
@@ -113,25 +114,41 @@ export class FileQuestCache implements QuestCache {
       }
       return {};
     }
-    const parsed = CacheFileSchema.safeParse(safeJson(text));
-    if (!parsed.success) {
+    const state = QUEST_CACHE_DOCUMENT.decode(safeJson(text));
+    if (!state) {
       this.onWarning('The quest cache was unreadable; ignoring it');
       return {};
     }
-    return fromFile(parsed.data);
+    return state;
   }
 
   public save(state: CachedQuestState): Promise<void> {
     const next = this.queue.then(async () => {
       await mkdir(this.stateDir, { recursive: true, mode: 0o700 });
       const temp = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(temp, `${JSON.stringify(toFile(state))}\n`, { mode: 0o600 });
+      await writeFile(temp, `${JSON.stringify(QUEST_CACHE_DOCUMENT.encode(state))}\n`, {
+        mode: 0o600,
+      });
       await rename(temp, this.file);
     });
     this.queue = next.catch(() => undefined);
     return next;
   }
 }
+
+/**
+ * The quest cache as a JSON document, wherever it is saved. Losing it only costs a refresh, so a
+ * store may ignore a newer version instead of refusing it.
+ */
+export const QUEST_CACHE_DOCUMENT: DocumentCodec<CachedQuestState> = {
+  version: 1,
+  empty: () => ({}),
+  decode: (json) => {
+    const parsed = CacheFileSchema.safeParse(json);
+    return parsed.success ? fromFile(parsed.data) : undefined;
+  },
+  encode: (state) => toFile(state),
+};
 
 function toFile({ snapshot, backoff }: CachedQuestState): CacheFile {
   const file: CacheFile = { version: 1 };

@@ -5,6 +5,7 @@ import type {
   DifficultyTier,
   PlayerCounters,
 } from '@pr-quest/contract/api';
+import type { ZonedTime } from '../../platform/timeZone.ts';
 import type { AchievementLedger } from './ledger.ts';
 
 export type ReviewActionKind = 'reviewPosted' | 'approved' | 'changesRequested';
@@ -29,6 +30,8 @@ const NIGHT_OWL_FROM_HOUR = 22;
 export interface ActionFacts {
   kind: ReviewActionKind;
   at: Date;
+  /** `at` on the player's wall clock, for the time-of-day and weekend achievements. */
+  local: ZonedTime;
   difficulty: DifficultyTier;
   /** How long the PR had waited since `requestedAt`. */
   waitedMs: number;
@@ -206,7 +209,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
       rarity: 'common',
       category: 'streaks',
     },
-    (action) => action.at.getHours() < EARLY_BIRD_BEFORE_HOUR,
+    (action) => action.local.hour < EARLY_BIRD_BEFORE_HOUR,
   ),
   onAction(
     {
@@ -217,7 +220,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
       rarity: 'common',
       category: 'streaks',
     },
-    (action) => action.at.getHours() >= NIGHT_OWL_FROM_HOUR,
+    (action) => action.local.hour >= NIGHT_OWL_FROM_HOUR,
   ),
   onAction(
     {
@@ -228,7 +231,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
       rarity: 'common',
       category: 'streaks',
     },
-    (action) => action.at.getDay() === 0 || action.at.getDay() === 6,
+    (action) => action.local.weekday === 0 || action.local.weekday === 6,
   ),
   {
     def: define({
