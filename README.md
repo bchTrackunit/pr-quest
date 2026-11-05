@@ -58,6 +58,7 @@ PR Quest warns at startup when other users may read that file.
 | `PR_QUEST_PORT`             | API port, default `4317`                                                                           |
 | `PR_QUEST_UI_PORT`          | UI port, default `4318`                                                                            |
 | `PR_QUEST_STATE_DIR`        | Where PR Quest keeps its data, default `~/.pr-quest` (see [Where state lives](#where-state-lives)) |
+| `PR_QUEST_EXTRA_SEARCH`     | Optional, local mode only: one more GitHub search whose PRs join your board, e.g. bot drafts       |
 
 `PR_QUEST_MODE`, `PR_QUEST_HOST`, `PR_QUEST_PUBLIC_ORIGIN` and `PR_QUEST_ALLOWED_HOSTS` belong to
 [hosted mode](docs/development.md#hosted-mode), which isn't usable yet.
