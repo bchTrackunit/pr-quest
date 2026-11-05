@@ -42,23 +42,30 @@ describe('QuestCard', () => {
     expect(screen.getByText('Boss fight')).toBeTruthy();
   });
 
-  test('links to Linear in a new tab, and falls back to GitHub', () => {
-    renderCard();
-    const linear = screen.getByRole('link', { name: /Open in Linear/ });
-    expect(linear.getAttribute('href')).toBe('https://linear.app/trackunit/review/manager-101');
-    expect(linear.getAttribute('target')).toBe('_blank');
-    cleanup();
-
-    renderCard(makeQuest({ linearUrl: undefined }));
-    const github = screen.getByRole('link', { name: /Open on GitHub/ });
-    expect(github.getAttribute('href')).toBe('https://github.com/Trackunit/manager/pull/101');
-    expect(screen.queryByRole('link', { name: /Open in Linear/ })).toBeNull();
-  });
+  test.each([
+    {
+      linearUrl: 'https://linear.app/trackunit/review/manager-101',
+      guide: 'https://linear.app/trackunit/review/manager-101/review',
+    },
+    {
+      linearUrl: undefined,
+      guide: 'https://linear.review/Trackunit/manager/pull/101/review',
+    },
+  ])(
+    'links to the Linear guide and to GitHub with linearUrl $linearUrl',
+    ({ linearUrl, guide }) => {
+      renderCard(makeQuest({ linearUrl }));
+      expect(screen.getByRole('link', { name: /Open in Linear/ }).getAttribute('href')).toBe(guide);
+      expect(screen.getByRole('link', { name: /Open on GitHub/ }).getAttribute('href')).toBe(
+        'https://github.com/Trackunit/manager/pull/101',
+      );
+    },
+  );
 
   test('sends the review agent and asks to approve with the quest id', async () => {
     const user = userEvent.setup();
     const handlers = renderCard();
-    await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+    await user.click(screen.getByRole('button', { name: 'Summon agent' }));
     await user.click(screen.getByRole('button', { name: /Approve/ }));
     expect(handlers.onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
     expect(handlers.onClickApprove).toHaveBeenCalledWith('Trackunit/manager#101');
@@ -71,7 +78,7 @@ describe('QuestCard', () => {
     );
     expect(screen.getByRole('status').textContent).toContain('Agent on quest');
     expect(screen.getByText(/01:0\d/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Send review agent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Summon agent' })).toBeNull();
   });
 
   test('keeps the ticking stopwatch out of the announced status', () => {
@@ -134,7 +141,7 @@ describe('QuestCard', () => {
         />,
       );
 
-      const send = screen.getByRole('button', { name: 'Send review agent' });
+      const send = screen.getByRole('button', { name: 'Summon agent' });
       expect(send).toHaveProperty('disabled', true);
       expect(
         document.getElementById(send.getAttribute('aria-describedby') ?? '')?.textContent,
@@ -217,7 +224,7 @@ describe('QuestCard', () => {
         />,
       );
 
-      await user.click(screen.getByRole('button', { name: 'Send review agent' }));
+      await user.click(screen.getByRole('button', { name: 'Summon agent' }));
       expect(onClickSendAgent).toHaveBeenCalledWith('Trackunit/manager#101');
       expect(screen.queryByText(/Review it with Claude instead/)).toBeNull();
     });

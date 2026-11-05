@@ -14,6 +14,7 @@ import { selectedFindingIndexes } from '@pr-quest/contract/findingSelection';
 import { FindingSelectToggle } from './FindingSelectToggle.tsx';
 import { groupFindings, questLabel } from '../game/index.ts';
 import { Modal } from '../../platform/Modal.tsx';
+import { PullRequestLinks } from '../../platform/PullRequestLinks.tsx';
 import { PROVIDER_LABELS } from '../settings/index.ts';
 
 export interface ReviewResultProps {
@@ -426,15 +427,7 @@ export const ReviewResult = ({
               {pending === 'discard' ? 'Discarding…' : 'Discard'}
             </button>
           ) : null}
-          <a
-            className="button"
-            href={summary.linearUrl ?? summary.githubUrl}
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            {summary.linearUrl ? 'Open in Linear' : 'Open on GitHub'}
-            <span className="visually-hidden"> (opens in a new tab)</span>
-          </a>
+          <PullRequestLinks githubUrl={summary.githubUrl} linearUrl={summary.linearUrl} />
           {quest ? (
             <button
               className="button button--success"

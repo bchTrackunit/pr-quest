@@ -3,6 +3,7 @@ import { useId } from 'react';
 import type { Quest, ReviewProvider, ReviewRun } from '@pr-quest/contract/api';
 import { cursorReviewBlocker } from '@pr-quest/contract/cursorReview';
 import { formatAge, formatNumber } from '../../platform/format.ts';
+import { PullRequestLinks } from '../../platform/PullRequestLinks.tsx';
 import { questLabel, type QuestAction, type QuestActionError } from '../game/index.ts';
 import { offersRetry, RunStatus } from './RunStatus.tsx';
 import type { SettingsTarget } from '../settings/index.ts';
@@ -153,7 +154,7 @@ export const QuestCard = ({
         </div>
       ) : null}
 
-      <div className="button-row">
+      <div className="quest__actions">
         {canSendAgent ? (
           <button
             aria-describedby={cursorBlocker ? blockedNoteId : undefined}
@@ -162,18 +163,10 @@ export const QuestCard = ({
             onClick={() => onClickSendAgent(quest.id)}
             type="button"
           >
-            {isStarting ? 'Summoning agent…' : 'Send review agent'}
+            {isStarting ? 'Summoning agent…' : 'Summon agent'}
           </button>
         ) : null}
-        <a
-          className="button"
-          href={quest.linearUrl ?? quest.githubUrl}
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          {quest.linearUrl ? 'Open in Linear' : 'Open on GitHub'}
-          <span className="visually-hidden"> (opens in a new tab)</span>
-        </a>
+        <PullRequestLinks githubUrl={quest.githubUrl} linearUrl={quest.linearUrl} />
         <button
           aria-describedby={quest.isDraft ? draftNoteId : undefined}
           className="button button--success"
