@@ -138,9 +138,11 @@ export const ReviewResult = ({
   const findingIndex = new Map(findings.map((finding, index) => [finding, index]));
   const findingCount = findings.length;
   const isAwaitingDecision = run.disposition === 'pending';
+  const isSelfReview = run.ownPr === true;
   // Runs posted before selections existed posted every finding, so they show no selection at all.
+  // A self-review is never posted, so there is nothing to select.
   const showsSelection =
-    findingCount > 0 && (isAwaitingDecision || run.selectedFindings !== undefined);
+    !isSelfReview && findingCount > 0 && (isAwaitingDecision || run.selectedFindings !== undefined);
   const canSelect = isAwaitingDecision && pending === undefined;
   const savedSelection = new Set(selectedFindingIndexes(run));
   const isSelected = (index: number): boolean =>
@@ -185,10 +187,16 @@ export const ReviewResult = ({
       className="modal--wide"
       isBusy={pending !== undefined}
       onClickClose={onClickClose}
-      title={`Loot from ${label}`}
+      title={isSelfReview ? `Self-review of ${label}` : `Loot from ${label}`}
     >
       <p className="result__quest">{summary.title}</p>
       {reviewer ? <p className="muted result__reviewer">{reviewer}</p> : null}
+      {isSelfReview ? (
+        <p className="notice notice--calm">
+          <span aria-hidden="true">🪞</span> A self-review stays in PR Quest. Nothing here is posted
+          to GitHub, and it earns no XP. Fix what you agree with before reviewers look.
+        </p>
+      ) : null}
       {result && verdict ? (
         <>
           <section aria-labelledby="result-summary" className="result__summary">
@@ -201,10 +209,12 @@ export const ReviewResult = ({
               </span>
             </div>
             <p className="prewrap">{result.summary}</p>
-            <p className="muted">
-              The verdict is advice only. PR Quest never turns it into an approval; only you can
-              approve.
-            </p>
+            {isSelfReview ? null : (
+              <p className="muted">
+                The verdict is advice only. PR Quest never turns it into an approval; only you can
+                approve.
+              </p>
+            )}
           </section>
 
           <section aria-labelledby="result-findings">
@@ -407,7 +417,7 @@ export const ReviewResult = ({
         </fieldset>
       ) : (
         <div className="button-row result__actions">
-          {result && isAwaitingDecision ? (
+          {result && isAwaitingDecision && !isSelfReview ? (
             <button
               className="button button--primary"
               disabled={pending !== undefined}
@@ -428,7 +438,7 @@ export const ReviewResult = ({
             </button>
           ) : null}
           <PullRequestLinks githubUrl={summary.githubUrl} linearUrl={summary.linearUrl} />
-          {quest ? (
+          {quest && !isSelfReview ? (
             <button
               className="button button--success"
               disabled={pending !== undefined}

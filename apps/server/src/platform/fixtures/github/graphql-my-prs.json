@@ -1,0 +1,219 @@
+{
+  "data": {
+    "viewer": {
+      "login": "player-login",
+      "open": {
+        "pageInfo": { "hasNextPage": false, "endCursor": "Y3Vyc29yOjU=" },
+        "nodes": [
+          {
+            "number": 40,
+            "title": "feat(widgets): add the widget list",
+            "url": "https://github.com/Trackunit/state-of-code/pull/40",
+            "createdAt": "2026-10-20T09:00:00Z",
+            "updatedAt": "2026-10-29T12:00:00Z",
+            "state": "OPEN",
+            "mergedAt": null,
+            "repository": { "owner": { "login": "Trackunit" }, "name": "state-of-code" },
+            "headRefName": "feat/widgets",
+            "baseRefName": "main",
+            "headRefOid": "1111111111111111111111111111111111111111",
+            "isDraft": false,
+            "additions": 30,
+            "deletions": 5,
+            "changedFiles": 3,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "CONFLICTING",
+            "mergeStateStatus": "DIRTY",
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] },
+            "latestOpinionatedReviews": {
+              "nodes": [{ "state": "CHANGES_REQUESTED", "author": { "login": "alice" } }]
+            },
+            "approvals": { "nodes": [] },
+            "reviewThreads": {
+              "totalCount": 2,
+              "nodes": [
+                { "id": "PRRT_open40_a", "isResolved": false },
+                { "id": "PRRT_open40_b", "isResolved": true }
+              ]
+            }
+          },
+          {
+            "number": 41,
+            "title": "fix(api): retry flaky calls",
+            "url": "https://github.com/Trackunit/state-of-code/pull/41",
+            "createdAt": "2026-10-10T09:00:00Z",
+            "updatedAt": "2026-10-30T08:00:00Z",
+            "state": "OPEN",
+            "mergedAt": null,
+            "repository": { "owner": { "login": "Trackunit" }, "name": "state-of-code" },
+            "headRefName": "fix/retry",
+            "baseRefName": "main",
+            "headRefOid": "2222222222222222222222222222222222222222",
+            "isDraft": false,
+            "additions": 400,
+            "deletions": 120,
+            "changedFiles": 14,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+            "latestOpinionatedReviews": {
+              "nodes": [{ "state": "APPROVED", "author": { "login": "bob" } }]
+            },
+            "approvals": {
+              "nodes": [
+                { "submittedAt": "2026-10-30T07:00:00Z", "author": { "login": "bob" } },
+                { "submittedAt": "2026-10-29T07:00:00Z", "author": { "login": "Player-Login" } }
+              ]
+            },
+            "reviewThreads": { "totalCount": 0, "nodes": [] }
+          },
+          {
+            "number": 42,
+            "title": "chore: try the new linter",
+            "url": "https://github.com/Trackunit/state-of-code/pull/42",
+            "createdAt": "2026-10-01T09:00:00Z",
+            "updatedAt": "2026-10-02T09:00:00Z",
+            "state": "OPEN",
+            "mergedAt": null,
+            "repository": { "owner": { "login": "Trackunit" }, "name": "state-of-code" },
+            "headRefName": "chore/linter",
+            "baseRefName": "main",
+            "headRefOid": "3333333333333333333333333333333333333333",
+            "isDraft": true,
+            "additions": 2,
+            "deletions": 1,
+            "changedFiles": 1,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "BEHIND",
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] },
+            "latestOpinionatedReviews": { "nodes": [] },
+            "approvals": { "nodes": [] },
+            "reviewThreads": {
+              "totalCount": 101,
+              "nodes": [{ "id": "PRRT_open42_a", "isResolved": true }]
+            }
+          },
+          {
+            "number": 7,
+            "title": "docs: explain the setup",
+            "url": "https://github.com/Trackunit/handbook/pull/7",
+            "createdAt": "2026-10-25T09:00:00Z",
+            "updatedAt": "2026-10-25T09:00:00Z",
+            "state": "OPEN",
+            "mergedAt": null,
+            "repository": { "owner": { "login": "Trackunit" }, "name": "handbook" },
+            "headRefName": "docs/setup",
+            "baseRefName": "main",
+            "headRefOid": "4444444444444444444444444444444444444444",
+            "isDraft": false,
+            "additions": 12,
+            "deletions": 0,
+            "changedFiles": 1,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "UNKNOWN",
+            "commits": null,
+            "latestOpinionatedReviews": { "nodes": [] },
+            "approvals": { "nodes": [] },
+            "reviewThreads": { "totalCount": 0, "nodes": [] }
+          },
+          null
+        ]
+      },
+      "done": {
+        "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjI=" },
+        "nodes": [
+          {
+            "number": 35,
+            "title": "feat(api): page the results",
+            "url": "https://github.com/Trackunit/state-of-code/pull/35",
+            "createdAt": "2026-10-26T09:00:00Z",
+            "updatedAt": "2026-10-29T10:00:00Z",
+            "state": "MERGED",
+            "mergedAt": "2026-10-29T10:00:00Z",
+            "repository": { "owner": { "login": "Trackunit" }, "name": "state-of-code" },
+            "headRefName": "feat/paging",
+            "baseRefName": "main",
+            "headRefOid": "5555555555555555555555555555555555555555",
+            "isDraft": false,
+            "additions": 150,
+            "deletions": 40,
+            "changedFiles": 6,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "UNKNOWN",
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+            "latestOpinionatedReviews": {
+              "nodes": [{ "state": "APPROVED", "author": { "login": "carol" } }]
+            },
+            "approvals": {
+              "nodes": [{ "submittedAt": "2026-10-28T09:00:00Z", "author": { "login": "carol" } }]
+            },
+            "reviewThreads": {
+              "totalCount": 3,
+              "nodes": [
+                { "id": "PRRT_done35_a", "isResolved": true },
+                { "id": "PRRT_done35_b", "isResolved": true },
+                { "id": "PRRT_done35_c", "isResolved": true }
+              ]
+            },
+            "changesRequested": { "totalCount": 0 },
+            "dismissals": { "nodes": [{ "previousReviewState": "CHANGES_REQUESTED" }] }
+          },
+          {
+            "number": 33,
+            "title": "spike: try another queue",
+            "url": "https://github.com/Trackunit/state-of-code/pull/33",
+            "createdAt": "2026-09-20T09:00:00Z",
+            "updatedAt": "2026-10-01T10:00:00Z",
+            "state": "CLOSED",
+            "mergedAt": null,
+            "repository": { "owner": { "login": "Trackunit" }, "name": "state-of-code" },
+            "headRefName": "spike/queue",
+            "baseRefName": "main",
+            "headRefOid": "6666666666666666666666666666666666666666",
+            "isDraft": false,
+            "additions": 900,
+            "deletions": 10,
+            "changedFiles": 30,
+            "author": { "login": "player-login", "name": "Player One" },
+            "authorAssociation": "MEMBER",
+            "isCrossRepository": false,
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "UNKNOWN",
+            "commits": { "nodes": [] },
+            "latestOpinionatedReviews": { "nodes": [] },
+            "approvals": { "nodes": [] },
+            "reviewThreads": { "totalCount": 0, "nodes": [] },
+            "changesRequested": { "totalCount": 0 },
+            "dismissals": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  },
+  "errors": [
+    {
+      "type": "SERVICE_UNAVAILABLE",
+      "path": ["viewer", "open", "nodes", 3, "commits"],
+      "message": "Something went wrong while executing your query."
+    },
+    {
+      "type": "FORBIDDEN",
+      "path": ["viewer", "open", "nodes", 4],
+      "message": "Although you appear to have the correct authorization credentials, the `Acme` organization has enabled OAuth App access restrictions."
+    }
+  ]
+}

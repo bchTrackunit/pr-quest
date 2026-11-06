@@ -1,5 +1,10 @@
 import { FileStateStore, type StateStore } from '../features/game/index.ts';
-import { FileQuestCache, type QuestCache } from '../features/quests/index.ts';
+import {
+  FileMyPullRequestCache,
+  FileQuestCache,
+  type MyPullRequestCache,
+  type QuestCache,
+} from '../features/quests/index.ts';
 import { FileSettingsStore, type SettingsStore } from '../features/settings/index.ts';
 import { FileSecretStore, type SecretStore } from '../platform/secrets.ts';
 import { migrateLegacyState, userStateDir } from './userState.ts';
@@ -36,6 +41,8 @@ export interface AppStorage {
   gameState: (login: string) => Promise<StateStore>;
   /** `login`'s last quest list and any rate-limit backoff. */
   questCache: (login: string) => Promise<QuestCache>;
+  /** `login`'s last list of their own open PRs and any rate-limit backoff. */
+  myPullRequestCache: (login: string) => Promise<MyPullRequestCache>;
 }
 
 export interface FileStorageOptions {
@@ -80,6 +87,8 @@ export function createFileStorage(stateDir: string, options: FileStorageOptions)
     },
     questCache: async (login) =>
       new FileQuestCache(userStateDir(stateDir, login), { onWarning: warn }),
+    myPullRequestCache: async (login) =>
+      new FileMyPullRequestCache(userStateDir(stateDir, login), { onWarning: warn }),
   };
 }
 

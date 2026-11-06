@@ -13,6 +13,7 @@ import {
   type GitHubClient,
   type ReviewRequestData,
   LinearReviewClient,
+  MyPullRequestService,
   QuestService,
   UnanchoredFindingsError,
 } from '../features/quests/index.ts';
@@ -20,7 +21,7 @@ import { createHandlers, type AppServices } from './handlers.ts';
 import { ReviewRunService } from '../features/reviews/index.ts';
 import { createRouter } from '../platform/router.ts';
 import { LOCAL_CONFIG } from '../platform/test-utils/config.ts';
-import { reviewRequests } from '../features/quests/test-utils/fixtures.ts';
+import { authoredPullRequests, reviewRequests } from '../features/quests/test-utils/fixtures.ts';
 
 vi.mock('@cursor/sdk', () => ({
   Agent: { create: vi.fn(), getRun: vi.fn() },
@@ -50,6 +51,7 @@ let port: number;
 let services: AppServices;
 let github: {
   fetchReviewRequests: ReturnType<typeof vi.fn<GitHubClient['fetchReviewRequests']>>;
+  fetchMyPullRequests: ReturnType<typeof vi.fn<GitHubClient['fetchMyPullRequests']>>;
   fetchRateLimitReset: ReturnType<typeof vi.fn<GitHubClient['fetchRateLimitReset']>>;
   approve: ReturnType<typeof vi.fn<GitHubClient['approve']>>;
   fetchHeadSha: ReturnType<typeof vi.fn<GitHubClient['fetchHeadSha']>>;
@@ -114,6 +116,7 @@ beforeEach(async () => {
   const game = new GameService(store, events, { now: () => new Date(2026, 9, 30, 15) });
   github = {
     fetchReviewRequests: vi.fn(async () => REQUESTS),
+    fetchMyPullRequests: vi.fn(async () => authoredPullRequests()),
     fetchRateLimitReset: vi.fn(async () => undefined),
     approve: vi.fn(async () => undefined),
     fetchHeadSha: vi.fn(async () => DIRECT_HEAD),
@@ -137,7 +140,14 @@ beforeEach(async () => {
     activeRunIdFor: (questId) => runs.activeRunIdFor(questId),
     log: () => undefined,
   });
-  services = { quests, runs, game, github, events };
+  const myPullRequests = new MyPullRequestService({
+    github,
+    events,
+    game,
+    activeRunIdFor: (prId) => runs.activeRunIdFor(prId),
+    log: () => undefined,
+  });
+  services = { quests, myPullRequests, runs, game, github, events };
 
   server = createServer(createRouter(createHandlers({ ...LOCAL_CONFIG, stateDir: dir }, services)));
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
@@ -717,7 +727,7 @@ describe('player', () => {
     const achievements = (await send('GET', '/api/achievements')).body as {
       achievements: Array<{ id: string }>;
     };
-    expect(achievements.achievements).toHaveLength(27);
+    expect(achievements.achievements).toHaveLength(31);
   });
 });
 
@@ -743,6 +753,134 @@ describe('GET /api/events', () => {
 
     expect(firstChunk.type).toBe('text/event-stream');
     expect(firstChunk.chunk).toContain('"type":"questsUpdated"');
+  });
+});
+
+/** The events a new `/api/events` client is sent before `done` says enough were read. */
+function eventsOnConnect(
+  done: (events: Array<{ type: string }>) => boolean,
+): Promise<Array<{ type: string } & Record<string, unknown>>> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path: '/api/events' }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => {
+        text += chunk;
+        const events = [...text.matchAll(/^data: (.*)$/gm)].map((match) =>
+          JSON.parse(match[1] ?? '{}'),
+        );
+        if (done(events)) {
+          resolve(events);
+          req.destroy();
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const OWN_ID = 'Trackunit/state-of-code#40';
+const OWN_PATH = encodeURIComponent(OWN_ID);
+
+describe('GET /api/my-prs', () => {
+  test("lists the player's open PRs, needing my action first", async () => {
+    const response = await send('GET', '/api/my-prs');
+
+    expect(response.status).toBe(200);
+    const body = response.body as { pullRequests: Array<{ id: string; needsMyAction: boolean }> };
+    expect(body.pullRequests.map((pr) => [pr.id, pr.needsMyAction])).toEqual([
+      ['Trackunit/state-of-code#40', true],
+      ['Trackunit/state-of-code#42', false],
+      ['Trackunit/handbook#7', false],
+      ['Trackunit/state-of-code#41', false],
+    ]);
+    expect(response.body).toMatchObject({ stale: false });
+  });
+
+  test('serves the cache, and refresh=1 reads GitHub again', async () => {
+    await send('GET', '/api/my-prs');
+    await send('GET', '/api/my-prs');
+    expect(github.fetchMyPullRequests).toHaveBeenCalledTimes(1);
+
+    await send('GET', '/api/my-prs?refresh=1');
+
+    expect(github.fetchMyPullRequests).toHaveBeenCalledTimes(2);
+  });
+
+  test('reports GitHub failures as upstreamFailed', async () => {
+    github.fetchMyPullRequests.mockRejectedValue(new GitHubApiError('boom'));
+
+    const response = await send('GET', '/api/my-prs');
+
+    expect(response).toMatchObject({ status: 502, body: { error: { code: 'upstreamFailed' } } });
+  });
+});
+
+describe('POST /api/my-prs/:id/review', () => {
+  test('starts a self-review run flagged as my own PR', async () => {
+    mockAgentFinishing();
+
+    const response = await send('POST', `/api/my-prs/${OWN_PATH}/review`, {});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      run: { questId: OWN_ID, status: 'queued', ownPr: true },
+    });
+  });
+
+  test('responds 404 for a PR that is not one of mine', async () => {
+    const response = await send('POST', `/api/my-prs/${DIRECT_PATH}/review`, {});
+
+    expect(response.status).toBe(404);
+  });
+
+  test('a finished self-review is never posted and earns nothing', async () => {
+    mockAgentFinishing();
+    const started = await send('POST', `/api/my-prs/${OWN_PATH}/review`, {});
+    await services.runs.whenIdle();
+    const run = (started.body as { run: ReviewRun }).run;
+
+    const posted = await send('POST', `/api/runs/${run.id}/post`, { findingIndexes: [0, 1] });
+
+    expect(posted).toMatchObject({ status: 403, body: { error: { code: 'forbidden' } } });
+    expect(github.submitReview).not.toHaveBeenCalled();
+    expect(services.game.player()).toMatchObject({ xp: 0, counters: { agentReviews: 0 } });
+    expect((await send('POST', `/api/runs/${run.id}/discard`)).status).toBe(200);
+  });
+});
+
+describe('GET /api/events and author notices', () => {
+  test('sends the My PRs list, then author XP no tab received, once', async () => {
+    const read = authoredPullRequests();
+    const ownPr = read.open[0];
+    if (!ownPr) {
+      throw new Error('the fixture needs an open PR');
+    }
+    await send('GET', '/api/my-prs');
+    github.fetchMyPullRequests.mockResolvedValue({
+      ...read,
+      open: [
+        { ...ownPr, resolvedThreads: [...ownPr.resolvedThreads, 'PRRT_new'] },
+        ...read.open.slice(1),
+      ],
+    });
+    await send('GET', '/api/my-prs?refresh=1');
+
+    const first = await eventsOnConnect((events) =>
+      events.some((event) => event.type === 'xpGained'),
+    );
+    const second = await eventsOnConnect((events) =>
+      events.some((event) => event.type === 'myPullRequestsUpdated'),
+    );
+
+    expect(first.map((event) => event.type)).toContain('myPullRequestsUpdated');
+    expect(first.find((event) => event.type === 'xpGained')).toMatchObject({
+      reason: 'threadResolved',
+      questId: OWN_ID,
+      player: { xp: services.game.player().xp },
+    });
+    expect(second.map((event) => event.type)).not.toContain('xpGained');
   });
 });
 

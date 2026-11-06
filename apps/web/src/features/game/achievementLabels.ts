@@ -16,6 +16,7 @@ export const CATEGORY_LABELS: Record<AchievementCategory, string> = {
   streaks: 'Streaks and schedule',
   feats: 'Feats',
   variety: 'Variety',
+  authoring: 'Your PRs',
   secret: 'Secret',
 };
 
@@ -24,6 +25,7 @@ export const CATEGORY_ORDER: ReadonlyArray<AchievementCategory> = [
   'streaks',
   'feats',
   'variety',
+  'authoring',
   'secret',
 ];
 

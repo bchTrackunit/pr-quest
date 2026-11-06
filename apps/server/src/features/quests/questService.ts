@@ -24,6 +24,8 @@ export interface QuestServiceOptions {
   game: Pick<GameService, 'recordQueueChecked'>;
   activeRunIdFor: (questId: string) => string | undefined;
   log: (message: string) => void;
+  /** The session's GitHub login; PRs it authored are left off the board. */
+  login?: string;
   now?: () => Date;
   /** Keeps the last good quest list and any backoff across restarts. */
   cache?: Pick<QuestCache, 'load' | 'save'>;
@@ -196,9 +198,12 @@ export class QuestService {
       }
       return this.enterBackoff(kind, rateLimitResetOf(error));
     }
-    const quests = requests.map((request) =>
-      toQuest({ ...request, linear: linear.lookup(linearInfo, request.item.url) }),
-    );
+    const player = this.options.login?.toLowerCase();
+    const quests = requests
+      .filter((request) => !player || request.item.authorLogin?.toLowerCase() !== player)
+      .map((request) =>
+        toQuest({ ...request, linear: linear.lookup(linearInfo, request.item.url) }),
+      );
     this.snapshot = {
       quests: sortQuests(quests),
       fetchedAt: this.now(),

@@ -83,6 +83,53 @@ export interface Quest {
 }
 
 // ---------------------------------------------------------------------------
+// My PRs (open pull requests the player authored)
+// ---------------------------------------------------------------------------
+
+/** From the latest approving or change-requesting review of each reviewer. */
+export type MyPullRequestReviewState = 'approved' | 'changesRequested' | 'waiting';
+
+/** `none`: the head commit has no checks. `unknown`: GitHub's answer couldn't be read. */
+export type CiState = 'passing' | 'failing' | 'running' | 'none' | 'unknown';
+
+/**
+ * `behind`: GitHub's `BEHIND`, reported only when the repo requires branches to be up to date
+ * before merging. `unknown`: GitHub hasn't worked it out yet, or its answer couldn't be read.
+ */
+export type MergeState = 'clean' | 'conflicting' | 'behind' | 'unknown';
+
+export interface MyPullRequest {
+  /** `<owner>/<repo>#<number>`, the same form as `Quest.id`. */
+  id: string;
+  title: string;
+  repo: RepoRef;
+  number: number;
+  githubUrl: string;
+  author: QuestAuthor;
+  authorAssociation?: string;
+  isCrossRepository?: boolean;
+  sourceBranch: string;
+  targetBranch: string;
+  headSha: string;
+  isDraft: boolean;
+  diffStats: DiffStats;
+  difficulty: DifficultyTier;
+  openedAt: string;
+  updatedAt: string;
+  reviewState: MyPullRequestReviewState;
+  ciState: CiState;
+  mergeState: MergeState;
+  /** Unresolved threads among the first 100 GitHub returns. */
+  unresolvedThreads: number;
+  /** The PR has more than 100 review threads, so `unresolvedThreads` may be short. */
+  moreThreads?: true;
+  /** Changes are requested or a review thread is unresolved. */
+  needsMyAction: boolean;
+  /** The newest self-review run that is still queued, running or awaiting a decision. */
+  activeRunId?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Review runs (Cursor cloud agents reviewing a quest)
 // ---------------------------------------------------------------------------
 
@@ -182,6 +229,8 @@ export interface ReviewRun {
   error?: ReviewRunError;
   /** GitHub URL of the review created by `POST /api/runs/:id/post`. */
   postedReviewUrl?: string;
+  /** A self-review of the player's own PR. Its findings are read-only and never posted. */
+  ownPr?: true;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +266,10 @@ export const ACHIEVEMENT_IDS = [
   'bot-wrangler',
   'speedrunner',
   'archaeologist',
+  'ship-it',
+  'all-tied-up',
+  'small-batch',
+  'flawless-victory',
 ] as const;
 
 export type AchievementId = (typeof ACHIEVEMENT_IDS)[number];
@@ -225,7 +278,13 @@ export type AchievementId = (typeof ACHIEVEMENT_IDS)[number];
 export type AchievementRarity = 'common' | 'rare' | 'epic' | 'legendary';
 
 /** The group the Achievements dialog lists an achievement under. */
-export type AchievementCategory = 'milestones' | 'streaks' | 'feats' | 'variety' | 'secret';
+export type AchievementCategory =
+  | 'milestones'
+  | 'streaks'
+  | 'feats'
+  | 'variety'
+  | 'authoring'
+  | 'secret';
 
 export type AchievementTier = 'bronze' | 'silver' | 'gold';
 
@@ -280,6 +339,7 @@ export interface PlayerState {
   xpIntoLevel: number;
   /** XP needed to go from `level` to `level + 1`. */
   xpForNextLevel: number;
+  /** Consecutive days with a review action or author XP, up to today or yesterday. */
   streakDays: number;
   /** Local calendar date (`YYYY-MM-DD`) of the most recent review action. */
   lastReviewDate?: string;
@@ -287,8 +347,24 @@ export interface PlayerState {
   counters: PlayerCounters;
 }
 
-/** XP is only awarded for real actions, never for merely starting an agent. */
-export type XpReason = 'reviewPosted' | 'approved' | 'changesRequested' | 'achievement';
+/**
+ * XP is only awarded for real actions, never for merely starting an agent. `prMerged`,
+ * `prApproved` and `threadResolved` are author XP, for the player's own PRs.
+ */
+export type XpReason =
+  | 'reviewPosted'
+  | 'approved'
+  | 'changesRequested'
+  | 'prMerged'
+  | 'prApproved'
+  | 'threadResolved'
+  | 'achievement';
+
+export const AUTHOR_XP_REASONS: ReadonlyArray<XpReason> = [
+  'prMerged',
+  'prApproved',
+  'threadResolved',
+];
 
 export interface AchievementStatus extends AchievementDef {
   unlockedAt?: string;
@@ -392,6 +468,7 @@ export interface ModelOption {
  */
 export type ServerEvent =
   | ({ type: 'questsUpdated' } & ListQuestsResponse)
+  | ({ type: 'myPullRequestsUpdated' } & ListMyPullRequestsResponse)
   | { type: 'runUpdated'; run: ReviewRun }
   | { type: 'achievementUnlocked'; achievement: AchievementDef; unlockedAt: string }
   | ({ type: 'xpGained'; player: PlayerState } & XpGain);
@@ -476,6 +553,16 @@ export interface ListQuestsResponse {
   /** The quests are older than the cache lifetime, for example because GitHub is rate limited. */
   stale: boolean;
   /** Set while GitHub rate limits the quest list. */
+  rateLimit?: RateLimitStatus;
+}
+
+export interface ListMyPullRequestsResponse {
+  pullRequests: Array<MyPullRequest>;
+  /** When these PRs were read from GitHub. */
+  fetchedAt: string;
+  /** The list is older than the cache lifetime, for example because GitHub is rate limited. */
+  stale: boolean;
+  /** Set while GitHub rate limits the list. */
   rateLimit?: RateLimitStatus;
 }
 
@@ -585,6 +672,10 @@ export const API_ROUTES = {
   listQuests: { method: 'GET', path: '/api/quests' },
   startReview: { method: 'POST', path: '/api/quests/:id/review' },
   approveQuest: { method: 'POST', path: '/api/quests/:id/approve' },
+  /** The player's open PRs; caches and `?refresh=1` work as for `listQuests`. */
+  listMyPullRequests: { method: 'GET', path: '/api/my-prs' },
+  /** Sends a review agent at one of the player's own PRs; its run can't be posted. */
+  startSelfReview: { method: 'POST', path: '/api/my-prs/:id/review' },
   listRuns: { method: 'GET', path: '/api/runs' },
   getRun: { method: 'GET', path: '/api/runs/:id' },
   postRun: { method: 'POST', path: '/api/runs/:id/post' },
@@ -618,6 +709,8 @@ export interface ApiContract {
   listQuests: { body: undefined; response: ListQuestsResponse };
   startReview: { body: StartReviewRequest; response: RunResponse };
   approveQuest: { body: ApproveRequest; response: ApproveResponse };
+  listMyPullRequests: { body: undefined; response: ListMyPullRequestsResponse };
+  startSelfReview: { body: StartReviewRequest; response: RunResponse };
   listRuns: { body: undefined; response: ListRunsResponse };
   getRun: { body: undefined; response: RunResponse };
   postRun: { body: PostReviewRequest; response: PostReviewResponse };

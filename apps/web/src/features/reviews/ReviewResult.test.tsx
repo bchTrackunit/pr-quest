@@ -356,6 +356,26 @@ describe('ReviewResult', () => {
     expect(handlers.onDiscard).toHaveBeenCalled();
   });
 
+  test('a self-review is read-only: no selection, Post, Approve or Request changes, only Discard', async () => {
+    const user = userEvent.setup();
+    const handlers = renderResult(
+      makeRun({ status: 'finished', result: makeResult(), ownPr: true }),
+      null,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Self-review of Trackunit/manager#101' });
+    expect(dialog.textContent).toContain('Nothing here is posted to GitHub, and it earns no XP.');
+    expect(within(dialog).getByText('src/query.ts:40')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Select / })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Post to PR' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Request changes/ })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(handlers.onDiscard).toHaveBeenCalled();
+    expect(handlers.onPost).not.toHaveBeenCalled();
+  });
+
   test('names the quest from the run once it has left the queue, without offering Approve', () => {
     renderResult(makeRun({ status: 'finished', result: makeResult() }), null);
 

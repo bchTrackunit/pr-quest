@@ -8,6 +8,12 @@ import type {
 } from '@pr-quest/contract/discussion';
 import { GitHubApiError, type GitHubApi } from '../../platform/githubApi.ts';
 import type { LinearReviewInfo } from './linear.ts';
+import {
+  type AuthoredPullRequest,
+  buildMyPullRequestsQuery,
+  MAX_OPEN_PRS,
+  parseMyPullRequestsPage,
+} from './myPullRequests.ts';
 import { difficultyFor, formatQuestId, type QuestRef } from './quests.ts';
 import { isRateLimitError, parseRateLimitReset } from '../../platform/rateLimit.ts';
 import {
@@ -18,8 +24,9 @@ import {
   type ReviewDraft,
 } from './reviewPayload.ts';
 
-const SEARCH_ALL_QUERY = 'is:pr is:open review-requested:@me';
-const SEARCH_DIRECT_QUERY = 'is:pr is:open user-review-requested:@me';
+/** The player's own PRs belong on My PRs, even when a team they're on is asked to review. */
+const SEARCH_ALL_QUERY = 'is:pr is:open review-requested:@me -author:@me';
+const SEARCH_DIRECT_QUERY = 'is:pr is:open user-review-requested:@me -author:@me';
 const SEARCH_LIMIT = '100';
 const VIEW_CONCURRENCY = 4;
 const REPO_URL_PATTERN = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)$/;
@@ -293,6 +300,18 @@ export interface GitHubClientOptions {
   onWarning?: (message: string) => void;
 }
 
+/** What one read of the player's PRs found, with how much of it couldn't be read. */
+export interface AuthoredPullRequests {
+  viewerLogin: string;
+  open: Array<AuthoredPullRequest>;
+  /** Merged and closed PRs updated since the asked-for time, newest-updated first. */
+  done: Array<AuthoredPullRequest>;
+  openSkipped: number;
+  doneSkipped: number;
+  /** Errors reading merged and closed PRs, other than access GitHub will never grant. */
+  doneErrors: number;
+}
+
 /**
  * The search found PRs but most of their details could not be read, so the list would understate
  * the queue (and could look empty). Callers should keep their previous list.
@@ -542,6 +561,7 @@ export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInp
 export class GitHubClient {
   private readonly api: Pick<GitHubApi, 'request' | 'graphql'>;
   private readonly onWarning: (message: string) => void;
+  private warnedOpenPrCap = false;
 
   public constructor(
     api: Pick<GitHubApi, 'request' | 'graphql'>,
@@ -595,6 +615,61 @@ export class GitHubClient {
       }
       return [entry];
     });
+  }
+
+  /**
+   * The player's open PRs (up to `MAX_OPEN_PRS`), and their merged and closed PRs updated at or
+   * after `doneSince`. Each part pages on its own; both share a query while both have pages left.
+   */
+  public async fetchMyPullRequests(doneSince: Date): Promise<AuthoredPullRequests> {
+    const result: AuthoredPullRequests = {
+      viewerLogin: '',
+      open: [],
+      done: [],
+      openSkipped: 0,
+      doneSkipped: 0,
+      doneErrors: 0,
+    };
+    let open: { after?: string } | undefined = {};
+    let done: { after?: string } | undefined = {};
+    while (open || done) {
+      const { query, variables } = buildMyPullRequestsQuery({ open, done });
+      const page = parseMyPullRequestsPage(await this.api.graphql(query, variables));
+      if ((open && !page.open) || (done && !page.done)) {
+        throw new GitHubApiError(
+          `GitHub returned no list of your ${open && !page.open ? 'open' : 'merged and closed'} PRs`,
+        );
+      }
+      result.viewerLogin = page.viewerLogin;
+      open = undefined;
+      if (page.open) {
+        result.open.push(...page.open.pullRequests);
+        result.openSkipped += page.open.skipped;
+        const read = result.open.length + result.openSkipped;
+        if (page.open.nextCursor && read >= MAX_OPEN_PRS) {
+          if (!this.warnedOpenPrCap) {
+            this.warnedOpenPrCap = true;
+            this.onWarning(`You have more than ${MAX_OPEN_PRS} open PRs; showing the newest ones`);
+          }
+        } else if (page.open.nextCursor) {
+          open = { after: page.open.nextCursor };
+        }
+      }
+      done = undefined;
+      if (page.done) {
+        const recent = page.done.pullRequests.filter(
+          (pr) => Date.parse(pr.updatedAt) >= doneSince.getTime(),
+        );
+        result.done.push(...recent);
+        result.doneSkipped += page.done.skipped;
+        result.doneErrors += page.done.otherErrors;
+        const reachedSince = recent.length < page.done.pullRequests.length;
+        if (page.done.nextCursor && !reachedSince) {
+          done = { after: page.done.nextCursor };
+        }
+      }
+    }
+    return result;
   }
 
   /** Details for every ref in one GraphQL query; GitHub returns the PRs it could read. */

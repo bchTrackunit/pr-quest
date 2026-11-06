@@ -20,9 +20,48 @@ command it runs is `gh auth token`, for the GitHub CLI fallback.
 - **Linear** is optional. With a Linear key, the server calls Linear's MCP `list_diffs` tool to
   add each PR's Linear review link and `needsAttention` flag. Any Linear failure falls back to
   GitHub data only.
+- **Your own PRs** are left out of both searches with `-author:@me`, and any that still come
+  back, for example through a team request, are dropped by login.
 - **Refreshing** takes about 5 seconds for around 50 PRs. The server checks GitHub every 2
   minutes and on **Refresh**; loading the page or reconnecting the live updates stream uses the
   cached list.
+
+## My PRs
+
+The My PRs tab reads `viewer.pullRequests` with GraphQL, 50 PRs per page: your open PRs, newest
+first, up to 500, and, for author XP, your merged and closed PRs updated since the last sync
+minus 10 minutes. Each PR brings its latest opinionated reviews, its approvals, its last commit's
+status rollup, `mergeable` and `mergeStateStatus`, and its first 100 review threads.
+
+- **Review state** is _changes requested_ when any latest review requests changes, _approved_ when
+  any approves, and _waiting_ otherwise.
+- **CI** is the head commit's `statusCheckRollup`: success is passing, failure or error is
+  failing, pending or expected is running, and no rollup is _No checks_.
+- **Merge state** is conflicting for `CONFLICTING` or `DIRTY`, out of date for `BEHIND`, which
+  GitHub only reports when the repo requires branches to be up to date, and unknown while GitHub
+  is still computing it.
+- **Threads** count unresolved threads among the first 100; on a PR with more, the count gets a
+  `+`, for example `12+`.
+- When GitHub fails to return CI or merge state, the card shows it as unknown instead of hiding
+  the PR. Reviews or threads it fails to return read as none. A PR GitHub won't show at all, for
+  example behind SAML, is left out; if that happens to more than half of your open PRs, the server
+  keeps the previous list.
+
+The list uses the same 2-minute poll, 60-second cache (in `my-prs.json`) and rate-limit backoff
+as the board, and `GET /api/my-prs?refresh=1` forces a fetch. A **self-review**
+(`POST /api/my-prs/:id/review`) is a normal review run flagged `ownPr`. The server refuses to post
+it with `403`, and it counts toward no XP or achievement.
+
+**Author XP** is paid from the same read. Each PR, approval and thread pays once, ever, recorded
+in `state.json`, so undoing an approval or unresolving a thread takes nothing back. An approval
+pays when anyone other than you approved after tracking started, bots included. Nothing that
+happened before PR Quest first read your PRs pays: merges and approvals before that time, and
+threads already resolved then, or on PRs opened before it. When the read of merged PRs fails, the
+sync time stays where it was, so they're read again next time.
+
+Author events are usually noticed while no tab is open. Notices that reach no tab are kept in
+memory, every achievement and the newest 50 XP notices, and replayed once to the next tab that
+connects.
 
 ## GitHub rate limits
 
@@ -256,8 +295,10 @@ When a file can't be used:
 - A `secrets.json` or `settings.json` written by a newer PR Quest stops the server at startup, so
   an older build never overwrites it. A newer `state.json` is left in place, and the game reports
   an error instead of loading it.
-- The first time PR Quest reads a version 1 `state.json`, it copies it to `state.json.v1.bak`.
-  Copy it back to run an older build.
+- The first time PR Quest reads a version 1 `state.json`, it copies it to `state.json.v1.bak`,
+  and a version 2 file to `state.json.v2.bak`. Copy it back to run an older build. Version 3 keeps
+  the streak as a list of active days, so a late-noticed merge can credit a past day; a version 2
+  streak becomes its days up to the last review.
 - Runs saved before findings were selected for posting kept an accepted or rejected decision per
   finding. They load with the accepted findings selected, which were the ones that got posted.
 
@@ -271,7 +312,8 @@ A `state.json` or `quests.json` that shows up in `~/.pr-quest` later is renamed 
 
 ## Achievements
 
-"Review action" means posting a review, requesting changes or approving. Times and days use the
+"Review action" means posting a review, requesting changes or approving. The streak also counts
+days with author XP. The Your PRs achievements count only PRs merged after tracking started. Times and days use the
 server's local clock, and the daily counts (Clean Sweep, Featherweight) start again at local
 midnight. The Achievements dialog shows progress where there is a count and hides secret
 achievements behind a hint until they unlock.
@@ -307,6 +349,11 @@ achievements behind a hint until they unlock.
 | Explorer         | Review actions in 10 different repos                                                | Rare      |
 | Diplomat         | Review actions on PRs from 10 different people, not counting yourself or bots       | Rare      |
 | Bot Wrangler     | Review actions on 10 PRs by Dependabot or Renovate                                  | Rare      |
+| **Your PRs**     |                                                                                     |           |
+| Ship It          | One of your PRs is merged                                                           | Common    |
+| All Tied Up      | One of your PRs is merged after at least 3 of its review threads were resolved      | Rare      |
+| Small Batch      | 5 of your Trivial or Normal PRs are merged within 7 days                            | Rare      |
+| Flawless Victory | 10 of your PRs are merged without anyone ever requesting changes on them            | Epic      |
 | **Secret**       |                                                                                     |           |
 | Speedrunner      | Approve within 5 minutes of the PR opening, after a posted review or finished agent | Epic      |
 | Archaeologist    | A review action on the quest that has waited longest on your board                  | Rare      |

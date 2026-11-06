@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 
 import {
+  type AuthoredPullRequests,
   parsePullRequestBatch,
   parseSearchResults,
   type PullRequestDetails,
   type ReviewRequestData,
 } from '../github.ts';
+import { parseMyPullRequestsPage } from '../myPullRequests.ts';
 
 /** A recorded GitHub response from `apps/server/src/platform/fixtures/github`. */
 export const fixture = (name: string): string =>
@@ -31,4 +33,17 @@ export function reviewRequests(): Array<ReviewRequestData> {
     { item: teamItem, details: teamDetails, direct: false },
     { item: directItem, details: directDetails, direct: true },
   ];
+}
+
+/** The player's PRs in `graphql-my-prs.json`, as one read of `fetchMyPullRequests` returns them. */
+export function authoredPullRequests(): AuthoredPullRequests {
+  const page = parseMyPullRequestsPage(fixture('graphql-my-prs.json'));
+  return {
+    viewerLogin: page.viewerLogin,
+    open: page.open?.pullRequests ?? [],
+    done: page.done?.pullRequests ?? [],
+    openSkipped: page.open?.skipped ?? 0,
+    doneSkipped: page.done?.skipped ?? 0,
+    doneErrors: page.done?.otherErrors ?? 0,
+  };
 }

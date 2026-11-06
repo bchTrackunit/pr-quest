@@ -10,6 +10,7 @@ import {
   type HealthResponse,
   type ListAchievementsResponse,
   type ListModelsResponse,
+  type ListMyPullRequestsResponse,
   type ListQuestsResponse,
   type ListRunsResponse,
   type PlayerResponse,
@@ -116,6 +117,23 @@ export function fetchQuests(
     query: options.refresh ? { refresh: '1' } : undefined,
     signal,
   });
+}
+
+/** The player's own open PRs; `refresh` bypasses the server's cache. */
+export function fetchMyPullRequests(
+  signal?: AbortSignal,
+  options: { refresh?: boolean } = {},
+): Promise<ListMyPullRequestsResponse> {
+  return apiRequest('listMyPullRequests', {
+    params: {},
+    query: options.refresh ? { refresh: '1' } : undefined,
+    signal,
+  });
+}
+
+/** A review of the player's own PR; its findings stay in PR Quest. */
+export function startSelfReview(prId: string, body: StartReviewRequest = {}): Promise<RunResponse> {
+  return apiRequest('startSelfReview', { params: { id: prId }, body });
 }
 
 export function fetchRuns(signal?: AbortSignal): Promise<ListRunsResponse> {

@@ -53,8 +53,20 @@ export interface AchievementFacts {
   queueEmptyAfterActionToday: boolean;
   /** Today's counters, or zeros when the last action was on another day. */
   today: { trivialApprovals: number; directPrs: number };
+  /** Paid merges of the player's own PRs. */
+  author: AuthorFacts;
   /** Set only while a review action is being applied. */
   action?: ActionFacts;
+}
+
+export interface AuthorFacts {
+  merges: number;
+  /** Merges of PRs nobody ever requested changes on. */
+  flawlessMerges: number;
+  /** Merges after at least 3 review threads were resolved. */
+  tiedUpMerges: number;
+  /** Trivial or Normal merges in the last 7 days. */
+  smallMerges: number;
 }
 
 export interface AchievementRule {
@@ -177,7 +189,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
     {
       id: 'on-fire',
       name: 'On Fire',
-      description: 'Review something five days in a row.',
+      description: 'Keep your streak going five days in a row.',
       icon: '🔥',
       rarity: 'epic',
       category: 'streaks',
@@ -189,7 +201,7 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
     {
       id: 'unstoppable',
       name: 'Unstoppable',
-      description: 'Review something seven days in a row.',
+      description: 'Keep your streak going seven days in a row.',
       icon: '☄️',
       rarity: 'legendary',
       category: 'streaks',
@@ -372,6 +384,53 @@ export const ACHIEVEMENT_RULES: ReadonlyArray<AchievementRule> = [
       target: 10,
     },
     (facts) => facts.ledger.botPrs.length,
+  ),
+  counted(
+    {
+      id: 'ship-it',
+      name: 'Ship It',
+      description: 'Get one of your PRs merged.',
+      icon: '🚢',
+      rarity: 'common',
+      category: 'authoring',
+      target: 1,
+    },
+    (facts) => facts.author.merges,
+  ),
+  {
+    def: define({
+      id: 'all-tied-up',
+      name: 'All Tied Up',
+      description: 'Get a PR merged after at least 3 of its review threads were resolved.',
+      icon: '🪢',
+      rarity: 'rare',
+      category: 'authoring',
+    }),
+    isMet: (facts) => facts.author.tiedUpMerges > 0,
+  },
+  counted(
+    {
+      id: 'small-batch',
+      name: 'Small Batch',
+      description: 'Get 5 of your Trivial or Normal PRs merged within 7 days.',
+      icon: '🧁',
+      rarity: 'rare',
+      category: 'authoring',
+      target: 5,
+    },
+    (facts) => facts.author.smallMerges,
+  ),
+  counted(
+    {
+      id: 'flawless-victory',
+      name: 'Flawless Victory',
+      description: 'Get 10 of your PRs merged without anyone ever requesting changes on them.',
+      icon: '💎',
+      rarity: 'epic',
+      category: 'authoring',
+      target: 10,
+    },
+    (facts) => facts.author.flawlessMerges,
   ),
   onAction(
     {

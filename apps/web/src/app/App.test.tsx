@@ -10,6 +10,7 @@ import * as apiClient from '../platform/apiClient.ts';
 import { App } from './App.tsx';
 import {
   makeAchievements,
+  makeMyPullRequest,
   makePlayer,
   makeQuest,
   makeResult,
@@ -22,6 +23,8 @@ vi.mock('../platform/apiClient.ts', async (importOriginal) => {
   return {
     ...actual,
     fetchQuests: vi.fn(),
+    fetchMyPullRequests: vi.fn(),
+    startSelfReview: vi.fn(),
     fetchRuns: vi.fn(),
     fetchPlayer: vi.fn(),
     fetchAchievements: vi.fn(),
@@ -78,6 +81,11 @@ describe('App', () => {
       quests: [makeQuest()],
       fetchedAt: new Date().toISOString(),
       source: 'linear',
+      stale: false,
+    });
+    api.fetchMyPullRequests.mockResolvedValue({
+      pullRequests: [],
+      fetchedAt: new Date().toISOString(),
       stale: false,
     });
     api.fetchRuns.mockRejectedValue(new ApiRequestError(501, 'notImplemented', 'Not implemented'));
@@ -647,6 +655,8 @@ describe('App', () => {
       expect(screen.getByText('Live')).toBeTruthy();
       expect(api.fetchQuests).toHaveBeenCalledTimes(2);
       expect(api.fetchQuests).toHaveBeenLastCalledWith(undefined, {});
+      expect(api.fetchMyPullRequests).toHaveBeenCalledTimes(2);
+      expect(api.fetchMyPullRequests).toHaveBeenLastCalledWith(undefined, {});
     } finally {
       vi.useRealTimers();
     }
@@ -665,7 +675,10 @@ describe('App', () => {
       }
 
       expect(api.fetchQuests).toHaveBeenCalledTimes(4);
-      for (const [, options] of api.fetchQuests.mock.calls) {
+      for (const [, options] of [
+        ...api.fetchQuests.mock.calls,
+        ...api.fetchMyPullRequests.mock.calls,
+      ]) {
         expect(options?.refresh).not.toBe(true);
       }
     } finally {
@@ -694,5 +707,175 @@ describe('App', () => {
 
     await user.click(refresh);
     expect(api.fetchQuests).toHaveBeenCalledTimes(1);
+  });
+
+  describe('My PRs', () => {
+    const needsFixes = makeMyPullRequest({
+      number: 7,
+      title: 'Fix the map legend',
+      reviewState: 'changesRequested',
+      needsMyAction: true,
+    });
+    const waiting = makeMyPullRequest({ number: 8, title: 'Speed up the export' });
+
+    beforeEach(() => {
+      api.fetchMyPullRequests.mockResolvedValue({
+        pullRequests: [needsFixes, waiting],
+        fetchedAt: new Date().toISOString(),
+        stale: false,
+      });
+    });
+
+    test('a tab next to the review board shows my PRs and how many need my action', async () => {
+      const user = userEvent.setup();
+      await renderApp();
+
+      const tab = await screen.findByRole('tab', { name: 'My PRs (1), need my action' });
+      const boardTab = screen.getByRole('tab', { name: 'Review board' });
+      expect(boardTab.getAttribute('aria-selected')).toBe('true');
+
+      await user.click(tab);
+      expect(tab.getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByRole('tabpanel', { name: /My PRs/ })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Fix the map legend' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Add the fleet health widget' })).toBeNull();
+
+      await user.keyboard('{ArrowLeft}');
+      expect(document.activeElement).toBe(boardTab);
+      expect(screen.getByRole('heading', { name: 'Add the fleet health widget' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Fix the map legend' })).toBeNull();
+    });
+
+    test('the count follows the list pushed over the event stream', async () => {
+      await renderApp();
+      await screen.findByRole('tab', { name: 'My PRs (1), need my action' });
+
+      emit({
+        type: 'myPullRequestsUpdated',
+        pullRequests: [needsFixes, { ...waiting, unresolvedThreads: 2, needsMyAction: true }],
+        fetchedAt: new Date().toISOString(),
+        stale: false,
+      });
+      expect(screen.getByRole('tab', { name: 'My PRs (2), need my action' })).toBeTruthy();
+    });
+
+    test('Refresh on the tab forces a GitHub refetch of my PRs', async () => {
+      const user = userEvent.setup();
+      await renderApp();
+      await user.click(await screen.findByRole('tab', { name: /My PRs/ }));
+      expect(api.fetchMyPullRequests).toHaveBeenLastCalledWith(expect.any(AbortSignal), {});
+
+      await user.click(screen.getByRole('button', { name: /Refresh/ }));
+      expect(api.fetchMyPullRequests).toHaveBeenLastCalledWith(undefined, { refresh: true });
+      expect(api.fetchQuests).toHaveBeenCalledTimes(1);
+    });
+
+    test('a self-review is read-only, and after Discard the agent can be summoned again', async () => {
+      const user = userEvent.setup();
+      const queued = makeRun({
+        id: 'self-1',
+        questId: needsFixes.id,
+        ownPr: true,
+        status: 'queued',
+        startedAt: new Date().toISOString(),
+        quest: {
+          title: needsFixes.title,
+          repo: needsFixes.repo,
+          number: needsFixes.number,
+          githubUrl: needsFixes.githubUrl,
+        },
+      });
+      const finished: ReviewRun = { ...queued, status: 'finished', result: makeResult() };
+      api.startSelfReview.mockResolvedValue({ run: queued });
+      api.discardRun.mockResolvedValue({ run: { ...finished, disposition: 'discarded' } });
+      await renderApp();
+      await user.click(await screen.findByRole('tab', { name: /My PRs/ }));
+
+      const legend = within(screen.getByRole('article', { name: 'Fix the map legend' }));
+      await user.click(legend.getByRole('button', { name: 'Summon agent' }));
+      expect(api.startSelfReview).toHaveBeenCalledWith('Trackunit/manager#7');
+      expect(api.startReview).not.toHaveBeenCalled();
+      expect(await legend.findByText('Agent is gearing up…')).toBeTruthy();
+
+      emit({ type: 'runUpdated', run: finished });
+      await user.click(legend.getByRole('button', { name: /Loot ready/ }));
+      const dialog = screen.getByRole('dialog', { name: 'Self-review of Trackunit/manager#7' });
+      expect(within(dialog).queryByRole('button', { name: 'Post to PR' })).toBeNull();
+      expect(within(dialog).queryByRole('button', { name: 'Approve' })).toBeNull();
+
+      await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+      expect(api.discardRun).toHaveBeenCalledWith('self-1');
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(legend.getByRole('button', { name: 'Summon agent' })).toBeTruthy();
+    });
+
+    test('author XP pops and leaves a notice naming the PR', async () => {
+      await renderApp();
+      await screen.findByRole('tab', { name: /My PRs/ });
+
+      emit({
+        type: 'xpGained',
+        eventId: 'xp-merge-7',
+        amount: 40,
+        reason: 'prMerged',
+        questId: needsFixes.id,
+        player: makePlayer(),
+      });
+      emit({
+        type: 'xpGained',
+        eventId: 'xp-merge-7',
+        amount: 40,
+        reason: 'prMerged',
+        questId: needsFixes.id,
+        player: makePlayer(),
+      });
+      emit({
+        type: 'xpGained',
+        eventId: 'xp-thread-9',
+        amount: 6,
+        reason: 'threadResolved',
+        questId: 'Trackunit/manager#999',
+        player: makePlayer(),
+      });
+
+      expect(screen.getByText('+40 XP')).toBeTruthy();
+      const toasts = screen.getByRole('list', { name: 'Notifications' });
+      expect(within(toasts).getAllByText('Your PR merged: +40 XP')).toHaveLength(1);
+      expect(
+        within(toasts).getByText('Trackunit/manager#7: Fix the map legend', { exact: false }),
+      ).toBeTruthy();
+      expect(within(toasts).getByText('Thread resolved: +6 XP')).toBeTruthy();
+      expect(within(toasts).getByText('Trackunit/manager#999')).toBeTruthy();
+    });
+
+    test('an achievement replayed on connect is announced even though the list already has it', async () => {
+      await renderApp();
+      const firstBlood = makeAchievements().find((entry) => entry.id === 'first-blood');
+      if (!firstBlood) {
+        throw new Error('fixture missing');
+      }
+
+      emit({
+        type: 'achievementUnlocked',
+        achievement: firstBlood,
+        unlockedAt: '2026-10-20T10:00:00.000Z',
+      });
+
+      const toasts = screen.getByRole('list', { name: 'Notifications' });
+      expect(within(toasts).getByText('Achievement unlocked: First Blood')).toBeTruthy();
+    });
+
+    test('review XP gets no author notice', async () => {
+      await renderApp();
+      emit({
+        type: 'xpGained',
+        eventId: 'xp-review-1',
+        amount: 75,
+        reason: 'reviewPosted',
+        player: makePlayer(),
+      });
+      const toasts = screen.getByRole('list', { name: 'Notifications' });
+      expect(within(toasts).queryAllByRole('listitem')).toHaveLength(0);
+    });
   });
 });

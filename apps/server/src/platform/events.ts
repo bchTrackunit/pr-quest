@@ -52,9 +52,11 @@ export class EventHub {
     res.on('error', disconnect);
   }
 
-  public broadcast(event: ServerEvent): void {
+  /** Returns how many open streams the event was written to. */
+  public broadcast(event: ServerEvent): number {
     const message = format(event);
     this.clients.forEach((client) => client.write(message));
+    return this.clients.size;
   }
 
   public close(): void {

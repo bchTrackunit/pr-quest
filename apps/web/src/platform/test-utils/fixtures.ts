@@ -1,5 +1,6 @@
 import type {
   AchievementStatus,
+  MyPullRequest,
   PlayerState,
   Quest,
   ReviewResult,
@@ -32,6 +33,34 @@ export function makeQuest(overrides: Partial<Quest> = {}): Quest {
     updatedAt: '2026-10-29T10:00:00.000Z',
     requestedAt: '2026-10-28T10:00:00.000Z',
     source: 'linear',
+    ...overrides,
+  };
+}
+
+export function makeMyPullRequest(overrides: Partial<MyPullRequest> = {}): MyPullRequest {
+  const number = overrides.number ?? 201;
+  return {
+    id: `Trackunit/manager#${number}`,
+    title: 'Teach the map to cluster pins',
+    repo: { owner: 'Trackunit', name: 'manager' },
+    number,
+    githubUrl: `https://github.com/Trackunit/manager/pull/${number}`,
+    author: { name: 'Player One', githubLogin: 'octocat' },
+    authorAssociation: 'MEMBER',
+    isCrossRepository: false,
+    sourceBranch: 'feature/map-clusters',
+    targetBranch: 'main',
+    headSha: 'abcdef0123456789abcdef0123456789abcdef01',
+    isDraft: false,
+    diffStats: { fileCount: 3, additions: 40, deletions: 10 },
+    difficulty: 'Trivial',
+    openedAt: '2026-10-27T10:00:00.000Z',
+    updatedAt: '2026-10-29T10:00:00.000Z',
+    reviewState: 'waiting',
+    ciState: 'passing',
+    mergeState: 'clean',
+    unresolvedThreads: 0,
+    needsMyAction: false,
     ...overrides,
   };
 }
