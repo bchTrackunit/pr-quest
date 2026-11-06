@@ -50,6 +50,11 @@ export interface LocalConfig extends BaseConfig {
   linearApiKey?: string;
   cursorApiKey?: string;
   anthropicApiKey?: string;
+  /**
+   * One more GitHub search whose PRs join the queue as team quests, for PRs that request no review,
+   * such as bot-opened drafts: `is:pr is:open draft:true author:app/some-bot`.
+   */
+  extraSearch?: string;
   host: LoopbackHost;
   allowedHosts: ReadonlyArray<LoopbackHostname>;
   publicOrigin?: never;
@@ -67,6 +72,7 @@ export interface HostedConfig extends BaseConfig {
   linearApiKey?: never;
   cursorApiKey?: never;
   anthropicApiKey?: never;
+  extraSearch?: never;
 }
 
 export type AppConfig = LocalConfig | HostedConfig;
@@ -78,6 +84,7 @@ const ENV_API_KEYS = {
 } as const;
 type ApiKeyField = keyof typeof ENV_API_KEYS;
 const API_KEY_FIELDS = ['cursorApiKey', 'anthropicApiKey', 'linearApiKey'] as const;
+const EXTRA_SEARCH_VAR = 'PR_QUEST_EXTRA_SEARCH';
 
 export interface LoadConfigOptions {
   env?: NodeJS.ProcessEnv;
@@ -131,6 +138,11 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
         );
       }
     }
+    if (read(EXTRA_SEARCH_VAR) !== undefined) {
+      throw new Error(
+        `${EXTRA_SEARCH_VAR} only applies in local mode: in hosted mode every player would get its PRs.`,
+      );
+    }
     return { ...base, ...boundary };
   }
   return {
@@ -139,6 +151,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     linearApiKey: read(ENV_API_KEYS.linearApiKey),
     cursorApiKey: read(ENV_API_KEYS.cursorApiKey),
     anthropicApiKey: read(ENV_API_KEYS.anthropicApiKey),
+    extraSearch: read(EXTRA_SEARCH_VAR),
   };
 }
 
@@ -174,6 +187,12 @@ export function assertSafeConfig(config: AppConfig): void {
     if (shared.length > 0) {
       throw new Error(
         `Hosted mode takes no API keys from the config (${shared.map((field) => ENV_API_KEYS[field]).join(', ')}): every player would share them`,
+      );
+    }
+    const { extraSearch }: { extraSearch?: unknown } = config;
+    if (extraSearch !== undefined) {
+      throw new Error(
+        `${EXTRA_SEARCH_VAR} only applies in local mode: in hosted mode every player would get its PRs.`,
       );
     }
     return;

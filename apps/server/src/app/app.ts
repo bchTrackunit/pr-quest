@@ -205,7 +205,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         fetch: options.fetch,
         onUnauthorized: (rejected) => identity.rejected(rejected),
       }),
-      { onWarning: warn },
+      { onWarning: warn, extraSearch: config.extraSearch },
     );
     // First, so a scope the app refuses leaves the player's game unopened.
     const scoped = await servicesFor(identity.scopeFor(login));

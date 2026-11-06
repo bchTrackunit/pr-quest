@@ -178,10 +178,23 @@ describe('loadConfig', () => {
         );
       },
     );
+
+    test('reads the extra search from the env file, unset by default', () => {
+      expect(loadConfig({ env: {}, envFilePath }).extraSearch).toBeUndefined();
+      writeFileSync(envFilePath, 'PR_QUEST_EXTRA_SEARCH=is:pr is:open draft:true\n');
+
+      expect(loadConfig({ env: {}, envFilePath }).extraSearch).toBe('is:pr is:open draft:true');
+    });
   });
 
   describe('hosted mode', () => {
     const hosted = { PR_QUEST_MODE: 'hosted', PR_QUEST_PUBLIC_ORIGIN: 'https://pr-quest.example' };
+
+    test('refuses an extra search, which every player would share', () => {
+      expect(() =>
+        loadConfig({ env: { ...hosted, PR_QUEST_EXTRA_SEARCH: 'is:pr is:open' }, envFilePath }),
+      ).toThrow('PR_QUEST_EXTRA_SEARCH');
+    });
 
     test('listens on every interface and trusts the public origin host by default', () => {
       const config = loadConfig({ env: hosted, envFilePath });
@@ -269,4 +282,9 @@ describe('assertSafeConfig', () => {
       );
     },
   );
+
+  test('refuses a shared extra search in hosted mode, which would reach every player', () => {
+    const handBuilt = Object.assign({}, HOSTED_CONFIG, { extraSearch: 'is:pr is:open draft:true' });
+    expect(() => assertSafeConfig(handBuilt)).toThrow('PR_QUEST_EXTRA_SEARCH');
+  });
 });

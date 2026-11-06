@@ -10,7 +10,8 @@ command it runs is `gh auth token`, for the GitHub CLI fallback.
 
 - **Quests** come from a `GET /search/issues` search for `review-requested:@me`, which includes
   team requests. A second search with `user-review-requested:@me` tells direct requests apart.
-  Branches, diff stats, draft state, latest reviews and requested teams come from batched GraphQL
+  In local mode, `PR_QUEST_EXTRA_SEARCH` adds a third search; its PRs join the board as team
+  quests, without repeating any the first search found. Branches, diff stats, draft state, latest reviews and requested teams come from batched GraphQL
   queries, 25 PRs per query. If a batch fails, PR Quest falls back to one query per PR, except on
   a rate limit. A PR whose details still can't be read is left off the board. If that happens to
   more than half of the PRs, the refresh counts as failed and the server keeps serving the
@@ -26,7 +27,8 @@ command it runs is `gh auth token`, for the GitHub CLI fallback.
 
 ## GitHub rate limits
 
-GitHub's search API allows 30 searches a minute, and each refresh uses 2.
+GitHub's search API allows 30 searches a minute, and each refresh uses 2, or 3 with
+`PR_QUEST_EXTRA_SEARCH`.
 
 - **Cache on disk.** The last successful list is saved to `quests.json`. On startup the server
   serves it straight away and only asks GitHub again when it is more than 60 seconds old. The

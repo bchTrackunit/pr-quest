@@ -58,9 +58,10 @@ function fakeGitHub(route: (call: Call) => Reply | undefined) {
     }
     return new Response(reply.body, { status: reply.status, headers: reply.headers });
   });
-  const client = (onWarning?: (message: string) => void) =>
+  const client = (onWarning?: (message: string) => void, extraSearch?: string) =>
     new GitHubClient(new GitHubApi({ token: async () => 'gho_test', fetch: fetchMock }), {
       onWarning,
+      extraSearch,
     });
   return { calls, client };
 }
@@ -248,6 +249,53 @@ describe('GitHubClient.fetchReviewRequests', () => {
         number1: 24,
       },
     });
+  });
+
+  test('adds PRs from the extra search as team requests, skipping ones already found', async () => {
+    const extraQuery = 'is:pr is:open draft:true author:app/some-bot';
+    const searchAll = JSON.parse(SEARCH_ALL);
+    const drafted = {
+      ...searchAll.items[0],
+      number: 77,
+      html_url: 'https://github.com/Trackunit/circleci-configuration/pull/77',
+    };
+    const extra = json({
+      total_count: 2,
+      incomplete_results: false,
+      items: [searchAll.items[0], drafted],
+    });
+    const onePullRequest = JSON.parse(BATCH).data.pr0;
+    const github = fakeGitHub((call) =>
+      call.path === '/search/issues' && call.query.get('q') === extraQuery
+        ? extra
+        : isBatch(call)
+          ? json({
+              data: Object.fromEntries(
+                Array.from({ length: batchSize(call) }, (_, index) => [
+                  `pr${index}`,
+                  onePullRequest,
+                ]),
+              ),
+            })
+          : fixtureRoute()(call),
+    );
+
+    const data = await github.client(undefined, extraQuery).fetchReviewRequests();
+
+    expect(
+      github.calls
+        .filter((call) => call.path === '/search/issues')
+        .map((call) => call.query.get('q')),
+    ).toEqual([
+      'is:pr is:open review-requested:@me',
+      'is:pr is:open user-review-requested:@me',
+      extraQuery,
+    ]);
+    expect(data.map((entry) => [entry.item.number, entry.direct])).toEqual([
+      [930, false],
+      [24, true],
+      [77, false],
+    ]);
   });
 
   test('reads branches, diff stats and team requests from the batch', async () => {

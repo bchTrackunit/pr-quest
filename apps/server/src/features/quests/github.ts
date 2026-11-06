@@ -291,6 +291,8 @@ export class UnanchoredFindingsError extends ReviewNotPostedError {
 
 export interface GitHubClientOptions {
   onWarning?: (message: string) => void;
+  /** Another search whose PRs join the review requests, as team requests. */
+  extraSearch?: string;
 }
 
 /**
@@ -542,6 +544,7 @@ export function toQuest({ item, details, direct, viewerLogin, linear }: QuestInp
 export class GitHubClient {
   private readonly api: Pick<GitHubApi, 'request' | 'graphql'>;
   private readonly onWarning: (message: string) => void;
+  private readonly extraSearch: string | undefined;
 
   public constructor(
     api: Pick<GitHubApi, 'request' | 'graphql'>,
@@ -549,20 +552,26 @@ export class GitHubClient {
   ) {
     this.api = api;
     this.onWarning = options.onWarning ?? (() => undefined);
+    this.extraSearch = options.extraSearch;
   }
 
   /**
-   * Open PRs requesting the player's review, directly or through a team, with their details.
-   * A rate-limited call rejects right away instead of falling back to more calls. PRs whose details
-   * can't be read are skipped, unless that is most of them: then it rejects with
-   * `IncompleteQuestListError`.
+   * Open PRs requesting the player's review, directly or through a team, with their details, plus
+   * any PRs the extra search finds. A rate-limited call rejects right away instead of falling back
+   * to more calls. PRs whose details can't be read are skipped, unless that is most of them: then it
+   * rejects with `IncompleteQuestListError`.
    */
   public async fetchReviewRequests(): Promise<Array<ReviewRequestData>> {
-    const [allText, directText] = await Promise.all([
+    const [allText, directText, extraText] = await Promise.all([
       this.search(SEARCH_ALL_QUERY),
       this.search(SEARCH_DIRECT_QUERY),
+      this.extraSearch === undefined ? undefined : this.search(this.extraSearch),
     ]);
     const items = parseSearchResults(allText);
+    if (extraText !== undefined) {
+      const seen = new Set(items.map((entry) => entry.url));
+      items.push(...parseSearchResults(extraText).filter((entry) => !seen.has(entry.url)));
+    }
     const directUrls = new Set(parseSearchResults(directText).map((entry) => entry.url));
     if (items.length === 0) {
       return [];
