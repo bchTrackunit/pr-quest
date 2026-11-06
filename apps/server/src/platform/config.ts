@@ -189,6 +189,12 @@ export function assertSafeConfig(config: AppConfig): void {
         `Hosted mode takes no API keys from the config (${shared.map((field) => ENV_API_KEYS[field]).join(', ')}): every player would share them`,
       );
     }
+    const { extraSearch }: { extraSearch?: unknown } = config;
+    if (extraSearch !== undefined) {
+      throw new Error(
+        `${EXTRA_SEARCH_VAR} only applies in local mode: in hosted mode every player would get its PRs.`,
+      );
+    }
     return;
   }
   const host: string = config.host;

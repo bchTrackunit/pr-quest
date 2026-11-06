@@ -282,4 +282,9 @@ describe('assertSafeConfig', () => {
       );
     },
   );
+
+  test('refuses a shared extra search in hosted mode, which would reach every player', () => {
+    const handBuilt = Object.assign({}, HOSTED_CONFIG, { extraSearch: 'is:pr is:open draft:true' });
+    expect(() => assertSafeConfig(handBuilt)).toThrow('PR_QUEST_EXTRA_SEARCH');
+  });
 });
