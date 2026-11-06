@@ -6,6 +6,7 @@ import type { EventHub } from '../platform/events.ts';
 import type { BoardQuest, GameService } from '../features/game/index.ts';
 import {
   type GitHubClient,
+  type MyPullRequestService,
   RateLimitedError,
   type QuestService,
   parseQuestId,
@@ -23,6 +24,7 @@ const MAX_COMMENT_LENGTH = 65_536;
 
 export interface AppServices {
   quests: QuestService;
+  myPullRequests: MyPullRequestService;
   runs: ReviewRunService;
   game: GameService;
   github: Pick<GitHubClient, 'approve' | 'fetchHeadSha' | 'submitReview'>;
@@ -105,7 +107,10 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
   if (!services) {
     return { health };
   }
-  const { quests, runs, game, github, events } = services;
+  const { quests, myPullRequests, runs, game, github, events } = services;
+
+  const forceRefresh = (req: { url?: string }): boolean =>
+    new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('refresh') === '1';
 
   const findQuest = async (id: string) => {
     const quest = await upstream(() => quests.findOrRefresh(id));
@@ -122,10 +127,7 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
   return {
     health,
 
-    listQuests: ({ req }) => {
-      const force = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('refresh') === '1';
-      return upstream(() => quests.list({ force }));
-    },
+    listQuests: ({ req }) => upstream(() => quests.list({ force: forceRefresh(req) })),
 
     startReview: async ({ params, body }) => {
       requireQuestRef(params.id);
@@ -133,6 +135,20 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       runs.assertReady();
       const quest = await findQuest(params.id);
       return { run: await runs.start(quest, { model }) };
+    },
+
+    listMyPullRequests: ({ req }) =>
+      upstream(() => myPullRequests.list({ force: forceRefresh(req) })),
+
+    startSelfReview: async ({ params, body }) => {
+      requireQuestRef(params.id);
+      const { model } = parseBody(StartReviewSchema, body);
+      runs.assertReady();
+      const pr = await upstream(() => myPullRequests.findOrRefresh(params.id));
+      if (!pr) {
+        throw new ApiError(404, 'notFound', `${params.id} is not one of your open PRs`);
+      }
+      return { run: await runs.start({ ...pr, ownPr: true }, { model }) };
     },
 
     approveQuest: async ({ params, body }) => {
@@ -224,6 +240,11 @@ export function createHandlers(config: AppConfig, services?: AppServices): Route
       if (questsEvent) {
         snapshot.push(questsEvent);
       }
+      const myPullRequestsEvent = myPullRequests.snapshotEvent();
+      if (myPullRequestsEvent) {
+        snapshot.push(myPullRequestsEvent);
+      }
+      snapshot.push(...game.takeUndeliveredNotices());
       events.connect(req, res, snapshot);
     },
   };

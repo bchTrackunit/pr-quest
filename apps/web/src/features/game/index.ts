@@ -2,8 +2,10 @@ export { rewardLabel } from './achievementLabels.ts';
 export { ConnectionIndicator } from './ConnectionIndicator.tsx';
 export {
   activeRateLimit,
+  applyMyPullRequestList,
   applyQuestList,
   applyServerEvent,
+  type BoardTab,
   type ConnectionStatus,
   createInitialGameState,
   createLocalId,
@@ -22,6 +24,7 @@ export {
   type Toast,
   upsertRun,
   upsertRuns,
+  XP_REASON_LABELS,
 } from './gameState.ts';
 export { PlayerHud } from './PlayerHud.tsx';
 export { playLootSound, unlockAudio } from './sound.ts';

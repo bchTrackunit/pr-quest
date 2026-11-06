@@ -11,7 +11,12 @@ import { ClaudeReviewer, type CreateMessage, ReviewRunService } from '../feature
 import { type AppConfig, assertSafeConfig } from '../platform/config.ts';
 import { EventHub } from '../platform/events.ts';
 import { GameService, type StateStore } from '../features/game/index.ts';
-import { GitHubClient, LinearReviewClient, QuestService } from '../features/quests/index.ts';
+import {
+  GitHubClient,
+  LinearReviewClient,
+  MyPullRequestService,
+  QuestService,
+} from '../features/quests/index.ts';
 import {
   GitHubApi,
   GitHubApiError,
@@ -216,7 +221,11 @@ export async function createApp(options: AppOptions): Promise<App> {
       stores.set(login, opening);
       opening.catch(() => stores.delete(login));
     }
-    const [store, cache] = await Promise.all([opening, storage.questCache(login)]);
+    const [store, cache, myPullRequestCache] = await Promise.all([
+      opening,
+      storage.questCache(login),
+      storage.myPullRequestCache(login),
+    ]);
     const events = new EventHub();
     const game = new GameService(store, events, { login });
     const runs = new ReviewRunService({
@@ -236,23 +245,33 @@ export async function createApp(options: AppOptions): Promise<App> {
       game,
       activeRunIdFor: (questId) => runs.activeRunIdFor(questId),
       log: warn,
+      login,
       cache,
     });
-    await quests.restore();
+    const myPullRequests = new MyPullRequestService({
+      github,
+      events,
+      game,
+      activeRunIdFor: (prId) => runs.activeRunIdFor(prId),
+      log: warn,
+      cache: myPullRequestCache,
+    });
+    await Promise.all([quests.restore(), myPullRequests.restore()]);
     if (firstOpen) {
       // A reopened game's active runs are still followed by the session that started them.
       await runs.resumeInterrupted();
     }
-    const stopPolling = quests.startPolling();
+    const stopPolling = [quests.startPolling(), myPullRequests.startPolling()];
     return {
       login,
       quests,
+      myPullRequests,
       runs,
       game,
       github,
       events,
       stop: () => {
-        stopPolling();
+        stopPolling.forEach((stop) => stop());
         events.close();
       },
     };
@@ -387,6 +406,8 @@ export async function createApp(options: AppOptions): Promise<App> {
       listModels: perRequest('listModels', settingsFor),
       listQuests: perRequest('listQuests', user),
       startReview: perRequest('startReview', user),
+      listMyPullRequests: perRequest('listMyPullRequests', user),
+      startSelfReview: perRequest('startSelfReview', user),
       approveQuest: perRequest('approveQuest', user),
       listRuns: perRequest('listRuns', user),
       getRun: perRequest('getRun', user),

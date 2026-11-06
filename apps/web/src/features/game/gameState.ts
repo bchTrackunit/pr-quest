@@ -2,7 +2,9 @@ import type {
   AchievementDef,
   AchievementStatus,
   FindingSeverity,
+  ListMyPullRequestsResponse,
   ListQuestsResponse,
+  MyPullRequest,
   PlayerState,
   Quest,
   QuestSource,
@@ -19,6 +21,9 @@ import type { SettingsTarget } from '../settings/index.ts';
 export type LoadState = 'loading' | 'ready' | 'error';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting';
+
+/** The review board, or the player's own PRs. */
+export type BoardTab = 'reviews' | 'mine';
 
 export type ToastKind = 'loot' | 'achievement' | 'success' | 'error';
 
@@ -60,6 +65,13 @@ export interface GameState {
   questsStale: boolean;
   /** Set while GitHub rate limits the server's quest list. */
   questsRateLimit?: RateLimitStatus;
+  tab: BoardTab;
+  myPullRequests: Array<MyPullRequest>;
+  myPullRequestsLoad: LoadState;
+  myPullRequestsError?: string;
+  myPullRequestsFetchedAt?: string;
+  myPullRequestsStale: boolean;
+  myPullRequestsRateLimit?: RateLimitStatus;
   runs: Record<string, ReviewRun>;
   /** Loading the runs failed for a reason the quest board doesn't already show. */
   runsError?: string;
@@ -88,6 +100,10 @@ export function createInitialGameState(notificationAccess: NotificationAccess): 
     quests: [],
     questsLoad: 'loading',
     questsStale: false,
+    tab: 'reviews',
+    myPullRequests: [],
+    myPullRequestsLoad: 'loading',
+    myPullRequestsStale: false,
     runs: {},
     achievements: [],
     toasts: [],
@@ -107,6 +123,9 @@ export const XP_REASON_LABELS: Record<XpReason, string> = {
   reviewPosted: 'Review posted',
   approved: 'PR approved',
   changesRequested: 'Changes requested',
+  prMerged: 'Your PR merged',
+  prApproved: 'Your PR approved',
+  threadResolved: 'Thread resolved',
   achievement: 'Achievement bonus',
 };
 
@@ -135,13 +154,14 @@ export function replaceRuns(state: GameState, runs: ReadonlyArray<ReviewRun>): G
 
 /**
  * After signing in or out the server serves another player's game, so everything that belonged
- * to the previous one goes. The connection, sound and notification choices, the review provider
- * and an open settings popup stay.
+ * to the previous one goes. The connection, sound and notification choices, the review provider,
+ * the open tab and an open settings popup stay.
  */
 export function resetForAccountChange(state: GameState): GameState {
   return {
     ...createInitialGameState(state.notificationAccess),
     connection: state.connection,
+    tab: state.tab,
     settings: state.settings,
     reviewProvider: state.reviewProvider,
     soundEnabled: state.soundEnabled,
@@ -187,6 +207,22 @@ export function applyQuestList(state: GameState, list: ListQuestsResponse): Game
   };
 }
 
+/** Takes the player's PRs from `GET /api/my-prs` or a `myPullRequestsUpdated` event. */
+export function applyMyPullRequestList(
+  state: GameState,
+  list: ListMyPullRequestsResponse,
+): GameState {
+  return {
+    ...state,
+    myPullRequests: list.pullRequests,
+    myPullRequestsFetchedAt: list.fetchedAt,
+    myPullRequestsStale: list.stale,
+    myPullRequestsRateLimit: list.rateLimit,
+    myPullRequestsLoad: 'ready',
+    myPullRequestsError: undefined,
+  };
+}
+
 /** The rate limit while it still applies at `now`; `undefined` once it has passed. */
 export function activeRateLimit(
   rateLimit: RateLimitStatus | undefined,
@@ -200,6 +236,8 @@ export function applyServerEvent(state: GameState, event: ServerEvent): GameStat
   switch (event.type) {
     case 'questsUpdated':
       return applyQuestList(state, event);
+    case 'myPullRequestsUpdated':
+      return applyMyPullRequestList(state, event);
     case 'runUpdated':
       return upsertRun(state, event.run);
     case 'achievementUnlocked':
@@ -221,7 +259,7 @@ function isDismissed(run: ReviewRun): boolean {
  */
 export function selectRunForQuest(
   runs: Readonly<Partial<Record<string, ReviewRun>>>,
-  quest: Quest,
+  quest: Pick<Quest, 'id' | 'activeRunId'>,
 ): ReviewRun | undefined {
   const active = quest.activeRunId ? runs[quest.activeRunId] : undefined;
   const newest = Object.values(runs)

@@ -87,10 +87,16 @@ interface SearchFieldProps {
   value: string;
   onCommit: (value: string) => void;
   inputRef?: Ref<HTMLInputElement>;
+  label?: string;
 }
 
 /** Commits after a pause in typing, or right away on Enter; Escape clears. */
-const SearchField = ({ value, onCommit, inputRef = undefined }: SearchFieldProps) => {
+export const SearchField = ({
+  value,
+  onCommit,
+  inputRef = undefined,
+  label = 'Search quests',
+}: SearchFieldProps) => {
   const id = useId();
   const hintId = useId();
   const [draft, setDraft] = useState(value);
@@ -128,7 +134,7 @@ const SearchField = ({ value, onCommit, inputRef = undefined }: SearchFieldProps
   return (
     <div className="filters__search">
       <label className="visually-hidden" htmlFor={id}>
-        Search quests
+        {label}
       </label>
       <input
         aria-describedby={hintId}
@@ -159,7 +165,7 @@ interface ToggleGroupProps {
   className?: string;
 }
 
-const ToggleGroup = ({ label, children, className = 'segmented' }: ToggleGroupProps) => {
+export const ToggleGroup = ({ label, children, className = 'segmented' }: ToggleGroupProps) => {
   const labelId = useId();
   return (
     <div className="filters__group">

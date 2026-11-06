@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type {
-  AchievementDef,
-  GameOutcome,
-  PostReviewEvent,
-  ReviewRun,
-  ServerEvent,
-  UnlockedAchievement,
-  XpGain,
+import {
+  AUTHOR_XP_REASONS,
+  type AchievementDef,
+  type GameOutcome,
+  type PostReviewEvent,
+  type ReviewRun,
+  type ServerEvent,
+  type UnlockedAchievement,
+  type XpGain,
+  type XpReason,
 } from '@pr-quest/contract/api';
 import {
   ApiRequestError,
@@ -16,6 +18,7 @@ import {
   discardRun,
   eventsUrl,
   fetchAchievements,
+  fetchMyPullRequests,
   fetchPlayer,
   fetchQuests,
   fetchRuns,
@@ -23,10 +26,12 @@ import {
   postRun,
   saveFindingSelection,
   startReview,
+  startSelfReview,
 } from '../platform/apiClient.ts';
 import { connectEventStream, type EventStream } from './eventStream.ts';
 import {
   activeRateLimit,
+  applyMyPullRequestList,
   applyQuestList,
   applyServerEvent,
   createInitialGameState,
@@ -38,9 +43,11 @@ import {
   resetForAccountChange,
   upsertRun,
   upsertRuns,
+  type BoardTab,
   type GameState,
   type QuestActionError,
   type Toast,
+  XP_REASON_LABELS,
   playLootSound,
   rewardLabel,
   unlockAudio,
@@ -56,12 +63,17 @@ import { createStore, type Store } from '../platform/store.ts';
 export interface GameActions {
   /** The only path that forces a GitHub refetch; does nothing while GitHub rate limits us. */
   refreshQuests: () => void;
+  /** Forces a GitHub refetch of the player's own PRs; does nothing while GitHub rate limits us. */
+  refreshMyPullRequests: () => void;
+  selectTab: (tab: BoardTab) => void;
   /**
    * After the GitHub account changed: forgets the previous player's game, reconnects the event
    * stream and reloads quests, runs and player from the server's cache.
    */
   resync: () => void;
   sendReviewAgent: (questId: string) => void;
+  /** Sends the agent at one of the player's own PRs; its findings are never posted. */
+  sendSelfReview: (prId: string) => void;
   openResult: (runId: string) => void;
   closeResult: () => void;
   requestApprove: (questId: string) => void;
@@ -100,8 +112,15 @@ export interface GameController {
 interface InternalHandlers {
   handleServerEvent: (event: ServerEvent) => void;
   loadQuests: (signal?: AbortSignal, options?: { refresh?: boolean }) => void;
+  loadMyPullRequests: (signal?: AbortSignal, options?: { refresh?: boolean }) => void;
   loadSideData: (signal?: AbortSignal) => void;
 }
+
+const AUTHOR_XP_ICONS: Partial<Record<XpReason, string>> = {
+  prMerged: '🚀',
+  prApproved: '✅',
+  threadResolved: '🧵',
+};
 
 const isFailure = (run: ReviewRun): boolean =>
   run.status === 'error' || run.status === 'startupFailed';
@@ -137,8 +156,11 @@ export function useGameController(): GameController {
       }));
     };
 
-    /** The same gain arrives over REST and SSE; `eventId` makes sure it pops once. */
-    const pushXpGain = ({ eventId, amount, reason }: XpGain): void => {
+    /**
+     * The same gain arrives over REST and SSE; `eventId` makes sure it pops once. Author XP also
+     * gets a toast, because a merged PR has already left the list by the time it pays.
+     */
+    const pushXpGain = ({ eventId, amount, reason, questId }: XpGain): void => {
       if (amount <= 0 || shownXpGains.has(eventId)) {
         return;
       }
@@ -147,6 +169,16 @@ export function useGameController(): GameController {
         ...state,
         xpPopups: [...state.xpPopups, { id: createLocalId('xp'), amount, reason }],
       }));
+      if (AUTHOR_XP_REASONS.includes(reason)) {
+        const pr = store.getState().myPullRequests.find((entry) => entry.id === questId);
+        const message = pr ? `${questLabel(pr)}: ${pr.title}` : questId;
+        pushToast({
+          kind: 'success',
+          title: `${XP_REASON_LABELS[reason]}: +${amount} XP`,
+          ...(message ? { message } : {}),
+          icon: AUTHOR_XP_ICONS[reason] ?? '⭐',
+        });
+      }
     };
 
     const announceAchievement = (achievement: AchievementDef): void => {
@@ -278,6 +310,33 @@ export function useGameController(): GameController {
         });
     };
 
+    const loadMyPullRequests = (
+      signal?: AbortSignal,
+      options: { refresh?: boolean } = {},
+    ): void => {
+      const started = account.generation;
+      store.setState((state) => ({
+        ...state,
+        myPullRequestsLoad: 'loading',
+        myPullRequestsError: undefined,
+      }));
+      fetchMyPullRequests(signal, options)
+        .then((response) => {
+          if (isCurrent(started)) {
+            store.setState((state) => applyMyPullRequestList(state, response));
+          }
+        })
+        .catch((reason: unknown) => {
+          if (!signal?.aborted && isCurrent(started)) {
+            store.setState((state) => ({
+              ...state,
+              myPullRequestsLoad: 'error',
+              myPullRequestsError: describeError(reason),
+            }));
+          }
+        });
+    };
+
     /** Bumped per settings read, so an older response can't overwrite the provider a newer one read. */
     const providerReads = { latest: 0 };
 
@@ -348,11 +407,6 @@ export function useGameController(): GameController {
           if (!isCurrent(started)) {
             return;
           }
-          for (const achievement of response.achievements) {
-            if (achievement.unlockedAt) {
-              announcedAchievements.add(achievement.id);
-            }
-          }
           store.setState((state) => ({
             ...state,
             achievements: response.achievements,
@@ -366,6 +420,27 @@ export function useGameController(): GameController {
         });
     };
 
+    const sendAgent = (id: string, start: (id: string) => Promise<{ run: ReviewRun }>): void => {
+      const started = account.generation;
+      unlockAudio();
+      setQuestAction(id, 'review');
+      start(id)
+        .then((response) => {
+          if (isCurrent(started)) {
+            store.setState((state) => upsertRun(state, response.run));
+            setQuestAction(id, undefined);
+          }
+        })
+        .catch((reason: unknown) => {
+          if (isCurrent(started)) {
+            setQuestAction(id, undefined, {
+              message: describeError(reason),
+              settings: settingsTargetFor(reason),
+            });
+          }
+        });
+    };
+
     const actions: GameActions = {
       refreshQuests: () => {
         if (activeRateLimit(store.getState().questsRateLimit, Date.now())) {
@@ -373,6 +448,14 @@ export function useGameController(): GameController {
         }
         loadQuests(undefined, { refresh: true });
       },
+      refreshMyPullRequests: () => {
+        if (activeRateLimit(store.getState().myPullRequestsRateLimit, Date.now())) {
+          return;
+        }
+        loadMyPullRequests(undefined, { refresh: true });
+      },
+      selectTab: (tab) =>
+        store.setState((state) => (state.tab === tab ? state : { ...state, tab })),
       resync: () => {
         account.generation += 1;
         announcedAchievements.clear();
@@ -382,28 +465,11 @@ export function useGameController(): GameController {
         // The open stream was authorised for the previous account, or failed while signed out.
         streamRef.current?.reconnectNow();
         loadQuests();
+        loadMyPullRequests();
         loadSideData(undefined, { replaceRuns: true });
       },
-      sendReviewAgent: (questId) => {
-        const started = account.generation;
-        unlockAudio();
-        setQuestAction(questId, 'review');
-        startReview(questId)
-          .then((response) => {
-            if (isCurrent(started)) {
-              store.setState((state) => upsertRun(state, response.run));
-              setQuestAction(questId, undefined);
-            }
-          })
-          .catch((reason: unknown) => {
-            if (isCurrent(started)) {
-              setQuestAction(questId, undefined, {
-                message: describeError(reason),
-                settings: settingsTargetFor(reason),
-              });
-            }
-          });
-      },
+      sendReviewAgent: (questId) => sendAgent(questId, startReview),
+      sendSelfReview: (prId) => sendAgent(prId, startSelfReview),
       openResult,
       closeResult: () => store.setState((state) => ({ ...state, openRunId: undefined })),
       requestApprove: (questId) =>
@@ -528,12 +594,13 @@ export function useGameController(): GameController {
       },
     };
 
-    return { store, actions, handleServerEvent, loadQuests, loadSideData };
+    return { store, actions, handleServerEvent, loadQuests, loadMyPullRequests, loadSideData };
   }, [store]);
 
   useEffect(() => {
     const abort = new AbortController();
     controller.loadQuests(abort.signal);
+    controller.loadMyPullRequests(abort.signal);
     controller.loadSideData(abort.signal);
     return () => abort.abort();
   }, [controller]);
@@ -549,6 +616,7 @@ export function useGameController(): GameController {
         if (reconnected) {
           // Never `refresh: true`: a flapping connection must not turn into GitHub calls.
           controller.loadQuests();
+          controller.loadMyPullRequests();
           controller.loadSideData();
         }
       },

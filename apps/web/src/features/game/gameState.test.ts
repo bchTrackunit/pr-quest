@@ -13,6 +13,7 @@ import {
 } from './gameState.ts';
 import {
   makeAchievements,
+  makeMyPullRequest,
   makePlayer,
   makeQuest,
   makeResult,
@@ -25,6 +26,10 @@ describe('resetForAccountChange', () => {
       ...upsertRun(createInitialGameState('granted'), makeRun()),
       quests: [makeQuest()],
       questsLoad: 'ready' as const,
+      myPullRequests: [makeMyPullRequest()],
+      myPullRequestsLoad: 'ready' as const,
+      myPullRequestsFetchedAt: '2026-10-30T10:00:00.000Z',
+      tab: 'mine' as const,
       player: makePlayer(),
       achievements: makeAchievements(),
       toasts: [{ id: 'toast-1', kind: 'error' as const, title: 'Old' }],
@@ -43,6 +48,7 @@ describe('resetForAccountChange', () => {
     expect(resetForAccountChange(state)).toEqual({
       ...createInitialGameState('granted'),
       connection: 'open',
+      tab: 'mine',
       settings: { section: 'github' },
       reviewProvider: 'cursor',
       soundEnabled: false,
@@ -201,6 +207,26 @@ describe('applyServerEvent', () => {
         unlockedAt: '2026-10-30T10:00:00.000Z',
       },
     ]);
+  });
+
+  test('myPullRequestsUpdated replaces my PRs and their rate limit, and marks them ready', () => {
+    const rateLimit = { kind: 'primary' as const, limitedUntil: '2026-10-30T11:00:00.000Z' };
+    const state = applyServerEvent(
+      { ...createInitialGameState('default'), myPullRequestsError: 'Old error' },
+      {
+        type: 'myPullRequestsUpdated',
+        pullRequests: [makeMyPullRequest()],
+        fetchedAt: '2026-10-30T10:00:00.000Z',
+        stale: true,
+        rateLimit,
+      },
+    );
+    expect(state.myPullRequests).toHaveLength(1);
+    expect(state.myPullRequestsLoad).toBe('ready');
+    expect(state.myPullRequestsError).toBeUndefined();
+    expect(state.myPullRequestsStale).toBe(true);
+    expect(state.myPullRequestsRateLimit).toEqual(rateLimit);
+    expect(state.quests).toEqual([]);
   });
 
   test('xpGained replaces the player state', () => {

@@ -6,14 +6,15 @@ import {
   applyAgentReviewFinished,
   applyQueueChecked,
   applyReviewAction,
+  currentStreak,
   initialGameState,
   levelProgress,
-  localDate,
   toPlayerState,
   xpForLevel,
   type GameState,
   type ReviewAction,
 } from './gamification.ts';
+import { localDate } from './streak.ts';
 
 /**
  * Local-time dates keep these tests independent of the machine's time zone. November 10th 2026 is
@@ -134,12 +135,14 @@ describe('streaks', () => {
       { at: day(12) },
     ]);
 
-    expect(state.streakDays).toBe(3);
+    expect(currentStreak(state, day(12))).toBe(3);
     expect(state.lastReviewDate).toBe(localDate(day(12)));
   });
 
   test('a missed day restarts the streak', () => {
-    expect(applyAll([{ at: day(10) }, { at: day(11) }, { at: day(13) }]).streakDays).toBe(1);
+    expect(
+      currentStreak(applyAll([{ at: day(10) }, { at: day(11) }, { at: day(13) }]), day(13)),
+    ).toBe(1);
   });
 
   test('the player sees the streak until the day after the last action, then zero', () => {
@@ -289,6 +292,10 @@ describe('player views', () => {
       'explorer',
       'diplomat',
       'bot-wrangler',
+      'ship-it',
+      'all-tied-up',
+      'small-batch',
+      'flawless-victory',
       'speedrunner',
       'archaeologist',
     ]);

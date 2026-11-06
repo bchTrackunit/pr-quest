@@ -233,8 +233,8 @@ describe('GitHubClient.fetchReviewRequests', () => {
       .filter((call) => call.path === '/search/issues')
       .map((call) => [call.query.get('q'), call.query.get('per_page')]);
     expect(queries).toEqual([
-      ['is:pr is:open review-requested:@me', '100'],
-      ['is:pr is:open user-review-requested:@me', '100'],
+      ['is:pr is:open review-requested:@me -author:@me', '100'],
+      ['is:pr is:open user-review-requested:@me -author:@me', '100'],
     ]);
     const batches = github.calls.filter(isBatch);
     expect(batches).toHaveLength(1);
@@ -1050,5 +1050,150 @@ describe('GitHubClient.submitReview', () => {
 
     await expect(github.client().submitReview(ref, draft)).rejects.toThrow('HTTP 403');
     expect(github.calls).toHaveLength(1);
+  });
+});
+
+describe('fetchMyPullRequests', () => {
+  const MY_PRS = fixture('graphql-my-prs.json');
+
+  function myPrsApi(pages: Array<string>) {
+    const graphql = vi.fn(async (_query: string, _variables: Record<string, unknown>) => {
+      const next = pages.shift();
+      if (!next) {
+        throw new Error('no more pages');
+      }
+      return next;
+    });
+    const request = vi.fn(async () => '');
+    return { graphql, client: new GitHubClient({ graphql, request }) };
+  }
+
+  test('reads both parts and stops the merged and closed part at the sync point', async () => {
+    const { graphql, client } = myPrsApi([MY_PRS]);
+
+    const read = await client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'));
+
+    expect(graphql).toHaveBeenCalledTimes(1);
+    expect(read.viewerLogin).toBe('player-login');
+    expect(read.open.map((pr) => pr.number)).toEqual([40, 41, 42, 7]);
+    expect(read.done.map((pr) => pr.number)).toEqual([35]);
+    expect(read).toMatchObject({ openSkipped: 1, doneSkipped: 0, doneErrors: 0 });
+  });
+
+  test('pages on through merged and closed PRs newer than the sync point', async () => {
+    const page = JSON.parse(MY_PRS);
+    const { viewer } = page.data;
+    const firstPage = JSON.stringify({
+      data: {
+        viewer: { ...viewer, done: { ...viewer.done, nodes: viewer.done.nodes.slice(0, 1) } },
+      },
+    });
+    const secondPage = JSON.stringify({
+      data: {
+        viewer: {
+          login: 'player-login',
+          done: {
+            pageInfo: { hasNextPage: true, endCursor: 'more' },
+            nodes: viewer.done.nodes.slice(1),
+          },
+        },
+      },
+    });
+    const { graphql, client } = myPrsApi([firstPage, secondPage]);
+
+    const read = await client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'));
+
+    expect(graphql).toHaveBeenCalledTimes(2);
+    const [query, variables] = graphql.mock.calls[1] ?? [];
+    expect(query).not.toContain('open: pullRequests');
+    expect(variables).toEqual({ first: 50, doneAfter: 'Y3Vyc29yOjI=' });
+    expect(read.done.map((pr) => pr.number)).toEqual([35]);
+  });
+
+  test('rejects a page that leaves out a list it was asked for', async () => {
+    const page = JSON.parse(MY_PRS);
+    delete page.data.viewer.done;
+    const { client } = myPrsApi([JSON.stringify(page)]);
+
+    await expect(client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'))).rejects.toThrow(
+      'GitHub returned no list of your merged and closed PRs',
+    );
+  });
+
+  test('stops at 500 open PRs and warns about it once', async () => {
+    const page = JSON.parse(MY_PRS);
+    const { viewer } = page.data;
+    const template = viewer.open.nodes[1];
+    const full = JSON.stringify({
+      data: {
+        viewer: {
+          login: 'player-login',
+          open: {
+            pageInfo: { hasNextPage: true, endCursor: 'more' },
+            nodes: Array.from({ length: 50 }, (_, index) => ({
+              ...template,
+              number: 1000 + index,
+            })),
+          },
+          done: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        },
+      },
+    });
+    const openOnly = JSON.stringify({
+      data: {
+        viewer: {
+          login: 'player-login',
+          open: JSON.parse(full).data.viewer.open,
+        },
+      },
+    });
+    const warnings: Array<string> = [];
+    const pages = [full, ...Array.from({ length: 9 }, () => openOnly)];
+    const graphql = vi.fn(async () => pages.shift() ?? openOnly);
+    const client = new GitHubClient(
+      { graphql, request: vi.fn(async () => '') },
+      { onWarning: (message) => warnings.push(message) },
+    );
+
+    const read = await client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'));
+    pages.push(full, ...Array.from({ length: 9 }, () => openOnly));
+    await client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'));
+
+    expect(graphql).toHaveBeenCalledTimes(20);
+    expect(read.open).toHaveLength(500);
+    expect(warnings).toEqual(['You have more than 500 open PRs; showing the newest ones']);
+  });
+
+  test('errors on fields only the card shows never hold back merged and closed PRs', async () => {
+    const page = JSON.parse(MY_PRS);
+    page.data.viewer.done.nodes[0].commits = null;
+    page.errors.push({
+      type: 'SERVICE_UNAVAILABLE',
+      path: ['viewer', 'done', 'nodes', 0, 'commits'],
+      message: 'x',
+    });
+    const { client } = myPrsApi([JSON.stringify(page)]);
+
+    const read = await client.fetchMyPullRequests(new Date('2026-10-15T00:00:00Z'));
+
+    expect(read.doneErrors).toBe(0);
+    expect(read.done.map((pr) => pr.number)).toEqual([35]);
+  });
+
+  test('counts errors reading merged and closed PRs that are not access restrictions', async () => {
+    const page = JSON.parse(MY_PRS);
+    page.data.viewer.done.pageInfo.hasNextPage = false;
+    page.data.viewer.done.nodes.push(null);
+    page.errors.push({
+      type: 'SERVICE_UNAVAILABLE',
+      path: ['viewer', 'done', 'nodes', 2],
+      message: 'x',
+    });
+    const { client } = myPrsApi([JSON.stringify(page)]);
+
+    const read = await client.fetchMyPullRequests(new Date('2026-09-01T00:00:00Z'));
+
+    expect(read).toMatchObject({ doneSkipped: 1, doneErrors: 1 });
+    expect(read.done.map((pr) => pr.number)).toEqual([35, 33]);
   });
 });

@@ -1,9 +1,10 @@
 import { ApproveDialog, ReviewResult } from '../features/reviews/index.ts';
 import { findQuest, type GameState, PlayerHud, Toasts, XpPopups } from '../features/game/index.ts';
 import { GitHubAccountControl, useGitHubAccount } from '../features/auth/index.ts';
-import { QuestBoard } from '../features/quests/index.ts';
+import { countNeedingMyAction, MyPullRequestBoard, QuestBoard } from '../features/quests/index.ts';
 import { SettingsDialog } from '../features/settings/index.ts';
 import { useStoreState } from '../platform/store.ts';
+import { BOARD_PANEL_ID, BoardTabs, boardTabId } from './BoardTabs.tsx';
 import { HeaderControls } from './HeaderControls.tsx';
 import { PreferencesMenu } from './PreferencesMenu.tsx';
 import { useGameController } from './useGameController.ts';
@@ -20,7 +21,7 @@ export const App = () => {
   return (
     <div className="app">
       <a className="skip-link" href="#quest-board">
-        Skip to quests
+        Skip to the board
       </a>
       <header className="app__header">
         <div className="app__topbar">
@@ -60,24 +61,54 @@ export const App = () => {
             Couldn&apos;t load your review runs: {state.runsError}
           </p>
         ) : null}
-        <QuestBoard
-          error={state.questsError}
-          fetchedAt={state.questsFetchedAt}
-          loadState={state.questsLoad}
-          onClickApprove={actions.requestApprove}
-          onClickOpenResult={actions.openResult}
-          onClickOpenSettings={actions.openSettings}
-          onClickRefresh={actions.refreshQuests}
-          onClickSendAgent={actions.sendReviewAgent}
-          questActionErrors={state.questActionErrors}
-          questActions={state.questActions}
-          quests={state.quests}
-          rateLimit={state.questsRateLimit}
-          reviewProvider={state.reviewProvider}
-          runs={state.runs}
-          source={state.questSource}
-          stale={state.questsStale}
+        <BoardTabs
+          needsMyAction={
+            state.myPullRequestsFetchedAt === undefined
+              ? undefined
+              : countNeedingMyAction(state.myPullRequests)
+          }
+          onSelect={actions.selectTab}
+          tab={state.tab}
         />
+        <div aria-labelledby={boardTabId(state.tab)} id={BOARD_PANEL_ID} role="tabpanel">
+          {state.tab === 'mine' ? (
+            <MyPullRequestBoard
+              error={state.myPullRequestsError}
+              fetchedAt={state.myPullRequestsFetchedAt}
+              loadState={state.myPullRequestsLoad}
+              onClickOpenResult={actions.openResult}
+              onClickOpenSettings={actions.openSettings}
+              onClickRefresh={actions.refreshMyPullRequests}
+              onClickSelfReview={actions.sendSelfReview}
+              pullRequests={state.myPullRequests}
+              questActionErrors={state.questActionErrors}
+              questActions={state.questActions}
+              rateLimit={state.myPullRequestsRateLimit}
+              reviewProvider={state.reviewProvider}
+              runs={state.runs}
+              stale={state.myPullRequestsStale}
+            />
+          ) : (
+            <QuestBoard
+              error={state.questsError}
+              fetchedAt={state.questsFetchedAt}
+              loadState={state.questsLoad}
+              onClickApprove={actions.requestApprove}
+              onClickOpenResult={actions.openResult}
+              onClickOpenSettings={actions.openSettings}
+              onClickRefresh={actions.refreshQuests}
+              onClickSendAgent={actions.sendReviewAgent}
+              questActionErrors={state.questActionErrors}
+              questActions={state.questActions}
+              quests={state.quests}
+              rateLimit={state.questsRateLimit}
+              reviewProvider={state.reviewProvider}
+              runs={state.runs}
+              source={state.questSource}
+              stale={state.questsStale}
+            />
+          )}
+        </div>
       </main>
 
       {openRun ? (

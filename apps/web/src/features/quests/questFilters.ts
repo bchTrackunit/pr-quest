@@ -126,7 +126,13 @@ export function parseSearch(query: string): Array<SearchTerm> {
     });
 }
 
-function matchesTerm(quest: Quest, term: SearchTerm): boolean {
+/** What search reads, which review requests and the player's own PRs both have. */
+export type SearchablePullRequest = Pick<
+  Quest,
+  'number' | 'repo' | 'title' | 'author' | 'sourceBranch'
+>;
+
+function matchesTerm(quest: SearchablePullRequest, term: SearchTerm): boolean {
   if (term.kind === 'number') {
     return (
       quest.number === term.number &&
@@ -143,7 +149,7 @@ function matchesTerm(quest: Quest, term: SearchTerm): boolean {
   ].some((field) => field.toLowerCase().includes(term.text));
 }
 
-export function matchesSearch(quest: Quest, query: string): boolean {
+export function matchesSearch(quest: SearchablePullRequest, query: string): boolean {
   return parseSearch(query).every((term) => matchesTerm(quest, term));
 }
 
@@ -194,7 +200,7 @@ export function countByKind(
 }
 
 /** Lines changed: additions plus deletions. */
-export function questSize(quest: Quest): number {
+export function questSize(quest: Pick<Quest, 'diffStats'>): number {
   return quest.diffStats.additions + quest.diffStats.deletions;
 }
 

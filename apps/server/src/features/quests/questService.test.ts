@@ -87,6 +87,24 @@ describe('QuestService.refresh', () => {
     expect(response).not.toHaveProperty('rateLimit');
   });
 
+  test("leaves the player's own PRs off the board, even without a viewer login", async () => {
+    const [team, direct] = REQUESTS;
+    if (!team || !direct) {
+      throw new Error('fixtures need two review requests');
+    }
+    const { viewerLogin: _viewer, ...mine } = {
+      ...direct,
+      item: { ...direct.item, authorLogin: 'Player-Login' },
+    };
+    fetchReviewRequests.mockResolvedValue([team, mine]);
+
+    const response = await service({ login: 'player-login' }).refresh();
+
+    expect(response.quests.map((quest) => quest.id)).toEqual([
+      'Trackunit/circleci-configuration#930',
+    ]);
+  });
+
   test('adds the Linear review link and attention flag when Linear is available', async () => {
     linearInfo = new Map([
       [

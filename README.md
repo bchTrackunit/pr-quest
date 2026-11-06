@@ -3,8 +3,9 @@
 PR Quest turns the pull requests you've been asked to review into a quest board. Each review
 request becomes a card with a difficulty tier based on its diff size. From a card you can send a
 reviewer to the PR (a Cursor cloud agent, or Claude reading the diff), choose which of its
-findings to post to GitHub, and approve the PR. Real review actions earn XP, levels, a daily
-streak and achievements.
+findings to post to GitHub, and approve the PR. A **My PRs** tab lists the PRs you opened, with
+what each one needs from you. Real review actions, and your own PRs getting merged, approved and
+their threads resolved, earn XP, levels, a daily streak and achievements.
 
 ![The quest board, with a review agent running and another one's findings ready](docs/screenshots/board.png)
 
@@ -137,6 +138,27 @@ The bar above the cards narrows and orders the board, without calling GitHub:
 - **Presets** save the current filters and sort under a name. _Quick wins_ and _Boss rush_ are
   built in. The board remembers your last view in the browser.
 
+Your own PRs never appear on the board, even when they're requested from a team you're on.
+
+## My PRs
+
+The **My PRs** tab, next to the review board, lists every open PR you authored, drafts included.
+Each card shows its tier and age, its review state (approved, changes requested or waiting), its
+CI state (passing, failing, running or no checks), merge conflicts or an out-of-date branch, and
+its unresolved review threads. A PR **needs my action** when a reviewer requested changes or a
+thread is unresolved; the tab label counts them, for example "My PRs (2)". Failing CI and
+conflicts show on the card but don't count.
+
+By default the PRs that need your action come first, then those waiting on others, oldest first.
+The tab has its own search, sort, difficulty, _Hide drafts_ and _Only needs my action_ controls,
+remembered apart from the board's, and no presets. It refreshes with the board, every 2 minutes
+and on **Refresh**; a merged or closed PR leaves the list at the next refresh.
+
+**Summon agent** on your own PR runs a **self-review** with the same provider and safety rules as
+on the board, so you can fix things before reviewers look. Its findings are read-only: there is
+no **Post to PR**, **Approve** or **Request changes**, the server refuses to post a self-review,
+and it earns no XP. **Discard** it to summon the agent again.
+
 ## Reviewing a PR
 
 **Summon agent** on a card starts a review with the provider chosen in Settings:
@@ -181,10 +203,27 @@ XP comes only from real review actions, never from just starting an agent:
 | Request changes | 15      |
 
 Base XP is multiplied by tier: Trivial ×1, Normal ×1.5, Hard ×2, Boss ×3. Approving the same PR
-twice earns XP once. Reaching the next level takes `100 × level^1.5` XP, and the streak counts
-consecutive days with at least one rewarded action.
+twice earns XP once.
 
-There are 27 achievements, from _First Blood_ to secret ones that show as "???" until they
+Your own PRs earn XP too, in the same pool, when PR Quest notices what happened on GitHub:
+
+| Event on your PR                    | Base XP | Earned                                    |
+| ----------------------------------- | ------- | ----------------------------------------- |
+| Merged                              | 20      | once per PR                               |
+| Approved by someone else            | 10      | once per PR, however many approve         |
+| A review thread resolved, by anyone | 3       | once per thread, at most 5 threads per PR |
+
+Here smaller PRs earn more: Trivial ×2, Normal ×1.5, Hard ×1, Boss ×0.5. Only events after you
+first run this version count, events that happened while PR Quest was closed pay when it next
+looks, and XP already earned is never taken back. A notice shows each payout, since a merged PR
+has already left the list by then.
+
+Reaching the next level takes `100 × level^1.5` XP, and the streak counts consecutive days with at
+least one rewarded action, review or author. Merges and approvals count on the day they happened
+on GitHub, even when PR Quest notices them a day late; resolved threads count on the day PR Quest
+notices them, because GitHub doesn't say when a thread was resolved.
+
+There are 31 achievements, from _First Blood_ to secret ones that show as "???" until they
 unlock. Each pays bonus XP once, by rarity: 25 (common), 50 (rare), 100 (epic) or 200
 (legendary). The [full list](docs/how-it-works.md#achievements) explains how to unlock each one.
 
@@ -201,12 +240,13 @@ Everything is under `~/.pr-quest`, or `PR_QUEST_STATE_DIR`. Directories are crea
 ├── secrets.json        the GitHub OAuth token and the API keys saved in Settings
 ├── settings.json       the review provider and the model per provider
 └── users/<login>/      one folder per GitHub user
-    ├── state.json      XP, streak, achievements and the last 200 review runs
-    └── quests.json     the last quest list, for a fast start and rate-limit backoff
+    ├── state.json      XP, streak, achievements, author payouts and the last 200 review runs
+    ├── quests.json     the last quest list, for a fast start and rate-limit backoff
+    └── my-prs.json     the last list of your own PRs, for the same reasons
 ```
 
-Delete a user's folder to reset their progress. Board filters and presets live in the browser's
-`localStorage`. [How it works](docs/how-it-works.md#where-state-lives) covers what happens to
+Delete a user's folder to reset their progress. Board filters and presets, and the My PRs tab's
+filters, live in the browser's `localStorage`. [How it works](docs/how-it-works.md#where-state-lives) covers what happens to
 unreadable or older files.
 
 ## Security
@@ -222,7 +262,8 @@ unreadable or older files.
   Prefer Claude for PRs whose content you don't trust, including dependency bumps from upstream
   releases you don't trust.
 - **Nothing reaches GitHub until you choose it.** PR Quest never turns a reviewer's output into an
-  approval, and only posts the findings you selected.
+  approval, and only posts the findings you selected. A self-review of your own PR is never
+  posted.
 
 [How it works](docs/how-it-works.md) describes the GitHub calls, the reviewers' safeguards and
 these protections in full.
@@ -256,6 +297,8 @@ settings and saved keys stay in the [state directory](#where-state-lives) on you
 - **Switching GitHub users stops that user's running reviews**, rather than finishing them as the
   new user.
 - **Posted reviews match no Agent filter**, so selecting any agent state hides those PRs.
+- **Author XP knows a PR by its repo and number.** After a repo is renamed or transferred, its
+  open PRs look new and can pay their merge, approval and threads a second time.
 - **The Cursor fallback model ids are unverified.** Without a Cursor key, the model list is
   PR Quest's built-in guess; with a key, it comes from Cursor.
 

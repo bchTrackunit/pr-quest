@@ -24,11 +24,19 @@ describe('parseServerEvent', () => {
   test('accepts known event types', () => {
     const event: ServerEvent = { type: 'runUpdated', run: makeRun() };
     expect(parseServerEvent(JSON.stringify(event))).toEqual(event);
+    const mine: ServerEvent = {
+      type: 'myPullRequestsUpdated',
+      pullRequests: [],
+      fetchedAt: '2026-10-30T10:00:00.000Z',
+      stale: false,
+    };
+    expect(parseServerEvent(JSON.stringify(mine))).toEqual(mine);
   });
 
   test('ignores malformed JSON and unknown types', () => {
     expect(parseServerEvent('not json')).toBeUndefined();
     expect(parseServerEvent(JSON.stringify({ type: 'somethingElse' }))).toBeUndefined();
+    expect(parseServerEvent(JSON.stringify({ type: 'toString' }))).toBeUndefined();
     expect(parseServerEvent('null')).toBeUndefined();
   });
 });

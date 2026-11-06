@@ -14,7 +14,9 @@ import {
   type ReviewRun,
   type ReviewRunQuest,
 } from '@pr-quest/contract/api';
+import { emptyAuthorLedger } from './authorLedger.ts';
 import { initialGameState, type GameState } from './gamification.ts';
+import { streakDaysFromCounter } from './streak.ts';
 import {
   emptyLedger,
   isHighSeverity,
@@ -28,22 +30,34 @@ import { refuseNewerVersion } from '../../platform/privateFiles.ts';
 import { StoredReviewResultSchema, type ReviewTarget } from '@pr-quest/contract/reviewResult';
 
 const STATE_FILE = 'state.json';
-/** Version 2 added the achievement ledger. */
-export const STATE_VERSION = 2;
+/** Version 2 added the achievement ledger; version 3 the active-day streak and author ledger. */
+export const STATE_VERSION = 3;
 
-/** The quest as it was when a run started, so posting and rewards work after it leaves the queue. */
-export interface QuestSnapshot extends ReviewTarget {
+interface SnapshotBase extends ReviewTarget {
   repo: RepoRef;
   number: number;
   headSha?: string;
   linearUrl?: string;
   difficulty: DifficultyTier;
-  requestKind: RequestKind;
-  requestedAt: string;
   /** Absent in runs started before snapshots kept it. */
   author?: QuestAuthor;
   diffStats?: DiffStats;
 }
+
+/** A review request: the player reviews someone else's PR. */
+export interface ReviewRequestSnapshot extends SnapshotBase {
+  ownPr?: undefined;
+  requestKind: RequestKind;
+  requestedAt: string;
+}
+
+/** A self-review of the player's own PR; it is never posted and earns nothing. */
+export interface OwnPrSnapshot extends SnapshotBase {
+  ownPr: true;
+}
+
+/** The PR as it was when a run started, so posting and rewards work after it leaves the queue. */
+export type QuestSnapshot = ReviewRequestSnapshot | OwnPrSnapshot;
 
 /** The part of the snapshot the UI sees on `ReviewRun.quest`. */
 export function runQuestOf(snapshot: QuestSnapshot): ReviewRunQuest {
@@ -111,11 +125,65 @@ const GameStateV1Schema = z.object({
   rewardedApprovals: z.array(z.string()),
 });
 
-const GameStateSchema = GameStateV1Schema.extend({ ledger: LedgerSchema });
+const GameStateV2Schema = GameStateV1Schema.extend({ ledger: LedgerSchema });
 
 const TierSchema = z.enum(['Trivial', 'Normal', 'Hard', 'Boss']);
 
+const AuthorLedgerSchema = z.object({
+  trackingSince: z.string().optional(),
+  lastAuthorSync: z.string().optional(),
+  authorPrs: z.record(
+    z.string(),
+    z.object({
+      merged: z.literal(true).optional(),
+      approved: z.literal(true).optional(),
+      paidThreads: z.array(z.string()),
+      baselineThreads: z.array(z.string()),
+    }),
+  ),
+  recentMerges: z.array(z.object({ pr: z.string(), mergedAt: z.string(), tier: TierSchema })),
+  merges: z.number().int().nonnegative(),
+  flawlessMerges: z.number().int().nonnegative(),
+  tiedUpMerges: z.number().int().nonnegative(),
+});
+
+const GameStateSchema = GameStateV2Schema.omit({ streakDays: true }).extend({
+  activeDays: z.array(z.string()),
+  streakCarry: z.number().int().nonnegative(),
+  author: AuthorLedgerSchema,
+});
+
 const RepoSchema = z.object({ owner: z.string(), name: z.string() });
+
+const SnapshotBaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  repo: RepoSchema,
+  number: z.number().int().positive(),
+  githubUrl: z.string(),
+  sourceBranch: z.string(),
+  targetBranch: z.string(),
+  headSha: z.string().optional(),
+  linearUrl: z.string().optional(),
+  difficulty: TierSchema,
+  author: z.object({ name: z.string(), githubLogin: z.string().optional() }).optional(),
+  diffStats: z
+    .object({
+      fileCount: z.number().int().nonnegative(),
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+    })
+    .optional(),
+});
+
+/** An own-PR snapshot first, so its flag isn't stripped by the review request's schema. */
+const QuestSnapshotSchema = z.union([
+  SnapshotBaseSchema.extend({ ownPr: z.literal(true) }),
+  SnapshotBaseSchema.extend({
+    requestKind: z.enum(['direct', 'team']),
+    requestedAt: z.string(),
+  }),
+]);
 
 const StoredRunSchema = z.object({
   run: z.object({
@@ -150,34 +218,20 @@ const StoredRunSchema = z.object({
       .catch(undefined),
     error: z.object({ message: z.string(), retryable: z.boolean().optional() }).optional(),
     postedReviewUrl: z.string().optional(),
+    ownPr: z.literal(true).optional(),
   }),
-  quest: z.object({
-    id: z.string(),
-    title: z.string(),
-    repo: RepoSchema,
-    number: z.number().int().positive(),
-    githubUrl: z.string(),
-    sourceBranch: z.string(),
-    targetBranch: z.string(),
-    headSha: z.string().optional(),
-    linearUrl: z.string().optional(),
-    difficulty: TierSchema,
-    requestKind: z.enum(['direct', 'team']),
-    requestedAt: z.string(),
-    author: z.object({ name: z.string(), githubLogin: z.string().optional() }).optional(),
-    diffStats: z
-      .object({
-        fileCount: z.number().int().nonnegative(),
-        additions: z.number().int().nonnegative(),
-        deletions: z.number().int().nonnegative(),
-      })
-      .optional(),
-  }),
+  quest: QuestSnapshotSchema,
 });
 
 const PersistedStateSchema = z.object({
   version: z.literal(STATE_VERSION),
   game: GameStateSchema,
+  runs: z.array(StoredRunSchema),
+});
+
+const PersistedStateV2Schema = z.object({
+  version: z.literal(2),
+  game: GameStateV2Schema,
   runs: z.array(StoredRunSchema),
 });
 
@@ -272,20 +326,34 @@ async function readState(
   if (parsed.success) {
     return { ...parsed.data, runs: withRunQuests(parsed.data.runs) };
   }
+  const v2 = PersistedStateV2Schema.safeParse(json);
+  if (v2.success) {
+    await keepCopy(file, `${file}.v2.bak`);
+    return { version: STATE_VERSION, game: toV3(v2.data.game), runs: withRunQuests(v2.data.runs) };
+  }
   const legacy = PersistedStateV1Schema.safeParse(json);
   if (legacy.success) {
     await keepCopy(file, `${file}.v1.bak`);
     const runs = withRunQuests(legacy.data.runs);
-    const game: GameState = {
+    const game = toV3({
       ...legacy.data.game,
       ledger: backfillLedger(legacy.data.game.rewardedApprovals, runs),
-    };
+    });
     return { version: STATE_VERSION, game, runs };
   }
   const aside = `${file}.corrupt-${Date.now()}`;
   await rename(file, aside);
   onWarning(`State file was unreadable; moved it to ${aside} and started fresh`);
   return emptyState();
+}
+
+/** The streak counter becomes its days, ending on the last review; author tracking starts later. */
+function toV3({ streakDays, ...game }: z.infer<typeof GameStateV2Schema>): GameState {
+  return {
+    ...game,
+    ...streakDaysFromCounter(streakDays, game.lastReviewDate),
+    author: emptyAuthorLedger(),
+  };
 }
 
 type ParsedRun = z.infer<typeof StoredRunSchema>;

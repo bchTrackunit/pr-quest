@@ -25,7 +25,7 @@ export interface BoardViewState {
 }
 
 /** `localStorage`, or `undefined` where the browser blocks it. */
-function browserStorage(): StorageLike | undefined {
+export function browserStorage(): StorageLike | undefined {
   try {
     // oxlint-disable-next-line no-restricted-properties -- @trackunit/react-components isn't a dependency here; this is the app's one storage access point.
     return window.localStorage;

@@ -18,15 +18,17 @@ export interface EventStreamOptions {
   maxDelayMs?: number;
 }
 
-const EVENT_TYPES: ReadonlyArray<ServerEventType> = [
-  'questsUpdated',
-  'runUpdated',
-  'achievementUnlocked',
-  'xpGained',
-];
+/** A record, so adding a server event type fails the typecheck until it is listed here. */
+const EVENT_TYPES: Record<ServerEventType, true> = {
+  questsUpdated: true,
+  myPullRequestsUpdated: true,
+  runUpdated: true,
+  achievementUnlocked: true,
+  xpGained: true,
+};
 
 function isServerEventType(value: unknown): value is ServerEventType {
-  return EVENT_TYPES.some((type) => type === value);
+  return typeof value === 'string' && Object.hasOwn(EVENT_TYPES, value);
 }
 
 /** Parses one SSE `data:` payload; returns `undefined` for anything that is not a known event. */

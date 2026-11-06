@@ -33,6 +33,8 @@ import {
   type AchievementLedger,
   type DayLedger,
 } from './ledger.ts';
+import { emptyAuthorLedger, smallMergesSince, type AuthorLedger } from './authorLedger.ts';
+import { currentStreak as streakOf, localDate, withActiveDay, type StreakDays } from './streak.ts';
 
 export type { ReviewActionKind } from './achievements.ts';
 
@@ -58,17 +60,16 @@ const ACTION_COUNTERS: Record<ReviewActionKind, keyof PlayerCounters> = {
 };
 
 /** Everything the game persists. `PlayerState` is derived from it. */
-export interface GameState {
+export interface GameState extends StreakDays {
   xp: number;
   achievements: Array<UnlockedAchievement>;
   counters: PlayerCounters;
-  /** Streak as of `lastReviewDate`; see `currentStreak` for the value shown today. */
-  streakDays: number;
-  /** Local calendar date (`YYYY-MM-DD`) of the latest rewarded action. */
+  /** Local calendar date (`YYYY-MM-DD`) of the latest rewarded review action. */
   lastReviewDate?: string;
   /** Quest ids whose approval already earned XP. */
   rewardedApprovals: Array<string>;
   ledger: AchievementLedger;
+  author: AuthorLedger;
 }
 
 /** A quest as the board showed it when the player acted. */
@@ -127,9 +128,11 @@ export function initialGameState(): GameState {
       bossesSlain: 0,
       quickDraws: 0,
     },
-    streakDays: 0,
+    activeDays: [],
+    streakCarry: 0,
     rewardedApprovals: [],
     ledger: emptyLedger(),
+    author: emptyAuthorLedger(),
   };
 }
 
@@ -150,19 +153,26 @@ export function levelProgress(
   return { level, xpIntoLevel: remaining, xpForNextLevel: xpForLevel(level) };
 }
 
-export function localDate(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function previousLocalDate(date: Date): string {
-  return localDate(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1));
-}
-
-/** The streak still counts on the day after the last action, so it can be extended today. */
+/** The streak still counts on the day after the last active day, so it can be extended today. */
 export function currentStreak(state: GameState, now: Date): number {
-  const last = state.lastReviewDate;
-  return last === localDate(now) || last === previousLocalDate(now) ? state.streakDays : 0;
+  return streakOf(state, now);
+}
+
+/** `state` with `date` counted as an active day, as of `now`. */
+export function withStreakDay<TState extends StreakDays>(
+  state: TState,
+  date: string,
+  now: Date,
+): TState {
+  const days = withActiveDay(state, date, localDate(now));
+  if (
+    days.streakCarry === state.streakCarry &&
+    days.activeDays.length === state.activeDays.length &&
+    days.activeDays.every((entry, index) => entry === state.activeDays[index])
+  ) {
+    return state;
+  }
+  return { ...state, ...days };
 }
 
 export function applyReviewAction(
@@ -193,11 +203,9 @@ export function applyReviewAction(
   const facts = actionFacts(state.ledger, action, waitedMs);
   const today = localDate(action.at);
   const next: GameState = {
-    ...state,
+    ...withStreakDay(state, today, action.at),
     xp: state.xp + amount,
     counters,
-    streakDays:
-      today === state.lastReviewDate ? state.streakDays : currentStreak(state, action.at) + 1,
     lastReviewDate: today,
     rewardedApprovals:
       action.kind === 'approved'
@@ -313,7 +321,7 @@ export function applyQueueChecked(
   return withUnlocks(state, [], check.at, { queueEmptyAfterActionToday: emptyAfterActionToday });
 }
 
-function withUnlocks(
+export function withUnlocks(
   state: GameState,
   grants: Array<XpGrant>,
   at: Date,
@@ -357,6 +365,12 @@ function factsFor(state: GameState, now: Date): AchievementFacts {
     streakDays: currentStreak(state, now),
     queueEmptyAfterActionToday: false,
     today: { trivialApprovals: day?.trivialApprovals ?? 0, directPrs: day?.directPrs.length ?? 0 },
+    author: {
+      merges: state.author.merges,
+      flawlessMerges: state.author.flawlessMerges,
+      tiedUpMerges: state.author.tiedUpMerges,
+      smallMerges: smallMergesSince(state.author, now),
+    },
   };
 }
 

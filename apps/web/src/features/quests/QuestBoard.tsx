@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type MouseEventHandler } from 'react';
+import { useMemo, useRef, type MouseEventHandler } from 'react';
 
 import type {
   Quest,
@@ -29,6 +29,7 @@ import {
 } from './questFilters.ts';
 import type { SettingsTarget } from '../settings/index.ts';
 import { useBoardView } from './useBoardView.ts';
+import { useSlashFocus } from './useSlashFocus.ts';
 import { useNow } from '../../platform/useNow.ts';
 
 export interface QuestBoardProps {
@@ -56,13 +57,6 @@ const GROUPS: ReadonlyArray<{ kind: RequestKind; title: string; subtitle: string
   { kind: 'direct', title: 'Direct requests', subtitle: 'You were summoned by name.' },
   { kind: 'team', title: 'Team requests', subtitle: 'Your guild was called upon.' },
 ];
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-  );
-}
 
 export const QuestBoard = ({
   quests,
@@ -99,22 +93,7 @@ export const QuestBoard = ({
   const clearFilters = (): void =>
     board.setView((current) => ({ ...current, filters: DEFAULT_FILTERS }));
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (
-        event.key === '/' &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        !isTypingTarget(event.target)
-      ) {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, []);
+  useSlashFocus(searchRef);
 
   const renderCards = (list: Array<Quest>) => (
     <ul className="quest-list">

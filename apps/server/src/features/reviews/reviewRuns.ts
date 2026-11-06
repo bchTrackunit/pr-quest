@@ -14,6 +14,7 @@ import {
   type GameService,
   runQuestOf,
   type QuestSnapshot,
+  type ReviewRequestSnapshot,
   type StateStore,
   type StoredRun,
 } from '../game/index.ts';
@@ -56,6 +57,34 @@ export interface ReviewRunServiceOptions {
 export interface StartReviewOptions {
   model?: string;
 }
+
+type ReviewTargetFields = Pick<
+  Quest,
+  | 'id'
+  | 'title'
+  | 'repo'
+  | 'number'
+  | 'githubUrl'
+  | 'linearUrl'
+  | 'sourceBranch'
+  | 'targetBranch'
+  | 'headSha'
+  | 'author'
+  | 'authorAssociation'
+  | 'isCrossRepository'
+  | 'diffStats'
+  | 'difficulty'
+>;
+
+/** What a review needs of a PR: a review request (a `Quest` is one) or the player's own PR. */
+export type ReviewTargetInput = ReviewTargetFields &
+  ({ ownPr?: undefined; requestKind: Quest['requestKind']; requestedAt: string } | { ownPr: true });
+
+/** A stored run of a review request, which is the only kind that can be posted. */
+export type StoredReviewRequestRun = StoredRun & { quest: ReviewRequestSnapshot };
+
+const isReviewRequestRun = (stored: StoredRun): stored is StoredReviewRequestRun =>
+  !stored.quest.ownPr;
 
 const isActive = (run: ReviewRun): boolean => ACTIVE_STATUSES.includes(run.status);
 
@@ -116,7 +145,10 @@ export class ReviewRunService {
     this.launcherFor(this.settings().reviewProvider);
   }
 
-  public async start(quest: Quest, options: StartReviewOptions = {}): Promise<ReviewRun> {
+  public async start(
+    quest: ReviewTargetInput,
+    options: StartReviewOptions = {},
+  ): Promise<ReviewRun> {
     const settings = this.settings();
     const provider = settings.reviewProvider;
     const launch = this.launcherFor(provider);
@@ -146,6 +178,7 @@ export class ReviewRunService {
         status: 'queued',
         disposition: 'pending',
         startedAt: this.now().toISOString(),
+        ...(snapshot.ownPr ? { ownPr: true } : {}),
       },
       quest: snapshot,
     };
@@ -200,8 +233,15 @@ export class ReviewRunService {
    * Reserves a finished run for posting so two requests cannot post it twice. Call `release` when
    * posting fails; `markPosted` releases it on success.
    */
-  public claimForPosting(id: string): { stored: StoredRun; release: () => void } {
+  public claimForPosting(id: string): { stored: StoredReviewRequestRun; release: () => void } {
     const stored = this.requireRun(id);
+    if (!isReviewRequestRun(stored)) {
+      throw new ApiError(
+        403,
+        'forbidden',
+        'A self-review stays in PR Quest; its findings are never posted to GitHub',
+      );
+    }
     if (stored.run.status !== 'finished' || !stored.run.result) {
       throw new ApiError(409, 'conflict', 'Only a finished review with a result can be posted');
     }
@@ -241,6 +281,13 @@ export class ReviewRunService {
         throw new ApiError(404, 'notFound', `No review run ${id}`);
       }
       const { run } = entry;
+      if (run.ownPr) {
+        throw new ApiError(
+          403,
+          'forbidden',
+          'A self-review is read-only; nothing is posted from it',
+        );
+      }
       if (run.status !== 'finished' || !run.result) {
         throw new ApiError(409, 'conflict', 'Only a finished review has findings to select');
       }
@@ -540,6 +587,10 @@ export class ReviewRunService {
       result,
     });
     this.log(`review ${id}: finished with ${result.findings.length} findings`);
+    if (run.ownPr) {
+      // A self-review earns nothing, and Agent Commander and Second Opinion pay bonus XP.
+      return;
+    }
     const review = { questId: run.questId, provider: run.provider };
     await this.game.recordAgentReviewFinished(review).catch((error: unknown) => {
       this.log(`review ${id}: could not count the agent review: ${errorMessage(error)}`);
@@ -580,15 +631,15 @@ export class ReviewRunService {
   }
 }
 
-function assertCursorMayReview(quest: Quest): void {
+function assertCursorMayReview(quest: ReviewTargetInput): void {
   const blocker = cursorReviewBlocker(quest);
   if (blocker) {
     throw new ApiError(409, 'conflict', blocker);
   }
 }
 
-function snapshotOf(quest: Quest): QuestSnapshot {
-  const snapshot: QuestSnapshot = {
+function snapshotOf(quest: ReviewTargetInput): QuestSnapshot {
+  const base = {
     id: quest.id,
     title: quest.title,
     repo: quest.repo,
@@ -597,11 +648,12 @@ function snapshotOf(quest: Quest): QuestSnapshot {
     sourceBranch: quest.sourceBranch,
     targetBranch: quest.targetBranch,
     difficulty: quest.difficulty,
-    requestKind: quest.requestKind,
-    requestedAt: quest.requestedAt,
     author: quest.author,
     diffStats: quest.diffStats,
   };
+  const snapshot: QuestSnapshot = quest.ownPr
+    ? { ...base, ownPr: true }
+    : { ...base, requestKind: quest.requestKind, requestedAt: quest.requestedAt };
   if (quest.headSha) {
     snapshot.headSha = quest.headSha;
   }

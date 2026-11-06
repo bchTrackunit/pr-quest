@@ -3,11 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { emptyAuthorLedger } from './authorLedger.ts';
 import { GameService } from './game.ts';
-import { initialGameState } from './gamification.ts';
+import { currentStreak, initialGameState } from './gamification.ts';
 import { backfillLedger, FileStateStore, type StoredRun } from './store.ts';
+import { ACTIVE_DAYS_WINDOW } from './streak.ts';
 
 let dir: string;
+
+/** A version 1 or 2 game: a streak counter, and neither active days nor an author ledger. */
+function legacyGame(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const { activeDays: _days, streakCarry: _carry, author: _author, ...game } = initialGameState();
+  return { ...game, streakDays: 0, ...overrides };
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'pr-quest-store-'));
@@ -67,7 +75,7 @@ describe('FileStateStore', () => {
   test('starts from an empty game when there is no state file', async () => {
     const store = await FileStateStore.open(join(dir, 'nested'));
 
-    expect(store.state).toEqual({ version: 2, game: initialGameState(), runs: [] });
+    expect(store.state).toEqual({ version: 3, game: initialGameState(), runs: [] });
   });
 
   test('persists updates so a reopened store reads them back', async () => {
@@ -90,7 +98,7 @@ describe('FileStateStore', () => {
       join(dir, 'state.json'),
       JSON.stringify({
         version: 1,
-        game: initialGameState(),
+        game: legacyGame(),
         runs: [{ run: legacyRun, quest: storedRun.quest }],
       }),
     );
@@ -106,7 +114,7 @@ describe('FileStateStore', () => {
       join(dir, 'state.json'),
       JSON.stringify({
         version: 1,
-        game: initialGameState(),
+        game: legacyGame(),
         runs: [{ run: legacyRun, quest: storedRun.quest }],
       }),
     );
@@ -153,7 +161,7 @@ describe('FileStateStore', () => {
       join(dir, 'state.json'),
       JSON.stringify({
         version: 1,
-        game: { ...initialGameState(), xp: 42 },
+        game: legacyGame({ xp: 42 }),
         runs: [{ run: { ...storedRun.run, selectedFindings: ['maybe'] }, quest: storedRun.quest }],
       }),
     );
@@ -169,7 +177,7 @@ describe('FileStateStore', () => {
       join(dir, 'state.json'),
       JSON.stringify({
         version: 2,
-        game: initialGameState(),
+        game: legacyGame(),
         runs: [
           {
             run: {
@@ -192,7 +200,7 @@ describe('FileStateStore', () => {
       join(dir, 'state.json'),
       JSON.stringify({
         version: 2,
-        game: initialGameState(),
+        game: legacyGame(),
         runs: [{ run: { ...storedRun.run, findingDecisions: ['maybe'] }, quest: storedRun.quest }],
       }),
     );
@@ -258,12 +266,78 @@ describe('FileStateStore', () => {
   });
 
   test('refuses a state file from a newer PR Quest and leaves it in place', async () => {
-    const newer = JSON.stringify({ version: 3, game: {}, runs: [] });
+    const newer = JSON.stringify({ version: 4, game: {}, runs: [] });
     await writeFile(join(dir, 'state.json'), newer);
 
     await expect(FileStateStore.open(dir)).rejects.toThrow(/newer version of PR Quest/);
     expect(await readFile(join(dir, 'state.json'), 'utf8')).toBe(newer);
     expect(await readdir(dir)).toEqual(['state.json']);
+  });
+});
+
+describe('migrating version 2 state', () => {
+  /** A Tuesday at noon, the day after the last review in these files. */
+  const NOW = new Date(2026, 10, 10, 12);
+
+  const writeV2 = async (streakDays: number) => {
+    const text = JSON.stringify({
+      version: 2,
+      game: legacyGame({ xp: 300, streakDays, lastReviewDate: '2026-11-09' }),
+      runs: [{ run: storedRun.run, quest: storedRun.quest }],
+    });
+    await writeFile(join(dir, 'state.json'), text);
+    return text;
+  };
+
+  test('a streak shorter than the window becomes its days, unchanged', async () => {
+    await writeV2(4);
+
+    const { game } = await FileStateStore.open(dir).then((store) => store.state);
+
+    expect(game.activeDays).toEqual(['2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09']);
+    expect(game.streakCarry).toBe(0);
+    expect(currentStreak(game, NOW)).toBe(4);
+    expect(game.author).toEqual(emptyAuthorLedger());
+    expect(game.xp).toBe(300);
+  });
+
+  test('a streak longer than the window keeps its length through the carry', async () => {
+    await writeV2(90);
+
+    const { game } = await FileStateStore.open(dir).then((store) => store.state);
+
+    expect(game.activeDays).toHaveLength(ACTIVE_DAYS_WINDOW);
+    expect(game.streakCarry).toBe(90 - ACTIVE_DAYS_WINDOW);
+    expect(currentStreak(game, NOW)).toBe(90);
+  });
+
+  test('keeps a copy of the version 2 file and writes version 3 on the next change', async () => {
+    const original = await writeV2(4);
+    const store = await FileStateStore.open(dir);
+
+    await store.update((state) => ({ ...state, game: { ...state.game, xp: 301 } }));
+
+    expect(await readFile(join(dir, 'state.json.v2.bak'), 'utf8')).toBe(original);
+    const written = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
+    expect(written).toMatchObject({ version: 3, game: { xp: 301, streakCarry: 0 } });
+    expect(written.runs).toHaveLength(1);
+  });
+
+  test('reads an own-PR run, which has no review request', async () => {
+    if (storedRun.quest.ownPr) {
+      throw new Error('storedRun must be a review request');
+    }
+    const { requestKind: _kind, requestedAt: _at, ...base } = storedRun.quest;
+    const ownRun = { run: { ...storedRun.run, ownPr: true }, quest: { ...base, ownPr: true } };
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({ version: 3, game: initialGameState(), runs: [ownRun] }),
+    );
+
+    const store = await FileStateStore.open(dir);
+
+    expect(store.state.runs[0]?.run.ownPr).toBe(true);
+    expect(store.state.runs[0]?.quest).toEqual({ ...base, ownPr: true });
   });
 });
 
@@ -285,7 +359,7 @@ describe('migrating version 1 state', () => {
     const store = await FileStateStore.open(dir);
     return {
       store,
-      game: new GameService(store, { broadcast: () => undefined }, { now: () => NOW }),
+      game: new GameService(store, { broadcast: () => 0 }, { now: () => NOW }),
     };
   };
 
@@ -310,8 +384,14 @@ describe('migrating version 1 state', () => {
         quickDraws: 0,
       },
     });
-    const { ledger, ...game1 } = store.state.game;
-    expect(game1).toEqual(v1.game);
+    const { ledger, ...game3 } = store.state.game;
+    const { streakDays: _counter, ...unchanged } = v1.game;
+    expect(game3).toEqual({
+      ...unchanged,
+      activeDays: ['2026-10-30', '2026-10-31'],
+      streakCarry: 0,
+      author: emptyAuthorLedger(),
+    });
     expect(store.state.runs).toHaveLength(6);
     expect(store.state.runs.map(({ quest }) => quest)).toEqual(v1.runs.map((entry) => entry.quest));
     expect(store.state.runs.map(({ run }) => run.provider)).toEqual([
@@ -369,15 +449,17 @@ describe('migrating version 1 state', () => {
     });
   });
 
-  test('writes version 2 on the next change and keeps a copy of the version 1 file', async () => {
+  test('writes version 3 on the next change and keeps a copy of the version 1 file only', async () => {
     const { game } = await openGame();
 
     await game.recordQueueChecked(3);
 
     const written = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
-    expect(written.version).toBe(2);
+    expect(written.version).toBe(3);
     expect(written.game.ledger.highSeverityReviews).toBe(1);
+    expect(written.game).not.toHaveProperty('streakDays');
     expect(await readFile(join(dir, 'state.json.v1.bak'), 'utf8')).toBe(original);
+    expect(await readdir(dir)).not.toContain('state.json.v2.bak');
     expect((await stat(join(dir, 'state.json.v1.bak'))).mode & 0o777).toBe(0o600);
     const reopened = await FileStateStore.open(dir);
     expect(reopened.state.game.xp).toBe(165);

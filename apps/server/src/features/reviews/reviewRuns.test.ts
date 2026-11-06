@@ -516,6 +516,83 @@ describe('ReviewRunService.start', () => {
   });
 });
 
+describe('ReviewRunService self-reviews', () => {
+  const { requestKind: _kind, requestedAt: _at, ...ownPr } = quest;
+  const mine = { ...ownPr, ownPr: true as const };
+
+  test('stores the run and its snapshot as my own PR, with no review request', async () => {
+    fakeAgent();
+    const runs = service();
+
+    const run = await runs.start(mine);
+    await runs.whenIdle();
+
+    expect(run.ownPr).toBe(true);
+    expect(store.state.runs[0]?.quest).toMatchObject({ id: quest.id, ownPr: true });
+    expect(store.state.runs[0]?.quest).not.toHaveProperty('requestKind');
+    expect(runs.get(run.id)?.run.status).toBe('finished');
+  });
+
+  test('a finished self-review earns nothing toward the agent achievements', async () => {
+    fakeAgent();
+    const runs = service();
+
+    await runs.start(mine);
+    await runs.whenIdle();
+
+    expect(recordAgentReviewFinished).not.toHaveBeenCalled();
+  });
+
+  test('refuses to post a self-review with 403', async () => {
+    fakeAgent();
+    const runs = service();
+    const { id } = await runs.start(mine);
+    await runs.whenIdle();
+
+    expect(() => runs.claimForPosting(id)).toThrow(
+      expect.objectContaining({ status: 403, code: 'forbidden' }),
+    );
+  });
+
+  test('refuses to change the selection of a self-review with 403', async () => {
+    fakeAgent();
+    const runs = service();
+    const { id } = await runs.start(mine);
+    await runs.whenIdle();
+
+    await expect(runs.select(id, [0], true)).rejects.toMatchObject({
+      status: 403,
+      code: 'forbidden',
+    });
+  });
+
+  test('Cursor reviews my own PR from the repo itself, but not one from a fork', async () => {
+    fakeAgent();
+    const runs = service();
+
+    await expect(runs.start({ ...mine, isCrossRepository: true })).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(runs.start(mine)).resolves.toMatchObject({ provider: 'cursor', ownPr: true });
+    await runs.whenIdle();
+  });
+
+  test('after a failed self-review, summoning the agent again starts a new own-PR run', async () => {
+    fakeAgent(new Error('agent down'));
+    const runs = service();
+    const failed = await runs.start(mine);
+    await runs.whenIdle();
+    fakeAgent();
+
+    const retry = await runs.start(mine);
+    await runs.whenIdle();
+
+    expect(runs.get(failed.id)?.run.status).toBe('startupFailed');
+    expect(retry).toMatchObject({ ownPr: true });
+    expect(retry.id).not.toBe(failed.id);
+  });
+});
+
 describe('ReviewRunService existing comments', () => {
   const comment = (author: string, authorAssociation: string, body: string) => ({
     author,
